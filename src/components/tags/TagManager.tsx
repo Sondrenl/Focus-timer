@@ -39,7 +39,7 @@ export const TagManager: React.FC = () => {
       {/* Top Action Bar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-2">
         <div>
-          <h2 className="text-2xl font-bold text-md-on-surface">Categories & Tags</h2>
+          <h2 className="text-2xl font-bold text-md-on-surface">Tags</h2>
           <p className="text-xs text-md-on-surface-variant mt-0.5">
             Organize focus sessions into projects, clients, or learning domains.
           </p>

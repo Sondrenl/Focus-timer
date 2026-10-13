@@ -1,6 +1,6 @@
 # Pomodor — Focus Timer
 
-> A production-ready, client-side Pomodoro web application designed according to Material Design 3 guidelines with a luminous bright cotton aesthetic, a drift-free timing engine, and rich category analytics.
+> A production-ready, client-side Pomodoro web application designed according to Material Design 3 guidelines with a luminous bright cotton aesthetic, a drift-free timing engine, and rich tag analytics.
 
 ---
 
@@ -14,13 +14,14 @@
 - **Flexible Pomodoro Cycles**: User-configurable intervals via Settings with celebratory confetti bursts upon completion.
 
 ### 2. Carousel Status Indicator & Workspace
+- **Egg Timer Brand Identity**: Clean, custom mechanical egg timer brand mark in the collapsible sidebar navigation rail.
 - **Unified Single-Line Timeline**: Displays focus sessions and in-between short/long breaks on one clean, continuous horizontal timeline.
 - **Overflow Carousel with Edge Indicators**: If a cycle has many sessions (configurable up to 12), the indicator automatically centers on the active step with subtle visual fade cues and mini chevrons on the sides.
-- **Unspecified Focus Category**: Supports running timers with an "Unspecified" tag, attributing untagged intervals to an explicit category in analytics.
+- **Unspecified Tag Option**: Supports running timers without a specific tag, attributing untagged intervals to an explicit "Unspecified" tag in analytics.
 - **Ergonomic Controls**: Reset (`R`), Start/Pause (`Space`), and Skip (`S`), with keyboard shortcuts cleanly hidden on mobile viewports.
 
 ### 3. Tag Management (Soft-Delete Architecture)
-- Full categorization data model (`id`, `name`, `color`, `isArchived`, `createdAt`).
+- Full tag data model (`id`, `name`, `color`, `isArchived`, `createdAt`).
 - **Active Tags**: Selectable in the timer workspace and tracked in current aggregates.
 - **Archived Tags**: Soft-deleted from selector dropdowns, but fully preserved in historical analytics.
 - Curated pastel Material Design 3 color palette picker.
@@ -33,7 +34,7 @@
   - **Year**: 12-month annual progress (Jan–Dec).
   - **Custom Range**: Calendar date picker with presets (*Last 7 Days*, *Last 14 Days*, *This Month*, *Last 30 Days*, *Last 90 Days*, *Year to Date*).
   - **All Time**: Lifetime career metrics with **archived tags included**.
-- **Interactive SVG Donut Diagram**: Visual breakdown of category and tag focus distribution placed prominently above the activity breakdown, with center-hole telemetry inspection.
+- **Interactive SVG Donut Diagram**: Visual breakdown of tag focus distribution placed prominently above the activity breakdown, with center-hole telemetry inspection.
 - **Explicit "Today" Jump Button**: Clear, accessible button to return directly to today's date.
 
 ### 5. Settings & Profile
@@ -64,13 +65,13 @@ src/
 │   ├── stats/                # StatisticsView, DateRangeModal, TagDistributionDonut
 │   ├── settings/             # SettingsView
 │   ├── profile/              # ProfileView
-│   └── ui/                   # Button, Card, Switch, Input, Modal
+│   └── ui/                   # Button, Card, Switch, Input, Modal, EggTimerIcon
 └── utils/                    # Formatters, dates, confetti
 ```
 
 - **Framework**: React 18 with TypeScript and Vite.
 - **Styling**: Tailwind CSS with custom Material Design 3 bright cotton tokens (`#FFFEFC` canvas, `#6750A4` primary).
-- **Icons**: Lucide React.
+- **Icons**: Lucide React + custom SVG EggTimerIcon.
 - **Storage Abstraction**: Repository/Service pattern decoupling UI and domain services from browser `localStorage`.
 
 ---

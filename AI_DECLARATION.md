@@ -17,7 +17,7 @@ This document provides formal transparency regarding the use of Artificial Intel
 ### 2.1 Architecture & Domain Modeling
 - Designed the modular domain architecture adhering to separation of concerns (Components, Hooks, Context, Services, Repositories).
 - Specified repository contracts (`ITagRepository`, `ISessionRepository`, `ISettingsRepository`) backed by an abstracted storage interface (`IStorageService`, `LocalStorageService`) to decouple client-side persistence from specific database implementations.
-- Implemented soft-delete tag models and "Unspecified" category attribution.
+- Implemented soft-delete tag models and "Unspecified" tag attribution.
 
 ### 2.2 Core Algorithms & Engineering
 - **Drift-Free Timer Engine**: Implemented an inline Web Worker thread paired with `Date.now()` delta math to ensure temporal accuracy even when the browser tab is backgrounded or minimized.
@@ -28,6 +28,8 @@ This document provides formal transparency regarding the use of Artificial Intel
 
 ### 2.3 User Interface & Aesthetic Direction
 - Iterated upon Material Design 3 design tokens, calibrating a bright, luminous cotton cream palette (`#FFFEFC`), soft warm containers, and pastel accent tones.
+- Designed a custom SVG mechanical egg timer icon for the brand identity, eliminating misaligned background shadows.
+- Enforced consistent "Tag" terminology across the UI and data pipelines.
 - Streamlined header ergonomics (icon-only controls, single title per view, mobile keyboard cue hiding) and expanded hover navigation rail.
 
 ---

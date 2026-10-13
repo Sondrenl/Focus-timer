@@ -49,7 +49,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
             cy={center}
             r={radius}
             fill="transparent"
-            stroke="#E0D8CB"
+            stroke="#EDE7DC"
             strokeWidth={strokeWidth}
             className="opacity-40"
           />
@@ -100,14 +100,14 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 Total Focus
               </span>
               <span className="text-[10px] text-md-outline">
-                {activeSlices.length} categor{activeSlices.length === 1 ? 'y' : 'ies'}
+                {activeSlices.length} tag{activeSlices.length === 1 ? '' : 's'}
               </span>
             </>
           )}
         </div>
       </div>
 
-      {/* 2. Legend & Category Details List */}
+      {/* 2. Legend & Tag Details List */}
       <div className="flex-1 w-full flex flex-col gap-2.5 max-h-60 overflow-y-auto pr-1">
         {activeSlices.map((item) => {
           const isHovered = hoveredTagId === item.tagId;

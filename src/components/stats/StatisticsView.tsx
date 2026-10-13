@@ -55,7 +55,7 @@ export const StatisticsView: React.FC = () => {
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
         <p className="text-xs text-md-on-surface-variant mt-0.5">
-          Review focus duration, habits, and category distribution over time.
+          Review focus duration, habits, and tag distribution over time.
         </p>
       </div>
 
@@ -207,15 +207,15 @@ export const StatisticsView: React.FC = () => {
         </Card>
       </div>
 
-      {/* 3. Category & Tag Distribution Donut Diagram (comes before activity breakdown) */}
+      {/* 3. Tag Distribution Donut Diagram */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
             <TagIcon className="w-5 h-5 text-md-primary" />
-            <h3 className="text-base font-bold text-md-on-surface">Category & Tag Distribution</h3>
+            <h3 className="text-base font-bold text-md-on-surface">Tag Distribution</h3>
           </div>
           <span className="text-xs text-md-on-surface-variant">
-            {tagDistribution.length} categor{tagDistribution.length === 1 ? 'y' : 'ies'} in period
+            {tagDistribution.length} tag{tagDistribution.length === 1 ? '' : 's'} in period
           </span>
         </div>
 

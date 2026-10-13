@@ -55,7 +55,7 @@ export const TagSelector: React.FC = () => {
       {isOpen && (
         <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-64 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-1.5 shadow-elevation-2 z-30 animate-in fade-in zoom-in-95 duration-150">
           <div className="text-xs font-semibold text-md-on-surface-variant px-3 py-1.5 uppercase tracking-wider">
-            Focus Category
+            Tags
           </div>
 
           <div className="max-h-56 overflow-y-auto space-y-1 py-1">
