@@ -26,7 +26,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
   const sessionMeta = {
     WORK: {
-      label: 'Deep Focus',
+      label: 'Focus',
       color: '#6750A4', // M3 Primary Purple
       bgRing: '#EADDFF',
     },
@@ -80,7 +80,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
         {/* Central Display Stack */}
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          {/* Status Badge (clean text without icon) */}
+          {/* Status Badge (clean text: Focus) */}
           <div
             className="px-3.5 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors tracking-wide"
             style={{

@@ -1,32 +1,154 @@
-import React from 'react';
-import { useStatistics } from '../../hooks/useStatistics';
+import React, { useState } from 'react';
+import { useStatistics, TimePeriodType } from '../../hooks/useStatistics';
 import { Card } from '../ui/Card';
-import { Clock, CheckCircle2, TrendingUp, Calendar, Tag as TagIcon, Award } from 'lucide-react';
+import {
+  Clock,
+  CheckCircle2,
+  Calendar,
+  Tag as TagIcon,
+  Award,
+  ChevronLeft,
+  ChevronRight,
+  CalendarDays,
+  RotateCcw,
+  Sparkles,
+} from 'lucide-react';
 import { formatDurationHoursMins } from '../../utils/formatters';
+import { DateRangeModal } from './DateRangeModal';
+import { clsx } from 'clsx';
 
 export const StatisticsView: React.FC = () => {
   const {
+    periodType,
+    setPeriodType,
+    periodLabel,
+    customRange,
+    setCustomRange,
+    goToPrev,
+    goToNext,
+    goToToday,
     totalFocusHours,
     totalFocusSeconds,
     totalWorkCount,
     tagDistribution,
-    dailyActivity,
-    mostProductiveDay,
+    activityBars,
+    productiveMetric,
   } = useStatistics();
 
-  // Find max daily hours for scaling chart bars
-  const maxDailyHours = Math.max(1, ...dailyActivity.map((d) => d.hours));
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+
+  // Maximum hours for scaling bar charts
+  const maxHours = Math.max(1, ...activityBars.map((b) => b.hours));
+
+  const periodOptions: { type: TimePeriodType; label: string }[] = [
+    { type: 'day', label: 'Day' },
+    { type: 'week', label: 'Week' },
+    { type: 'month', label: 'Month' },
+    { type: 'year', label: 'Year' },
+    { type: 'custom', label: 'Custom' },
+    { type: 'all', label: 'All Time' },
+  ];
 
   return (
     <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6">
+      {/* View Header */}
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
         <p className="text-xs text-md-on-surface-variant mt-0.5">
-          Quantify your focus intervals, habits, and category distribution.
+          Review focus duration, habits, and category distribution over time.
         </p>
       </div>
 
-      {/* Top 3 High-Level Metric Cards */}
+      {/* 1. Time Period Selector & Period Navigator */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
+        {/* Period Type Segmented Buttons */}
+        <div className="inline-flex p-1 bg-md-surface-container rounded-2xl border border-md-outline-variant/30 overflow-x-auto">
+          {periodOptions.map((opt) => {
+            const isActive = periodType === opt.type;
+            return (
+              <button
+                key={opt.type}
+                onClick={() => {
+                  setPeriodType(opt.type);
+                  if (opt.type === 'custom') {
+                    setIsCalendarModalOpen(true);
+                  }
+                }}
+                className={clsx(
+                  'px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 select-none whitespace-nowrap',
+                  isActive
+                    ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
+                    : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
+                )}
+              >
+                {opt.type === 'custom' ? (
+                  <span className="flex items-center gap-1.5">
+                    <CalendarDays className="w-3.5 h-3.5" />
+                    <span>Custom</span>
+                  </span>
+                ) : (
+                  opt.label
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Back / Forward Navigator */}
+        <div className="flex items-center justify-between md:justify-end gap-2">
+          {periodType !== 'all' ? (
+            <>
+              <button
+                onClick={goToPrev}
+                className="p-2 rounded-full text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface transition-colors"
+                title="Previous period"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+
+              <button
+                onClick={() => {
+                  if (periodType === 'custom') {
+                    setIsCalendarModalOpen(true);
+                  }
+                }}
+                className={clsx(
+                  'px-3 py-1.5 rounded-xl text-xs font-bold text-md-on-surface transition-colors',
+                  periodType === 'custom'
+                    ? 'hover:bg-md-surface-container cursor-pointer underline decoration-dotted'
+                    : ''
+                )}
+                title={periodType === 'custom' ? 'Change custom date range' : undefined}
+              >
+                {periodLabel}
+              </button>
+
+              <button
+                onClick={goToNext}
+                className="p-2 rounded-full text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface transition-colors"
+                title="Next period"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+
+              <button
+                onClick={goToToday}
+                className="p-1.5 ml-1 rounded-full text-md-outline hover:text-md-primary hover:bg-md-surface-container transition-colors"
+                title="Reset to current period"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-md-primary/10 text-md-primary text-xs font-semibold">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{periodLabel}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 2. Key Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Total Focus Hours */}
         <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
@@ -38,15 +160,15 @@ export const StatisticsView: React.FC = () => {
               {totalFocusHours} <span className="text-sm font-semibold text-md-on-surface-variant">hrs</span>
             </div>
             <div className="text-xs font-medium text-md-on-surface-variant">
-              Total Focus Time
+              Focus Duration
             </div>
             <div className="text-[11px] text-md-outline mt-0.5">
-              {formatDurationHoursMins(totalFocusSeconds)} logged
+              {formatDurationHoursMins(totalFocusSeconds)} logged in period
             </div>
           </div>
         </Card>
 
-        {/* Total Work Sessions */}
+        {/* Total Sessions */}
         <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
           <div className="w-12 h-12 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center shrink-0">
             <CheckCircle2 className="w-6 h-6" />
@@ -59,86 +181,105 @@ export const StatisticsView: React.FC = () => {
               Completed Pomodoros
             </div>
             <div className="text-[11px] text-md-outline mt-0.5">
-              Focus intervals finished
+              Intervals finished
             </div>
           </div>
         </Card>
 
-        {/* Most Productive Day */}
+        {/* Productivity Insight */}
         <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
           <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
             <Award className="w-6 h-6" />
           </div>
           <div>
             <div className="text-xl font-bold text-md-on-surface tracking-tight truncate">
-              {mostProductiveDay.hasData ? mostProductiveDay.dayName : 'N/A'}
+              {productiveMetric.value}
             </div>
             <div className="text-xs font-medium text-md-on-surface-variant">
-              Peak Focus Day
+              {productiveMetric.title}
             </div>
-            <div className="text-[11px] text-md-outline mt-0.5">
-              {mostProductiveDay.hasData ? `${mostProductiveDay.totalHours} hrs on ${mostProductiveDay.dayName}s` : 'Keep tracking sessions'}
+            <div className="text-[11px] text-md-outline mt-0.5 truncate">
+              {productiveMetric.subtext}
             </div>
           </div>
         </Card>
       </div>
 
-      {/* Daily Activity Chart (Last 7 Days) */}
+      {/* 3. Activity Bar Chart */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2.5">
             <Calendar className="w-5 h-5 text-md-primary" />
-            <h3 className="text-base font-bold text-md-on-surface">Daily Activity (Last 7 Days)</h3>
+            <h3 className="text-base font-bold text-md-on-surface">
+              Activity Breakdown ({periodType.toUpperCase()})
+            </h3>
           </div>
           <span className="text-xs font-medium text-md-on-surface-variant">
-            Hours per day
+            Hours per slot
           </span>
         </div>
 
-        {/* Bar chart visualisation */}
-        <div className="grid grid-cols-7 gap-2 md:gap-4 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30">
-          {dailyActivity.map((day) => {
-            const heightPercent = maxDailyHours > 0 ? Math.min(100, Math.round((day.hours / maxDailyHours) * 100)) : 0;
-            const hasHours = day.hours > 0;
+        {activityBars.length === 0 ? (
+          <div className="text-center py-10 text-xs text-md-outline">
+            No activity logged in this period.
+          </div>
+        ) : (
+          <div
+            className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
+            style={{
+              gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))`,
+            }}
+          >
+            {activityBars.map((bar) => {
+              const heightPercent = maxHours > 0 ? Math.min(100, Math.round((bar.hours / maxHours) * 100)) : 0;
+              const hasHours = bar.hours > 0;
 
-            return (
-              <div key={day.dateKey} className="flex flex-col items-center gap-2 h-full justify-end group">
-                <span className="text-[10px] md:text-xs font-semibold text-md-on-surface opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                  {day.hours}h
-                </span>
-                <div className="w-full max-w-[42px] bg-md-surface-container rounded-t-xl h-full flex items-end overflow-hidden">
-                  <div
-                    className={`w-full rounded-t-xl transition-all duration-500 ease-out ${
-                      hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
-                    }`}
-                    style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
-                    title={`${day.label}: ${day.hours} hrs (${day.sessionCount} sessions)`}
-                  />
+              return (
+                <div key={bar.key} className="flex flex-col items-center gap-1.5 h-full justify-end group">
+                  <span className="text-[10px] md:text-xs font-semibold text-md-on-surface opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                    {bar.hours}h
+                  </span>
+                  <div className="w-full max-w-[42px] bg-md-surface-container rounded-t-xl h-full flex items-end overflow-hidden">
+                    <div
+                      className={`w-full rounded-t-xl transition-all duration-500 ease-out ${
+                        hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
+                      }`}
+                      style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
+                      title={`${bar.label} ${bar.subLabel || ''}: ${bar.hours} hrs (${bar.sessionCount} sessions)`}
+                    />
+                  </div>
+                  <div className="flex flex-col items-center text-center w-full">
+                    <span className="text-[11px] font-semibold text-md-on-surface-variant group-hover:text-md-on-surface truncate w-full">
+                      {bar.label}
+                    </span>
+                    {bar.subLabel && (
+                      <span className="text-[9px] text-md-outline truncate w-full">
+                        {bar.subLabel}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <span className="text-[11px] font-medium text-md-on-surface-variant group-hover:text-md-on-surface text-center truncate w-full">
-                  {day.label.split(',')[0]}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
-      {/* Per-Tag Distribution Breakdown */}
+      {/* 4. Per-Tag Distribution Breakdown */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
             <TagIcon className="w-5 h-5 text-md-primary" />
-            <h3 className="text-base font-bold text-md-on-surface">Per-Tag Distribution</h3>
+            <h3 className="text-base font-bold text-md-on-surface">Category & Tag Distribution</h3>
           </div>
           <span className="text-xs text-md-on-surface-variant">
-            {tagDistribution.length} categor{tagDistribution.length === 1 ? 'y' : 'ies'}
+            {tagDistribution.length} categor{tagDistribution.length === 1 ? 'y' : 'ies'} in period
           </span>
         </div>
 
         {tagDistribution.length === 0 ? (
           <div className="text-center py-8 text-xs text-md-outline">
-            No tagged focus sessions recorded yet.
+            No tagged sessions found for this time period.
           </div>
         ) : (
           <div className="flex flex-col gap-4">
@@ -160,7 +301,7 @@ export const StatisticsView: React.FC = () => {
                     )}
                   </div>
                   <div className="flex items-center gap-3 shrink-0 font-medium text-md-on-surface-variant">
-                    <span>{item.hours} hrs</span>
+                    <span>{item.hours} hrs ({item.sessionCount} sessions)</span>
                     <span className="w-10 text-right font-bold text-md-primary">{item.percentage}%</span>
                   </div>
                 </div>
@@ -181,20 +322,16 @@ export const StatisticsView: React.FC = () => {
         )}
       </Card>
 
-      {/* Productivity Metric Detail */}
-      <div className="p-4 bg-md-surface-container rounded-3xl border border-md-outline-variant/20 flex items-center gap-3 text-xs text-md-on-surface-variant">
-        <TrendingUp className="w-5 h-5 text-md-primary shrink-0" />
-        <div>
-          <span className="font-bold text-md-on-surface">Productivity Insight: </span>
-          {mostProductiveDay.hasData ? (
-            <>
-              You complete your greatest concentration volume on <strong>{mostProductiveDay.dayName}s</strong> with a total of <strong>{mostProductiveDay.totalHours} hours</strong> logged across {mostProductiveDay.sessionCount} sessions.
-            </>
-          ) : (
-            'Complete your first focus sessions to reveal weekly rhythm analytics.'
-          )}
-        </div>
-      </div>
+      {/* Calendar Range Picker Modal */}
+      <DateRangeModal
+        isOpen={isCalendarModalOpen}
+        onClose={() => setIsCalendarModalOpen(false)}
+        currentRange={customRange}
+        onApplyRange={(newRange) => {
+          setCustomRange(newRange);
+          setPeriodType('custom');
+        }}
+      />
     </div>
   );
 };
