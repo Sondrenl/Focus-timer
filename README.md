@@ -14,7 +14,7 @@
 - **Flexible Pomodoro Cycles**: User-configurable intervals via Settings with celebratory confetti bursts upon completion.
 
 ### 2. Carousel Status Indicator & Workspace
-- **Egg Timer Brand Identity**: Clean, custom mechanical egg timer brand mark in the collapsible sidebar navigation rail.
+- **Egg Timer Brand Identity**: Clean, custom mechanical egg timer brand mark in the collapsible sidebar navigation rail and browser favicon.
 - **Unified Single-Line Timeline**: Displays focus sessions and in-between short/long breaks on one clean, continuous horizontal timeline.
 - **Overflow Carousel with Edge Indicators**: If a cycle has many sessions (configurable up to 12), the indicator automatically centers on the active step with subtle visual fade cues and mini chevrons on the sides.
 - **Unspecified Tag Option**: Supports running timers without a specific tag, attributing untagged intervals to an explicit "Unspecified" tag in analytics.
@@ -27,6 +27,7 @@
 - Curated pastel Material Design 3 color palette picker.
 
 ### 4. Advanced Multi-Period Statistics & Donut Analytics
+- **Clean Production Data**: Starts clean with 0 mock sessions, with automatic purging of legacy development seed sessions from browser storage.
 - Selectable time range windows:
   - **Day**: Single-day focus hours, 4-hour breakdown slots, and physically clamped peak focus hour analysis (never exceeding 60 minutes).
   - **Week**: 7-day breakdown (Monday through Sunday).
@@ -73,6 +74,7 @@ src/
 - **Styling**: Tailwind CSS with custom Material Design 3 bright cotton tokens (`#FFFEFC` canvas, `#6750A4` primary).
 - **Icons**: Lucide React + custom SVG EggTimerIcon.
 - **Storage Abstraction**: Repository/Service pattern decoupling UI and domain services from browser `localStorage`.
+- **PWA & Web Standards**: Vector SVG favicon, `manifest.json`, `robots.txt`, and mobile status bar theming.
 
 ---
 
@@ -103,6 +105,24 @@ Preview the production build locally:
 ```bash
 npm run preview
 ```
+
+---
+
+## 🌐 Cloudflare Deployment
+
+### Option A: Cloudflare Workers (Workers Builds)
+1. In Cloudflare Dashboard, connect your Git repository.
+2. Build Settings:
+   - **Build command**: `npm run build`
+   - **Deploy command**: `npx wrangler deploy`
+3. Wrangler serves `./dist` directly via the included `wrangler.json`.
+
+### Option B: Cloudflare Pages
+1. In Cloudflare Dashboard, select **Workers & Pages** → **Create application** → **Pages** → **Connect to Git**.
+2. Build Settings:
+   - **Framework preset**: `Vite`
+   - **Build command**: `npm run build`
+   - **Build output directory**: `dist`
 
 ---
 

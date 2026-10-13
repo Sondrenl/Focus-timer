@@ -1,0 +1,16 @@
+{
+  "name": "Pomodor — Focus Timer",
+  "short_name": "Pomodor",
+  "description": "Clean, distraction-free Pomodoro focus timer with deep statistics and customizable tags.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fdfbff",
+  "theme_color": "#fdfbff",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

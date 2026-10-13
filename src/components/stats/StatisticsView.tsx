@@ -59,6 +59,21 @@ export const StatisticsView: React.FC = () => {
         </p>
       </div>
 
+      {/* Helpful Welcome / Empty-state Banner */}
+      {totalWorkCount === 0 && (
+        <div className="p-4 rounded-2xl bg-md-surface-container-low border border-md-primary/20 flex items-start sm:items-center gap-3 text-xs text-md-on-surface shadow-xs">
+          <div className="w-8 h-8 rounded-xl bg-md-primary/10 text-md-primary flex items-center justify-center shrink-0">
+            <Sparkles className="w-4 h-4 text-md-primary" />
+          </div>
+          <div className="flex-1">
+            <p className="font-bold text-md-on-surface">Ready to start logging focus?</p>
+            <p className="text-md-on-surface-variant text-[11px] mt-0.5 leading-relaxed">
+              Complete your first Pomodoro session to populate focus streaks, tag breakdown, and daily activity curves.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* 1. Time Period Selector & Period Navigator */}
       <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
         {/* Period Type Segmented Buttons */}
@@ -253,7 +268,7 @@ export const StatisticsView: React.FC = () => {
           <div
             className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
             style={{
-              gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))`,
+              gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))` ,
             }}
           >
             {activityBars.map((bar) => {

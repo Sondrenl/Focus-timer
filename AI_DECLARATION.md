@@ -18,6 +18,7 @@ This document provides formal transparency regarding the use of Artificial Intel
 - Designed the modular domain architecture adhering to separation of concerns (Components, Hooks, Context, Services, Repositories).
 - Specified repository contracts (`ITagRepository`, `ISessionRepository`, `ISettingsRepository`) backed by an abstracted storage interface (`IStorageService`, `LocalStorageService`) to decouple client-side persistence from specific database implementations.
 - Implemented soft-delete tag models and "Unspecified" tag attribution.
+- Zero-mock production pipeline: Clean data initialization starting with 0 recorded sessions for authentic user tracking, along with automatic purging of legacy development seed sessions from localStorage.
 
 ### 2.2 Core Algorithms & Engineering
 - **Drift-Free Timer Engine**: Implemented an inline Web Worker thread paired with `Date.now()` delta math to ensure temporal accuracy even when the browser tab is backgrounded or minimized.
@@ -25,12 +26,14 @@ This document provides formal transparency regarding the use of Artificial Intel
 - **Cycle Carousel with Overflow Cues**: Designed an automated single-line session timeline that smoothly slides and centers active intervals while rendering subtle gradient fade cues on viewport boundaries.
 - **Synthesized Audio Chimes**: Engineered custom synthesized harmonic chimes via the browser's native **Web Audio API** (`SoundService`), eliminating external audio file network dependencies.
 - **Temporal Consistency & Analytics**: Authored date range calculations for dynamic multi-period telemetry (`Day`, `Week`, `Month`, `Year`, `Custom Range`, `All-Time`), SVG Donut diagrams, and enforced physical clock boundaries (preventing 1-hour slots from exceeding 60 minutes).
+- **Deployment Pipeline**: Configured Cloudflare Workers Static Assets (`wrangler.json`) and Cloudflare Pages compatibility for instantaneous edge CDN delivery.
 
 ### 2.3 User Interface & Aesthetic Direction
 - Iterated upon Material Design 3 design tokens, calibrating a bright, luminous cotton cream palette (`#FFFEFC`), soft warm containers, and pastel accent tones.
 - Designed a custom SVG mechanical egg timer icon for the brand identity, eliminating misaligned background shadows.
 - Enforced consistent "Tag" terminology across the UI and data pipelines.
 - Streamlined header ergonomics (icon-only controls, single title per view, mobile keyboard cue hiding) and expanded hover navigation rail.
+- Crafted Web App Manifest (`manifest.json`), robots.txt, SVG vector favicon, and mobile PWA meta tags for direct home-screen installation.
 
 ---
 

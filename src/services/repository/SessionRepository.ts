@@ -5,68 +5,38 @@ import { IStorageService } from '../storage/IStorageService';
 const SESSIONS_STORAGE_KEY = 'sessions_v1';
 
 /**
- * Generate sample sessions over the past 5 days for initial visualization
- */
-function generateSeedSessions(): CompletedSession[] {
-  const sessions: CompletedSession[] = [];
-  const now = Date.now();
-  const dayMs = 24 * 60 * 60 * 1000;
-
-  const sampleData = [
-    // 4 days ago
-    { daysAgo: 4, tagId: 'tag-deep-work', duration: 25 * 60, count: 3 },
-    { daysAgo: 4, tagId: 'tag-coding', duration: 25 * 60, count: 2 },
-    // 3 days ago
-    { daysAgo: 3, tagId: 'tag-study', duration: 25 * 60, count: 4 },
-    { daysAgo: 3, tagId: 'tag-writing', duration: 25 * 60, count: 1 },
-    // 2 days ago
-    { daysAgo: 2, tagId: 'tag-coding', duration: 25 * 60, count: 5 },
-    { daysAgo: 2, tagId: 'tag-deep-work', duration: 25 * 60, count: 2 },
-    // Yesterday
-    { daysAgo: 1, tagId: 'tag-deep-work', duration: 25 * 60, count: 4 },
-    { daysAgo: 1, tagId: 'tag-admin', duration: 25 * 60, count: 2 },
-    // Today
-    { daysAgo: 0, tagId: 'tag-deep-work', duration: 25 * 60, count: 2 },
-    { daysAgo: 0, tagId: 'tag-coding', duration: 25 * 60, count: 1 },
-  ];
-
-  let idCounter = 1;
-  sampleData.forEach(({ daysAgo, tagId, duration, count }) => {
-    for (let i = 0; i < count; i++) {
-      const timestamp = new Date(now - daysAgo * dayMs - i * 35 * 60 * 1000).toISOString();
-      sessions.push({
-        id: `seed-session-${idCounter++}`,
-        tagId,
-        sessionType: 'WORK',
-        durationSeconds: duration,
-        completedAt: timestamp,
-      });
-    }
-  });
-
-  return sessions;
-}
-
-/**
- * Implementation of ISessionRepository backed by IStorageService
+ * Implementation of ISessionRepository backed by IStorageService.
+ * Production mode: Starts clean with no mock or sample sessions.
  */
 export class SessionRepository implements ISessionRepository {
   private storage: IStorageService;
 
   constructor(storage: IStorageService) {
     this.storage = storage;
-    this.seedDefaultSessionsIfEmpty();
+    this.purgeLegacySeedSessions();
   }
 
-  private seedDefaultSessionsIfEmpty(): void {
+  /**
+   * Automatically strips any mock seed sessions that may have been saved
+   * during development / earlier builds in the user's browser localStorage.
+   */
+  private purgeLegacySeedSessions(): void {
     const existing = this.storage.getItem<CompletedSession[] | null>(SESSIONS_STORAGE_KEY, null);
-    if (!existing) {
-      this.storage.setItem(SESSIONS_STORAGE_KEY, generateSeedSessions());
+    if (existing && Array.isArray(existing)) {
+      const clean = existing.filter((s) => !s.id.startsWith('seed-session-'));
+      if (clean.length !== existing.length) {
+        this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
+      }
     }
   }
 
   async getAll(): Promise<CompletedSession[]> {
-    return this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+    const sessions = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+    const clean = sessions.filter((s) => !s.id.startsWith('seed-session-'));
+    if (clean.length !== sessions.length) {
+      this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
+    }
+    return clean;
   }
 
   async add(session: Omit<CompletedSession, 'id'>): Promise<CompletedSession> {

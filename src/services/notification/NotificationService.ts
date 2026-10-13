@@ -26,7 +26,7 @@ export class NotificationService {
     try {
       new Notification(title, {
         body,
-        icon: '/favicon.ico',
+        icon: '/favicon.svg',
       });
     } catch (err) {
       console.warn('Unable to dispatch notification:', err);
