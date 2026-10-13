@@ -1,7 +1,6 @@
 import React from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
-import { Flame, Coffee, BedDouble } from 'lucide-react';
 
 interface TimerDisplayProps {
   remainingSeconds: number;
@@ -30,23 +29,18 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
       label: 'Deep Focus',
       color: '#6750A4', // M3 Primary Purple
       bgRing: '#EADDFF',
-      icon: Flame,
     },
     SHORT_BREAK: {
       label: 'Short Break',
       color: '#00897B', // Teal Pastel
       bgRing: '#B2DFDB',
-      icon: Coffee,
     },
     LONG_BREAK: {
       label: 'Long Break',
       color: '#7D5260', // Tertiary Mauve
       bgRing: '#FFD8E4',
-      icon: BedDouble,
     },
   }[sessionType];
-
-  const Icon = sessionMeta.icon;
 
   return (
     <div className="relative flex flex-col items-center justify-center my-4 select-none">
@@ -86,28 +80,20 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
         {/* Central Display Stack */}
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          {/* Status Badge */}
+          {/* Status Badge (clean text without icon) */}
           <div
-            className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors"
+            className="px-3.5 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors tracking-wide"
             style={{
               backgroundColor: sessionMeta.bgRing,
               color: sessionMeta.color,
             }}
           >
-            <Icon className="w-3.5 h-3.5" />
-            <span>{sessionMeta.label}</span>
+            {sessionMeta.label}
           </div>
 
           {/* Large Monospace/Digital Timer Digits */}
           <div className="text-5xl md:text-6xl font-extrabold text-md-on-surface tracking-tighter tabular-nums font-mono drop-shadow-xs">
             {formatTime(remainingSeconds)}
-          </div>
-
-          {/* Subtitle / Status state */}
-          <div className="text-xs font-medium text-md-on-surface-variant mt-2">
-            {status === 'RUNNING' && 'Interval running...'}
-            {status === 'PAUSED' && 'Paused'}
-            {status === 'IDLE' && 'Ready to start'}
           </div>
         </div>
       </div>
