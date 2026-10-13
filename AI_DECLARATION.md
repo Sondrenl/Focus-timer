@@ -19,6 +19,7 @@ This document provides formal transparency regarding the use of Artificial Intel
 - Specified repository contracts (`ITagRepository`, `ISessionRepository`, `ISettingsRepository`) backed by an abstracted storage interface (`IStorageService`, `LocalStorageService`) to decouple client-side persistence from specific database implementations.
 - Implemented soft-delete tag models and "Unspecified" tag attribution.
 - Zero-mock production pipeline: Clean data initialization starting with 0 recorded sessions for authentic user tracking, along with automatic purging of legacy development seed sessions from localStorage.
+- Global Timer Engine Context (`TimerProvider`): Architected a top-level timer context guaranteeing continuous countdown execution, audio chime dispatching, tab title updating, and round cycle persistence without resetting when switching between settings, statistics, tags, and timer tabs.
 
 ### 2.2 Core Algorithms & Engineering
 - **Drift-Free Timer Engine**: Implemented an inline Web Worker thread paired with `Date.now()` delta math to ensure temporal accuracy even when the browser tab is backgrounded or minimized.

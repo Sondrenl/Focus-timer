@@ -5,7 +5,11 @@ import { TimerControls } from './TimerControls';
 import { CycleIndicator } from './CycleIndicator';
 import { useTimer } from '../../hooks/useTimer';
 
-export const TimerWorkspace: React.FC = () => {
+interface TimerWorkspaceProps {
+  isActiveView?: boolean;
+}
+
+export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = true }) => {
   const {
     sessionType,
     status,
@@ -19,9 +23,12 @@ export const TimerWorkspace: React.FC = () => {
   } = useTimer();
 
   // Keyboard shortcut listener (Space = Toggle, R = Reset, S = Skip)
+  // Only active when the Timer tab is actively displayed to the user
   useEffect(() => {
+    if (!isActiveView) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input
+      // Ignore if user is typing in an input or textarea
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
         return;
       }
@@ -38,7 +45,7 @@ export const TimerWorkspace: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleStartPause, resetTimer, skipInterval]);
+  }, [isActiveView, toggleStartPause, resetTimer, skipInterval]);
 
   return (
     <div className="w-full max-w-xl mx-auto flex flex-col items-center justify-center py-6 px-4">

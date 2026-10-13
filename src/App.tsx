@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
+import { TimerProvider } from './context/TimerContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { TimerWorkspace } from './components/timer/TimerWorkspace';
@@ -25,7 +26,11 @@ const MainContent: React.FC = () => {
         <Header onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-4 md:p-6">
-          {currentView === 'timer' && <TimerWorkspace />}
+          {/* Keep TimerWorkspace mounted so timer ticks and animations stay live across tab switches */}
+          <div className={currentView === 'timer' ? 'contents' : 'hidden'}>
+            <TimerWorkspace isActiveView={currentView === 'timer'} />
+          </div>
+
           {currentView === 'tags' && <TagManager />}
           {currentView === 'stats' && <StatisticsView />}
           {currentView === 'settings' && <SettingsView />}
@@ -39,7 +44,9 @@ const MainContent: React.FC = () => {
 export function App() {
   return (
     <AppProvider>
-      <MainContent />
+      <TimerProvider>
+        <MainContent />
+      </TimerProvider>
     </AppProvider>
   );
 }
