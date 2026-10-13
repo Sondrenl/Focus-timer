@@ -70,8 +70,8 @@ export const TimerWorkspace: React.FC = () => {
         />
       </div>
 
-      {/* Helpful keyboard cues */}
-      <div className="flex items-center gap-4 text-[11px] text-md-outline mt-8 select-none font-mono">
+      {/* Helpful keyboard cues (hidden on mobile devices) */}
+      <div className="hidden sm:flex items-center gap-4 text-[11px] text-md-outline mt-8 select-none font-mono">
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">Space</kbd> Start/Pause</span>
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">R</kbd> Reset</span>
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">S</kbd> Skip</span>

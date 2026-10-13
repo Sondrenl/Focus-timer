@@ -7,7 +7,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Material Design 3 Brightened Cotton / Soft Warm Cream tokens
+        // Material Design 3 Bright, Luminous Cotton Palette tokens
         md: {
           primary: '#6750A4',
           'on-primary': '#FFFFFF',
@@ -25,19 +25,19 @@ export default {
           'on-error': '#FFFFFF',
           'error-container': '#F9DEDC',
           'on-error-container': '#410E0B',
-          background: '#FDFBF7',
+          background: '#FFFEFC',
           'on-background': '#1E1B16',
-          surface: '#FDFBF7',
+          surface: '#FFFFFF',
           'on-surface': '#1E1B16',
-          'surface-variant': '#EFE9DC',
+          'surface-variant': '#F6F2EA',
           'on-surface-variant': '#4D473F',
           outline: '#7D7569',
-          'outline-variant': '#E0D8CB',
+          'outline-variant': '#EDE7DC',
           'surface-container-lowest': '#FFFFFF',
-          'surface-container-low': '#F9F7F2',
-          'surface-container': '#F3EFE7',
-          'surface-container-high': '#ECE7DC',
-          'surface-container-highest': '#E5DFD2',
+          'surface-container-low': '#FFFFFF',
+          'surface-container': '#F9F6F0',
+          'surface-container-high': '#F3EFE7',
+          'surface-container-highest': '#ECE7DC',
         }
       },
       borderRadius: {
@@ -54,11 +54,11 @@ export default {
         sans: ['"Roboto Flex"', '"Roboto"', 'system-ui', '-apple-system', 'sans-serif'],
       },
       boxShadow: {
-        'xs': '0px 1px 2px rgba(0, 0, 0, 0.04)',
-        'elevation-1': '0px 1px 3px 1px rgba(0, 0, 0, 0.05), 0px 1px 2px 0px rgba(0, 0, 0, 0.08)',
-        'elevation-2': '0px 2px 6px 2px rgba(0, 0, 0, 0.05), 0px 1px 2px 0px rgba(0, 0, 0, 0.08)',
-        'elevation-3': '0px 4px 8px 3px rgba(0, 0, 0, 0.05), 0px 1px 3px 0px rgba(0, 0, 0, 0.08)',
-        'elevation-4': '0px 6px 10px 4px rgba(0, 0, 0, 0.05), 0px 2px 3px 0px rgba(0, 0, 0, 0.08)',
+        'xs': '0px 1px 2px rgba(0, 0, 0, 0.03)',
+        'elevation-1': '0px 1px 3px 1px rgba(0, 0, 0, 0.04), 0px 1px 2px 0px rgba(0, 0, 0, 0.06)',
+        'elevation-2': '0px 2px 6px 2px rgba(0, 0, 0, 0.04), 0px 1px 2px 0px rgba(0, 0, 0, 0.06)',
+        'elevation-3': '0px 4px 8px 3px rgba(0, 0, 0, 0.04), 0px 1px 3px 0px rgba(0, 0, 0, 0.06)',
+        'elevation-4': '0px 6px 10px 4px rgba(0, 0, 0, 0.04), 0px 2px 3px 0px rgba(0, 0, 0, 0.06)',
       }
     },
   },

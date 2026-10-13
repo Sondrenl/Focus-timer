@@ -207,7 +207,31 @@ export const StatisticsView: React.FC = () => {
         </Card>
       </div>
 
-      {/* 3. Activity Bar Chart */}
+      {/* 3. Category & Tag Distribution Donut Diagram (comes before activity breakdown) */}
+      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2.5">
+            <TagIcon className="w-5 h-5 text-md-primary" />
+            <h3 className="text-base font-bold text-md-on-surface">Category & Tag Distribution</h3>
+          </div>
+          <span className="text-xs text-md-on-surface-variant">
+            {tagDistribution.length} categor{tagDistribution.length === 1 ? 'y' : 'ies'} in period
+          </span>
+        </div>
+
+        {tagDistribution.length === 0 ? (
+          <div className="text-center py-8 text-xs text-md-outline">
+            No tagged sessions found for this time period.
+          </div>
+        ) : (
+          <TagDistributionDonut
+            distribution={tagDistribution}
+            totalFocusHours={totalFocusHours}
+          />
+        )}
+      </Card>
+
+      {/* 4. Activity Bar Chart */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2.5">
@@ -264,30 +288,6 @@ export const StatisticsView: React.FC = () => {
               );
             })}
           </div>
-        )}
-      </Card>
-
-      {/* 4. Per-Tag Distribution Donut Diagram */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2.5">
-            <TagIcon className="w-5 h-5 text-md-primary" />
-            <h3 className="text-base font-bold text-md-on-surface">Category & Tag Distribution</h3>
-          </div>
-          <span className="text-xs text-md-on-surface-variant">
-            {tagDistribution.length} categor{tagDistribution.length === 1 ? 'y' : 'ies'} in period
-          </span>
-        </div>
-
-        {tagDistribution.length === 0 ? (
-          <div className="text-center py-8 text-xs text-md-outline">
-            No tagged sessions found for this time period.
-          </div>
-        ) : (
-          <TagDistributionDonut
-            distribution={tagDistribution}
-            totalFocusHours={totalFocusHours}
-          />
         )}
       </Card>
 

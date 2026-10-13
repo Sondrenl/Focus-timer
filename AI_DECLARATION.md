@@ -17,15 +17,18 @@ This document provides formal transparency regarding the use of Artificial Intel
 ### 2.1 Architecture & Domain Modeling
 - Designed the modular domain architecture adhering to separation of concerns (Components, Hooks, Context, Services, Repositories).
 - Specified repository contracts (`ITagRepository`, `ISessionRepository`, `ISettingsRepository`) backed by an abstracted storage interface (`IStorageService`, `LocalStorageService`) to decouple client-side persistence from specific database implementations.
+- Implemented soft-delete tag models and "Unspecified" category attribution.
 
 ### 2.2 Core Algorithms & Engineering
 - **Drift-Free Timer Engine**: Implemented an inline Web Worker thread paired with `Date.now()` delta math to ensure temporal accuracy even when the browser tab is backgrounded or minimized.
+- **Dynamic Tag Theming**: Synchronized the circular countdown gauge and track ring directly to user-selected tag colors.
+- **Cycle Carousel with Overflow Cues**: Designed an automated single-line session timeline that smoothly slides and centers active intervals while rendering subtle gradient fade cues on viewport boundaries.
 - **Synthesized Audio Chimes**: Engineered custom synthesized harmonic chimes via the browser's native **Web Audio API** (`SoundService`), eliminating external audio file network dependencies.
-- **Time Window & Date Analytics**: Authored date range calculations for dynamic multi-period telemetry (`Day`, `Week`, `Month`, `Year`, `Custom Range`, `All-Time`).
+- **Temporal Consistency & Analytics**: Authored date range calculations for dynamic multi-period telemetry (`Day`, `Week`, `Month`, `Year`, `Custom Range`, `All-Time`), SVG Donut diagrams, and enforced physical clock boundaries (preventing 1-hour slots from exceeding 60 minutes).
 
 ### 2.3 User Interface & Aesthetic Direction
-- Configured Material Design 3 design tokens, translating user feedback into a luminous cotton cream palette (`#FDFBF7`), soft warm containers, and pastel accent tones.
-- Implemented the expanding hover navigation rail, unboxed circular countdown presentation, and date range modal.
+- Iterated upon Material Design 3 design tokens, calibrating a bright, luminous cotton cream palette (`#FFFEFC`), soft warm containers, and pastel accent tones.
+- Streamlined header ergonomics (icon-only controls, single title per view, mobile keyboard cue hiding) and expanded hover navigation rail.
 
 ---
 

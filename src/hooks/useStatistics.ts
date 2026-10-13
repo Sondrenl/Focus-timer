@@ -429,7 +429,8 @@ export function useStatistics() {
       const hourCounts = new Array(24).fill(0);
       filteredSessions.forEach((s) => {
         const h = new Date(s.completedAt).getHours();
-        hourCounts[h] += s.durationSeconds;
+        // A physical 1-hour window cannot exceed 3600 seconds
+        hourCounts[h] = Math.min(3600, hourCounts[h] + s.durationSeconds);
       });
       let maxH = 0;
       let maxSec = -1;
@@ -439,11 +440,13 @@ export function useStatistics() {
           maxH = h;
         }
       });
+      const clampedSec = Math.min(3600, Math.max(0, maxSec));
+      const minsFocused = Math.round(clampedSec / 60);
       productiveMetric = {
         title: 'Peak Focus Hour',
         value: `${maxH.toString().padStart(2, '0')}:00 – ${(maxH + 1).toString().padStart(2, '0')}:00`,
-        subtext: `${(maxSec / 3600).toFixed(1)} hrs completed in this hour window`,
-        hasData: true,
+        subtext: `${minsFocused} mins focused in this 1-hour window`,
+        hasData: maxSec > 0,
       };
     } else {
       const weekdaySecs = new Array(7).fill(0);

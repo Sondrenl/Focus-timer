@@ -70,7 +70,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 Pomodor
               </span>
               <span className="text-[11px] text-md-on-surface-variant tracking-wider font-medium uppercase mt-1 block">
-                Focus Engine
+                Focus timer
               </span>
             </div>
           </button>

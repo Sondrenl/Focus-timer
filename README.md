@@ -1,40 +1,40 @@
 # Pomodor — Focus Timer
 
-> A production-ready, client-side Pomodoro web application designed according to Material Design 3 guidelines with a luminous cotton cream aesthetic and a drift-free timing engine.
+> A production-ready, client-side Pomodoro web application designed according to Material Design 3 guidelines with a luminous bright cotton aesthetic, a drift-free timing engine, and rich category analytics.
 
 ---
 
 ## 🌟 Key Features
 
-### 1. Interval-Accurate Timer Engine
-- **Zero-Drift Web Worker Architecture**: Executes countdown ticks on an independent Web Worker thread combined with `Date.now()` timestamp deltas to prevent timer throttling when browser tabs are backgrounded or minimized.
-- **Harmonic Audio Chimes**: Synthesized in real-time via the **Web Audio API** (melodic C5–E5–G5 major triad) with zero external audio asset dependencies.
-- **Dynamic Browser Tab Indicator**: Displays clean countdown progress in the browser tab title (e.g., `23:30 Pomodor`).
-- **Flexible Pomodoro Cycles**: Default 4 × 25-minute work intervals separated by 5-minute short breaks, concluding with a 25-minute long break.
-- **Celebratory Feedback**: Confetti burst upon completing focus sessions.
+### 1. Interval-Accurate Drift-Free Timer Engine
+- **Web Worker Architecture**: Executes countdown ticks on an independent background Web Worker thread combined with `Date.now()` timestamp deltas to guarantee zero timer drift when browser tabs are backgrounded or minimized.
+- **Dynamic Tag-Themed Donut Gauge**: The timer gauge, progress arc, and center status badge dynamically adapt to the color of the currently active focus tag.
+- **Harmonic Audio Chimes**: Synthesized in real-time via the native browser **Web Audio API** (melodic C5–E5–G5 triad) without external audio asset network latency. Minimalist header icon toggle for quick mute/unmute.
+- **Bracket-Free Browser Tab Title**: Displays clean countdown progress in the browser tab title (e.g., `23:30 Pomodor`).
+- **Flexible Pomodoro Cycles**: User-configurable intervals via Settings with celebratory confetti bursts upon completion.
 
-### 2. Minimalist Unboxed Workspace
-- Floating circular timer gauge with progress arc and session indicator.
-- Minimalist session progress dots (`CycleIndicator`).
-- Tag dropdown chip to categorize focus intervals on the fly.
-- Ergonomic controls: Reset (`R`), Start/Pause (`Space`), and Skip (`S`).
+### 2. Carousel Status Indicator & Workspace
+- **Unified Single-Line Timeline**: Displays focus sessions and in-between short/long breaks on one clean, continuous horizontal timeline.
+- **Overflow Carousel with Edge Indicators**: If a cycle has many sessions (configurable up to 12), the indicator automatically centers on the active step with subtle visual fade cues and mini chevrons on the sides.
+- **Unspecified Focus Category**: Supports running timers with an "Unspecified" tag, attributing untagged intervals to an explicit category in analytics.
+- **Ergonomic Controls**: Reset (`R`), Start/Pause (`Space`), and Skip (`S`), with keyboard shortcuts cleanly hidden on mobile viewports.
 
 ### 3. Tag Management (Soft-Delete Architecture)
-- Full categorization model (`id`, `name`, `color`, `isArchived`, `createdAt`).
-- **Active Tags**: Directly selectable in the timer workspace and tracked in active aggregates.
+- Full categorization data model (`id`, `name`, `color`, `isArchived`, `createdAt`).
+- **Active Tags**: Selectable in the timer workspace and tracked in current aggregates.
 - **Archived Tags**: Soft-deleted from selector dropdowns, but fully preserved in historical analytics.
 - Curated pastel Material Design 3 color palette picker.
 
-### 4. Advanced Multi-Period Statistics & Analytics
+### 4. Advanced Multi-Period Statistics & Donut Analytics
 - Selectable time range windows:
-  - **Day**: Detailed hourly distribution and peak focus window.
+  - **Day**: Single-day focus hours, 4-hour breakdown slots, and physically clamped peak focus hour analysis (never exceeding 60 minutes).
   - **Week**: 7-day breakdown (Monday through Sunday).
   - **Month**: Calendar month breakdown across multi-day blocks.
   - **Year**: 12-month annual progress (Jan–Dec).
   - **Custom Range**: Calendar date picker with presets (*Last 7 Days*, *Last 14 Days*, *This Month*, *Last 30 Days*, *Last 90 Days*, *Year to Date*).
   - **All Time**: Lifetime career metrics with **archived tags included**.
-- Navigation controls: Step backward (`<`) and forward (`>`) through any time period.
-- Aggregated focus hours, completed Pomodoros, peak productivity day, and per-category distributions.
+- **Interactive SVG Donut Diagram**: Visual breakdown of category and tag focus distribution placed prominently above the activity breakdown, with center-hole telemetry inspection.
+- **Explicit "Today" Jump Button**: Clear, accessible button to return directly to today's date.
 
 ### 5. Settings & Profile
 - Fully customizable durations (Work, Short Break, Long Break, Cycle Interval).
@@ -61,7 +61,7 @@ src/
 │   ├── layout/               # Sidebar (collapsible rail) & Header
 │   ├── timer/                # TimerDisplay, TimerControls, TagSelector, CycleIndicator
 │   ├── tags/                 # TagManager, TagFormModal
-│   ├── stats/                # StatisticsView, DateRangeModal
+│   ├── stats/                # StatisticsView, DateRangeModal, TagDistributionDonut
 │   ├── settings/             # SettingsView
 │   ├── profile/              # ProfileView
 │   └── ui/                   # Button, Card, Switch, Input, Modal
@@ -69,9 +69,9 @@ src/
 ```
 
 - **Framework**: React 18 with TypeScript and Vite.
-- **Styling**: Tailwind CSS with custom Material Design 3 pastel cotton tokens (`#FDFBF7` canvas, `#6750A4` primary).
+- **Styling**: Tailwind CSS with custom Material Design 3 bright cotton tokens (`#FFFEFC` canvas, `#6750A4` primary).
 - **Icons**: Lucide React.
-- **Storage Abstraction**: Repository/Service pattern decoupling UI and domain services from browser `localStorage`, facilitating future migrations to IndexedDB, PostgreSQL, or REST/GraphQL backends.
+- **Storage Abstraction**: Repository/Service pattern decoupling UI and domain services from browser `localStorage`.
 
 ---
 
@@ -105,7 +105,7 @@ npm run preview
 
 ---
 
-## ⌨️ Keyboard Shortcuts
+## ⌨️ Keyboard Shortcuts (Desktop)
 
 | Key | Action |
 | --- | --- |
