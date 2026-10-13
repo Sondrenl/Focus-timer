@@ -55,17 +55,16 @@ export function useTimer() {
   const targetEndTimeRef = useRef<number | null>(null);
   const workerRef = useRef<Worker | null>(null);
 
-  // Sync document title with active timer status
+  // Sync document title with active timer status: "23:30 Pomodor" without brackets
   useEffect(() => {
     if (status === 'RUNNING') {
-      const mode = sessionType === 'WORK' ? 'Focus' : 'Break';
-      document.title = `(${formatTime(remainingSeconds)}) ${mode} — Pomodor`;
+      document.title = `${formatTime(remainingSeconds)} Pomodor`;
     } else if (status === 'PAUSED') {
-      document.title = `(Paused) Pomodor — Focus Timer`;
+      document.title = `${formatTime(remainingSeconds)} (Paused) Pomodor`;
     } else {
       document.title = 'Pomodor — Focus Timer';
     }
-  }, [status, remainingSeconds, sessionType]);
+  }, [status, remainingSeconds]);
 
   // Update total & remaining if user changes settings while timer is IDLE
   useEffect(() => {

@@ -3,24 +3,25 @@
 @tailwind utilities;
 
 :root {
-  /* Material Design 3 Dynamic Token Variables - Cotton / Warm Cream Theme */
+  /* Material Design 3 Dynamic Token Variables - Luminous Cotton / Cream Palette */
   --md-sys-color-primary: #6750a4;
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-primary-container: #eaddff;
   --md-sys-color-on-primary-container: #21005d;
-  --md-sys-color-surface: #faf7f2;
-  --md-sys-color-on-surface: #1d1b16;
-  --md-sys-color-surface-container: #ece6dc;
-  --md-sys-color-surface-container-high: #e4ddd2;
+  --md-sys-color-surface: #fdfbf7;
+  --md-sys-color-on-surface: #1e1b16;
+  --md-sys-color-surface-container-low: #f9f7f2;
+  --md-sys-color-surface-container: #f3efe7;
+  --md-sys-color-surface-container-high: #ece7dc;
   --md-sys-color-outline: #7d7569;
-  --md-sys-color-outline-variant: #cfc6b8;
+  --md-sys-color-outline-variant: #e0d8cb;
 }
 
 body {
   margin: 0;
   font-family: 'Roboto Flex', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  background-color: #faf7f2;
-  color: #1d1b16;
+  background-color: #fdfbf7;
+  color: #1e1b16;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -36,10 +37,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cfc6b8;
+  background: #e0d8cb;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #7d7569;
+  background: #b5aba0;
 }
