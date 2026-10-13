@@ -14,14 +14,14 @@ const MainContent: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-md-background">
-      {/* Left Sidebar */}
+      {/* Left Collapsible Rail / Sidebar */}
       <Sidebar
         isOpenOnMobile={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
       />
 
-      {/* Main Workspace Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      {/* Main Workspace Area with offset for the collapsed rail */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden lg:pl-[72px]">
         <Header onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-4 md:p-6">

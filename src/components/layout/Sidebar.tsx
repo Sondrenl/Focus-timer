@@ -31,39 +31,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Mobile Backdrop */}
       {isOpenOnMobile && (
         <div
-          className="fixed inset-0 bg-black/40 z-30 lg:hidden backdrop-blur-xs transition-opacity"
+          className="fixed inset-0 bg-black/30 z-30 lg:hidden backdrop-blur-xs transition-opacity"
           onClick={onCloseMobile}
         />
       )}
 
-      {/* Navigation Drawer Container */}
+      {/* Navigation Rail (collapsed by default, expands to Drawer on hover) */}
       <aside
         className={clsx(
-          'fixed lg:static top-0 bottom-0 left-0 z-40 w-64 md:w-72 bg-md-surface-container-low border-r border-md-outline-variant/30 flex flex-col justify-between py-6 px-4 transition-transform duration-300 ease-in-out',
-          isOpenOnMobile ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+          'group fixed top-0 bottom-0 left-0 z-40 bg-md-surface-container-low border-r border-md-outline-variant/30 flex flex-col justify-between py-6 px-3 transition-all duration-300 ease-in-out',
+          // Mobile state
+          isOpenOnMobile
+            ? 'w-64 translate-x-0 shadow-elevation-3'
+            : '-translate-x-full lg:translate-x-0 shadow-xs hover:shadow-elevation-2',
+          // Desktop collapsed width vs hover expanded width
+          'lg:w-[72px] lg:hover:w-64'
         )}
       >
-        {/* Top: Pomodor Logo / Brand */}
+        {/* Top: Pomodor Brand / Logo */}
         <div className="flex flex-col gap-6">
           <button
             onClick={() => handleNav('timer')}
-            className="flex items-center gap-3 px-3 py-2 rounded-2xl hover:bg-md-surface-container transition-colors text-left group"
+            className="flex items-center gap-3.5 p-1.5 rounded-2xl hover:bg-md-surface-container transition-colors text-left"
+            title="Pomodor Main"
           >
-            <div className="w-10 h-10 rounded-2xl bg-md-primary flex items-center justify-center text-white shadow-elevation-1 group-hover:scale-105 transition-transform">
+            <div className="w-11 h-11 shrink-0 rounded-2xl bg-md-primary flex items-center justify-center text-white shadow-elevation-1 transition-transform group-hover:scale-102">
               <Timer className="w-6 h-6" />
             </div>
-            <div>
+            <div className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
               <span className="text-xl font-bold tracking-tight text-md-on-surface block leading-none">
                 Pomodor
               </span>
-              <span className="text-xs text-md-on-surface-variant tracking-wider font-medium uppercase mt-0.5 block">
+              <span className="text-[11px] text-md-on-surface-variant tracking-wider font-medium uppercase mt-1 block">
                 Focus Engine
               </span>
             </div>
           </button>
 
-          {/* Center Navigation Links */}
-          <nav className="flex flex-col gap-1.5 mt-2">
+          {/* Navigation Links */}
+          <nav className="flex flex-col gap-2 mt-1">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentView === item.id;
@@ -72,40 +78,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={item.id}
                   onClick={() => handleNav(item.id)}
+                  title={item.label}
                   className={clsx(
-                    'flex items-center gap-4 px-4 py-3 rounded-full text-sm font-medium transition-all duration-200 text-left',
+                    'flex items-center gap-3.5 p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left relative overflow-hidden',
                     isActive
                       ? 'bg-md-primary-container text-md-on-primary-container font-semibold shadow-xs'
                       : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
                   )}
                 >
-                  <Icon className={clsx('w-5 h-5', isActive ? 'text-md-primary' : 'text-md-outline')} />
-                  <span>{item.label}</span>
+                  <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                    <Icon
+                      className={clsx(
+                        'w-5 h-5 transition-transform duration-200',
+                        isActive ? 'text-md-primary scale-110' : 'text-md-outline'
+                      )}
+                    />
+                  </div>
+                  <span className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
+                    {item.label}
+                  </span>
                 </button>
               );
             })}
           </nav>
         </div>
 
-        {/* Bottom: Profile Link */}
+        {/* Bottom: User Profile Link */}
         <div className="border-t border-md-outline-variant/20 pt-4">
           <button
             onClick={() => handleNav('profile')}
+            title="Profile & Sync"
             className={clsx(
-              'flex items-center gap-3 w-full px-3 py-2.5 rounded-2xl transition-all duration-200 text-left',
+              'flex items-center gap-3.5 p-1.5 rounded-2xl transition-all duration-200 text-left w-full overflow-hidden',
               currentView === 'profile'
                 ? 'bg-md-secondary-container text-md-on-secondary-container font-semibold'
                 : 'hover:bg-md-surface-container text-md-on-surface-variant'
             )}
           >
-            <div className="w-9 h-9 rounded-full bg-md-primary/10 border border-md-primary/20 flex items-center justify-center text-md-primary shrink-0">
+            <div className="w-10 h-10 rounded-full bg-md-primary/10 border border-md-primary/20 flex items-center justify-center text-md-primary shrink-0">
               <User className="w-5 h-5" />
             </div>
-            <div className="overflow-hidden">
+            <div className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
               <span className="text-sm font-semibold text-md-on-surface truncate block">
-                Focus Champion
+                Focus Practitioner
               </span>
-              <span className="text-xs text-md-outline truncate block">
+              <span className="text-[11px] text-md-outline truncate block">
                 Profile & Sync
               </span>
             </div>

@@ -7,7 +7,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Material Design 3 Pastel / Purple theme tokens
+        // Material Design 3 Cotton / Warm Cream theme tokens
         md: {
           primary: '#6750A4',
           'on-primary': '#FFFFFF',
@@ -25,19 +25,19 @@ export default {
           'on-error': '#FFFFFF',
           'error-container': '#F9DEDC',
           'on-error-container': '#410E0B',
-          background: '#FEF7FF',
-          'on-background': '#1D1B20',
-          surface: '#FEF7FF',
-          'on-surface': '#1D1B20',
-          'surface-variant': '#E7E0EC',
-          'on-surface-variant': '#49454F',
-          outline: '#79747E',
-          'outline-variant': '#CAC4D0',
+          background: '#FAF7F2',
+          'on-background': '#1D1B16',
+          surface: '#FAF7F2',
+          'on-surface': '#1D1B16',
+          'surface-variant': '#E8E1D5',
+          'on-surface-variant': '#4B463E',
+          outline: '#7D7569',
+          'outline-variant': '#CFC6B8',
           'surface-container-lowest': '#FFFFFF',
-          'surface-container-low': '#F7F2FA',
-          'surface-container': '#F3EDF7',
-          'surface-container-high': '#ECE6F0',
-          'surface-container-highest': '#E6E0E9',
+          'surface-container-low': '#F4F0E8',
+          'surface-container': '#ECE6DC',
+          'surface-container-high': '#E4DDD2',
+          'surface-container-highest': '#DDD5C7',
         }
       },
       borderRadius: {
@@ -54,10 +54,10 @@ export default {
         sans: ['"Roboto Flex"', '"Roboto"', 'system-ui', '-apple-system', 'sans-serif'],
       },
       boxShadow: {
-        'elevation-1': '0px 1px 3px 1px rgba(0, 0, 0, 0.15), 0px 1px 2px 0px rgba(0, 0, 0, 0.30)',
-        'elevation-2': '0px 2px 6px 2px rgba(0, 0, 0, 0.15), 0px 1px 2px 0px rgba(0, 0, 0, 0.30)',
-        'elevation-3': '0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px 0px rgba(0, 0, 0, 0.30)',
-        'elevation-4': '0px 6px 10px 4px rgba(0, 0, 0, 0.15), 0px 2px 3px 0px rgba(0, 0, 0, 0.30)',
+        'elevation-1': '0px 1px 3px 1px rgba(0, 0, 0, 0.08), 0px 1px 2px 0px rgba(0, 0, 0, 0.15)',
+        'elevation-2': '0px 2px 6px 2px rgba(0, 0, 0, 0.08), 0px 1px 2px 0px rgba(0, 0, 0, 0.15)',
+        'elevation-3': '0px 4px 8px 3px rgba(0, 0, 0, 0.08), 0px 1px 3px 0px rgba(0, 0, 0, 0.15)',
+        'elevation-4': '0px 6px 10px 4px rgba(0, 0, 0, 0.08), 0px 2px 3px 0px rgba(0, 0, 0, 0.15)',
       }
     },
   },

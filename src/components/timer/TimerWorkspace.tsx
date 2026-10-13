@@ -4,8 +4,6 @@ import { TimerDisplay } from './TimerDisplay';
 import { TimerControls } from './TimerControls';
 import { CycleIndicator } from './CycleIndicator';
 import { useTimer } from '../../hooks/useTimer';
-import { SessionType } from '../../types/timer';
-import { clsx } from 'clsx';
 
 export const TimerWorkspace: React.FC = () => {
   const {
@@ -18,7 +16,6 @@ export const TimerWorkspace: React.FC = () => {
     toggleStartPause,
     resetTimer,
     skipInterval,
-    setSessionTypeManually,
   } = useTimer();
 
   // Keyboard shortcut listener (Space = Toggle, R = Reset, S = Skip)
@@ -43,42 +40,15 @@ export const TimerWorkspace: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleStartPause, resetTimer, skipInterval]);
 
-  const tabs: { type: SessionType; label: string }[] = [
-    { type: 'WORK', label: 'Pomodoro' },
-    { type: 'SHORT_BREAK', label: 'Short Break' },
-    { type: 'LONG_BREAK', label: 'Long Break' },
-  ];
-
   return (
     <div className="w-full max-w-xl mx-auto flex flex-col items-center justify-center py-6 px-4">
-      {/* Top Workspace Controls: Tag Selector & Mode Tabs */}
-      <div className="w-full flex flex-col items-center gap-5 mb-2">
+      {/* Top Tag Selector */}
+      <div className="w-full flex flex-col items-center mb-6">
         <TagSelector />
-
-        {/* Mode Segmented Button / Tabs */}
-        <div className="inline-flex p-1 bg-md-surface-container rounded-full border border-md-outline-variant/30 shadow-xs">
-          {tabs.map((tab) => {
-            const isActive = sessionType === tab.type;
-            return (
-              <button
-                key={tab.type}
-                onClick={() => setSessionTypeManually(tab.type)}
-                className={clsx(
-                  'px-4 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 select-none',
-                  isActive
-                    ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                    : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-                )}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
-      {/* Main Timer Display Card */}
-      <div className="w-full bg-md-surface-container-low border border-md-outline-variant/20 rounded-3xl p-6 md:p-8 flex flex-col items-center shadow-elevation-1">
+      {/* Central Timer Elements (no box/card container) */}
+      <div className="w-full flex flex-col items-center">
         <CycleIndicator
           currentCycle={currentCycle}
           maxCycles={maxCycles}
@@ -101,7 +71,7 @@ export const TimerWorkspace: React.FC = () => {
       </div>
 
       {/* Helpful keyboard cues */}
-      <div className="flex items-center gap-4 text-[11px] text-md-outline mt-6 select-none font-mono">
+      <div className="flex items-center gap-4 text-[11px] text-md-outline mt-8 select-none font-mono">
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">Space</kbd> Start/Pause</span>
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">R</kbd> Reset</span>
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">S</kbd> Skip</span>
