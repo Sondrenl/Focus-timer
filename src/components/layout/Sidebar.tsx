@@ -1,5 +1,5 @@
 import React from 'react';
-import { Timer, Tag, BarChart3, Settings, User } from 'lucide-react';
+import { Tag, BarChart3, Settings, User, Timer } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { clsx } from 'clsx';
 
@@ -14,8 +14,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { currentView, setCurrentView } = useApp();
 
+  // Navigation items without the duplicate timer item; the top title routes home
   const navItems = [
-    { id: 'timer' as const, label: 'Timer', icon: Timer },
     { id: 'tags' as const, label: 'Tags', icon: Tag },
     { id: 'stats' as const, label: 'Statistics', icon: BarChart3 },
     { id: 'settings' as const, label: 'Settings', icon: Settings },
@@ -25,6 +25,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setCurrentView(view);
     if (onCloseMobile) onCloseMobile();
   };
+
+  const isHomeActive = currentView === 'timer';
 
   return (
     <>
@@ -48,14 +50,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           'lg:w-[72px] lg:hover:w-64'
         )}
       >
-        {/* Top: Pomodor Brand / Logo */}
+        {/* Top: Pomodor Brand / Home Navigation */}
         <div className="flex flex-col gap-6">
           <button
             onClick={() => handleNav('timer')}
-            className="flex items-center gap-3.5 p-1.5 rounded-2xl hover:bg-md-surface-container transition-colors text-left"
-            title="Pomodor Main"
+            className={clsx(
+              'flex items-center gap-3.5 p-1.5 rounded-2xl transition-all text-left group/brand',
+              isHomeActive
+                ? 'bg-md-primary-container/40 hover:bg-md-primary-container/60'
+                : 'hover:bg-md-surface-container'
+            )}
+            title="Pomodor Home"
           >
-            <div className="w-11 h-11 shrink-0 rounded-2xl bg-md-primary flex items-center justify-center text-white shadow-elevation-1 transition-transform group-hover:scale-102">
+            <div className="w-11 h-11 shrink-0 rounded-2xl bg-md-primary flex items-center justify-center text-white shadow-elevation-1 transition-transform group-hover/brand:scale-105">
               <Timer className="w-6 h-6" />
             </div>
             <div className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
