@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Plus, Tag as TagIcon } from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TagFormModal } from '../tags/TagFormModal';
 
@@ -40,8 +40,8 @@ export const TagSelector: React.FC = () => {
           </>
         ) : (
           <>
-            <TagIcon className="w-4 h-4 text-md-outline" />
-            <span className="text-md-on-surface-variant">Select Focus Tag</span>
+            <span className="w-3 h-3 rounded-full shrink-0 shadow-xs bg-[#8C8690]" />
+            <span className="font-semibold text-md-on-surface">Unspecified</span>
           </>
         )}
         <ChevronDown
@@ -55,10 +55,32 @@ export const TagSelector: React.FC = () => {
       {isOpen && (
         <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-64 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-1.5 shadow-elevation-2 z-30 animate-in fade-in zoom-in-95 duration-150">
           <div className="text-xs font-semibold text-md-on-surface-variant px-3 py-1.5 uppercase tracking-wider">
-            Active Tags
+            Focus Category
           </div>
 
           <div className="max-h-56 overflow-y-auto space-y-1 py-1">
+            {/* Unspecified (No Tag) option */}
+            <button
+              onClick={() => {
+                setActiveTagId(null);
+                setIsOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors text-left ${
+                activeTagId === null
+                  ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
+                  : 'hover:bg-md-surface-container text-md-on-surface'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <span className="w-3 h-3 rounded-full shrink-0 bg-[#8C8690]" />
+                <span className="truncate">Unspecified</span>
+              </div>
+              {activeTagId === null && (
+                <span className="text-xs text-md-primary font-bold">Active</span>
+              )}
+            </button>
+
+            {/* Active Tags */}
             {activeTags.map((tag) => {
               const isSelected = tag.id === activeTagId;
               return (
@@ -87,12 +109,6 @@ export const TagSelector: React.FC = () => {
                 </button>
               );
             })}
-
-            {activeTags.length === 0 && (
-              <div className="text-xs text-center text-md-outline py-2">
-                No active tags available
-              </div>
-            )}
           </div>
 
           <div className="border-t border-md-outline-variant/30 pt-1 mt-1">

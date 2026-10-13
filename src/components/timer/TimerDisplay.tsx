@@ -1,6 +1,7 @@
 import React from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
+import { useApp } from '../../context/AppContext';
 
 interface TimerDisplayProps {
   remainingSeconds: number;
@@ -15,6 +16,10 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   sessionType,
   status,
 }) => {
+  const { activeTagId, activeTags } = useApp();
+  const currentTag = activeTags.find((t) => t.id === activeTagId);
+  const tagColor = currentTag ? currentTag.color : '#6750A4';
+
   // SVG circular progress calculation
   const radius = 135;
   const stroke = 10;
@@ -27,8 +32,8 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   const sessionMeta = {
     WORK: {
       label: 'Focus',
-      color: '#6750A4', // M3 Primary Purple
-      bgRing: '#EADDFF',
+      color: tagColor,
+      bgRing: `${tagColor}26`, // 15% opacity pastel background track
     },
     SHORT_BREAK: {
       label: 'Short Break',
@@ -80,7 +85,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
         {/* Central Display Stack */}
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          {/* Status Badge (clean text: Focus) */}
+          {/* Status Badge */}
           <div
             className="px-3.5 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors tracking-wide"
             style={{

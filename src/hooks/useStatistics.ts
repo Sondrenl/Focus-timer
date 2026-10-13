@@ -69,7 +69,6 @@ export function useStatistics() {
     } else if (periodType === 'year') {
       next.setFullYear(next.getFullYear() - 1);
     } else if (periodType === 'custom') {
-      // Shift custom window by same duration
       const startDate = new Date(customRange.start);
       const endDate = new Date(customRange.end);
       const diffMs = endDate.getTime() - startDate.getTime();
@@ -196,8 +195,8 @@ export function useStatistics() {
 
     // If 'all' period is selected, make sure any archived tag that had sessions is explicitly present
     const tagDistribution: TagStat[] = Array.from(tagSecondsMap.entries()).map(([tagId, data]) => {
-      let name = 'Untagged';
-      let color = '#9E9E9E';
+      let name = 'Unspecified';
+      let color = '#8C8690';
       let isArchived = false;
 
       if (tagId !== 'untagged' && tagMap.has(tagId)) {
@@ -336,7 +335,7 @@ export function useStatistics() {
         };
       });
     } else if (periodType === 'all') {
-      // Group by last 6 months or all recorded years
+      // Group by months in history
       const monthMap = new Map<string, { seconds: number; count: number }>();
       filteredSessions.forEach((s) => {
         const d = new Date(s.completedAt);
@@ -362,7 +361,7 @@ export function useStatistics() {
       const eDate = new Date(customRange.end);
       const dayDiff = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / (24 * 60 * 60 * 1000)));
 
-      // If range is under 14 days, show each day; otherwise show weekly chunks
+      // If range is under 14 days, show each day; otherwise show chunks
       if (dayDiff <= 14) {
         activityBars = Array.from({ length: dayDiff + 1 }, (_, i) => {
           const d = new Date(sDate);
@@ -388,7 +387,6 @@ export function useStatistics() {
           };
         });
       } else {
-        // Sample in 6 chunks across range
         const step = Math.ceil(dayDiff / 6);
         activityBars = Array.from({ length: 6 }, (_, i) => {
           const chunkStart = new Date(sDate);
@@ -428,7 +426,6 @@ export function useStatistics() {
         hasData: false,
       };
     } else if (periodType === 'day') {
-      // Find peak hour
       const hourCounts = new Array(24).fill(0);
       filteredSessions.forEach((s) => {
         const h = new Date(s.completedAt).getHours();
@@ -449,7 +446,6 @@ export function useStatistics() {
         hasData: true,
       };
     } else {
-      // Find peak day of week
       const weekdaySecs = new Array(7).fill(0);
       const weekdayCounts = new Array(7).fill(0);
       filteredSessions.forEach((s) => {

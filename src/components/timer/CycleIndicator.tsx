@@ -18,18 +18,25 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
   return (
     <div className="flex items-center gap-2 py-2 select-none" aria-label="Cycle progress">
       {cycles.map((num) => {
+        // In long break, all previous focus sessions and short breaks are completely finished!
+        const isLongBreak = sessionType === 'LONG_BREAK';
+
         // Focus session state
-        const isFocusCurrent = num === currentCycle && sessionType === 'WORK';
-        const isFocusDone = num < currentCycle || (num === currentCycle && sessionType !== 'WORK');
+        const isFocusCurrent = !isLongBreak && num === currentCycle && sessionType === 'WORK';
+        const isFocusDone =
+          isLongBreak ||
+          num < currentCycle ||
+          (num === currentCycle && sessionType === 'SHORT_BREAK');
 
         // Short break between focus sessions
         const isShortBreak = num < maxCycles;
-        const isBreakCurrent = isShortBreak && num === currentCycle && sessionType === 'SHORT_BREAK';
-        const isBreakDone = isShortBreak && num < currentCycle;
+        const isBreakCurrent =
+          !isLongBreak && isShortBreak && num === currentCycle && sessionType === 'SHORT_BREAK';
+        const isBreakDone = isShortBreak && (isLongBreak || num < currentCycle);
 
         // Final long break after the last focus session
         const isFinalCycle = num === maxCycles;
-        const isLongBreakCurrent = isFinalCycle && sessionType === 'LONG_BREAK';
+        const isLongBreakCurrent = isFinalCycle && isLongBreak;
 
         return (
           <React.Fragment key={`cycle-step-${num}`}>

@@ -10,11 +10,11 @@ import {
   ChevronLeft,
   ChevronRight,
   CalendarDays,
-  RotateCcw,
   Sparkles,
 } from 'lucide-react';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { DateRangeModal } from './DateRangeModal';
+import { TagDistributionDonut } from './TagDistributionDonut';
 import { clsx } from 'clsx';
 
 export const StatisticsView: React.FC = () => {
@@ -131,12 +131,14 @@ export const StatisticsView: React.FC = () => {
                 <ChevronRight className="w-5 h-5" />
               </button>
 
+              {/* Clear 'Today' Jump Button */}
               <button
                 onClick={goToToday}
-                className="p-1.5 ml-1 rounded-full text-md-outline hover:text-md-primary hover:bg-md-surface-container transition-colors"
-                title="Reset to current period"
+                className="flex items-center gap-1.5 px-3 py-1.5 ml-1 rounded-xl text-xs font-semibold bg-md-surface-container hover:bg-md-surface-container-high text-md-primary transition-all shadow-xs active:scale-95"
+                title="Jump to today's date"
               >
-                <RotateCcw className="w-4 h-4" />
+                <Calendar className="w-3.5 h-3.5 text-md-primary" />
+                <span>Today</span>
               </button>
             </>
           ) : (
@@ -265,7 +267,7 @@ export const StatisticsView: React.FC = () => {
         )}
       </Card>
 
-      {/* 4. Per-Tag Distribution Breakdown */}
+      {/* 4. Per-Tag Distribution Donut Diagram */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
@@ -282,43 +284,10 @@ export const StatisticsView: React.FC = () => {
             No tagged sessions found for this time period.
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
-            {tagDistribution.map((item) => (
-              <div key={item.tagId} className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className="w-3 h-3 rounded-full shrink-0 shadow-xs"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="font-semibold text-md-on-surface truncate">
-                      {item.name}
-                    </span>
-                    {item.isArchived && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-md-surface-variant text-md-outline font-medium">
-                        Archived
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0 font-medium text-md-on-surface-variant">
-                    <span>{item.hours} hrs ({item.sessionCount} sessions)</span>
-                    <span className="w-10 text-right font-bold text-md-primary">{item.percentage}%</span>
-                  </div>
-                </div>
-
-                {/* Progress bar */}
-                <div className="w-full h-2 rounded-full bg-md-surface-container overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      width: `${item.percentage}%`,
-                      backgroundColor: item.color,
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
+          <TagDistributionDonut
+            distribution={tagDistribution}
+            totalFocusHours={totalFocusHours}
+          />
         )}
       </Card>
 

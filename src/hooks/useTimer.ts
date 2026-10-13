@@ -163,12 +163,11 @@ export function useTimer() {
 
       // Transition to break
       if (currentCycle >= settings.longBreakInterval) {
-        // Long break transition
+        // Long break transition - preserve currentCycle at max during the long break
         setSessionType('LONG_BREAK');
         const dur = settings.longBreakDurationMinutes * 60;
         setTotalSeconds(dur);
         setRemainingSeconds(dur);
-        setCurrentCycle(1); // Reset cycle
         if (settings.autoStartBreaks) {
           startTimer(dur);
         } else {
@@ -197,7 +196,7 @@ export function useTimer() {
       if (sessionType === 'SHORT_BREAK') {
         setCurrentCycle((prev) => prev + 1);
       } else {
-        // After long break
+        // After long break finishes, reset cycle to 1 for the next round
         setCurrentCycle(1);
       }
 
@@ -266,7 +265,7 @@ export function useTimer() {
         const dur = settings.longBreakDurationMinutes * 60;
         setTotalSeconds(dur);
         setRemainingSeconds(dur);
-        setCurrentCycle(1);
+        // Keep currentCycle at settings.longBreakInterval during long break
       } else {
         setSessionType('SHORT_BREAK');
         const dur = settings.shortBreakDurationMinutes * 60;
@@ -280,6 +279,7 @@ export function useTimer() {
       setRemainingSeconds(dur);
       setCurrentCycle((prev) => prev + 1);
     } else {
+      // Skipping from LONG_BREAK resets to cycle 1
       setSessionType('WORK');
       const dur = settings.workDurationMinutes * 60;
       setTotalSeconds(dur);

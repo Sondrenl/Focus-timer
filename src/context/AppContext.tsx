@@ -67,7 +67,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSessions(loadedSessions);
       setSettings(loadedSettings);
 
-      // Default active tag to first non-archived tag
+      // Default active tag to first non-archived tag if available
       const firstActive = loadedTags.find((t) => !t.isArchived);
       if (firstActive) {
         setActiveTagId(firstActive.id);
@@ -78,15 +78,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
 
-  // Make sure activeTagId is valid; if current tag is archived, fallback to first active
+  // If currently selected tag ID was deleted or archived, fallback to null (Unspecified) or first active
   useEffect(() => {
-    if (activeTagId && activeTags.length > 0) {
+    if (activeTagId !== null && activeTags.length > 0) {
       const exists = activeTags.some((t) => t.id === activeTagId);
       if (!exists) {
-        setActiveTagId(activeTags[0].id);
+        setActiveTagId(null);
       }
-    } else if (!activeTagId && activeTags.length > 0) {
-      setActiveTagId(activeTags[0].id);
     }
   }, [activeTags, activeTagId]);
 
@@ -126,8 +124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updated = await tagRepository.getAll();
       setTags(updated);
       if (activeTagId === id) {
-        const remaining = updated.filter((t) => !t.isArchived);
-        setActiveTagId(remaining.length > 0 ? remaining[0].id : null);
+        setActiveTagId(null);
       }
     }
     return success;
