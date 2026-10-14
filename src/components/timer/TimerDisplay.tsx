@@ -1,5 +1,4 @@
-import React, { useMemo } from 'react';
-import { clsx } from 'clsx';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
 import { useApp } from '../../context/AppContext';
@@ -9,6 +8,32 @@ interface TimerDisplayProps {
   totalSeconds: number;
   sessionType: SessionType;
   status: TimerStatus;
+}
+
+// Generate organic undulating ring path with very subtle wave amplitude (1.8px and 1.0px)
+function getWavyPath(center: number, radius: number, phase: number, samples = 140) {
+  let path = '';
+  let length = 0;
+  let prevX = 0;
+  let prevY = 0;
+
+  for (let i = 0; i <= samples; i++) {
+    const alpha = (i / samples) * 2 * Math.PI; // 0 to 2pi clockwise starting at 12 o'clock
+    // Integer wave harmonics (4 and 2) guarantee seamless 360-degree closure at all phases
+    const r = radius + 1.8 * Math.sin(4 * alpha - phase) + 1.0 * Math.cos(2 * alpha + phase * 0.7);
+    const x = center + r * Math.sin(alpha);
+    const y = center - r * Math.cos(alpha);
+
+    if (i === 0) {
+      path += `M ${x.toFixed(2)} ${y.toFixed(2)}`;
+    } else {
+      path += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+      length += Math.hypot(x - prevX, y - prevY);
+    }
+    prevX = x;
+    prevY = y;
+  }
+  return { path, length };
 }
 
 export const TimerDisplay: React.FC<TimerDisplayProps> = ({
@@ -25,16 +50,16 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
     WORK: {
       label: 'Focus',
       color: tagColor,
-      bgRing: `${tagColor}26`, // 15% opacity pastel background track
+      bgRing: `${tagColor}22`, // Subtle pastel background track
     },
     SHORT_BREAK: {
       label: 'Short Break',
-      color: '#00897B', // Teal Pastel
+      color: '#00897B',
       bgRing: '#B2DFDB',
     },
     LONG_BREAK: {
       label: 'Long Break',
-      color: '#7D5260', // Tertiary Mauve
+      color: '#7D5260',
       bgRing: '#FFD8E4',
     },
   }[sessionType];
@@ -42,74 +67,74 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   const stroke = 11;
   const viewBoxSize = 280;
   const center = viewBoxSize / 2;
-
-  // Generate a continuous, organic wavy ring path
-  // Co-prime wave harmonics (frequencies 5 and 3) ensure an asymmetric, natural, non-mechanical curve
-  const { pathData, pathLength } = useMemo(() => {
-    const baseRadius = 122;
-    const amp1 = 3.2; // Primary gentle wave
-    const amp2 = 1.6; // Secondary harmonic wave
-    const samples = 180;
-    const points: { x: number; y: number }[] = [];
-    let length = 0;
-
-    for (let i = 0; i <= samples; i++) {
-      const alpha = (i / samples) * 2 * Math.PI; // 0 to 2pi clockwise starting at 12 o'clock
-      const r = baseRadius + amp1 * Math.sin(5 * alpha) + amp2 * Math.cos(3 * alpha);
-      const x = center + r * Math.sin(alpha);
-      const y = center - r * Math.cos(alpha);
-      points.push({ x, y });
-
-      if (i > 0) {
-        const prev = points[i - 1];
-        length += Math.hypot(x - prev.x, y - prev.y);
-      }
-    }
-
-    const d = points
-      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
-      .join(' ');
-
-    return { pathData: d, pathLength: length };
-  }, [center]);
+  const baseRadius = 122;
 
   const fraction = totalSeconds > 0 ? remainingSeconds / totalSeconds : 0;
-  const strokeDashoffset = pathLength - fraction * pathLength;
+
+  // Refs for direct DOM animation (60fps smooth with zero React re-render overhead)
+  const trackPathRef = useRef<SVGPathElement>(null);
+  const progressPathRef = useRef<SVGPathElement>(null);
+  const phaseRef = useRef<number>(0);
+  const fractionRef = useRef<number>(fraction);
+  fractionRef.current = fraction;
+
+  // Initial resting path
+  const initial = useMemo(() => getWavyPath(center, baseRadius, 0), [center, baseRadius]);
+
+  // Animate the organic wave continuously while the timer is RUNNING
+  useEffect(() => {
+    if (status !== 'RUNNING') {
+      // When paused or idle, ensure the current fraction is rendered on the path
+      if (progressPathRef.current) {
+        const currentLength = initial.length;
+        progressPathRef.current.style.strokeDasharray = `${currentLength} ${currentLength}`;
+        progressPathRef.current.style.strokeDashoffset = `${currentLength - fraction * currentLength}`;
+      }
+      return;
+    }
+
+    let animationFrameId: number;
+    let lastTime = performance.now();
+    const waveSpeed = 0.85; // Radians per second (~7.4s per gentle cycle)
+
+    const animate = (currentTime: number) => {
+      const delta = (currentTime - lastTime) / 1000;
+      lastTime = currentTime;
+
+      phaseRef.current = (phaseRef.current + waveSpeed * delta) % (Math.PI * 20);
+
+      const { path, length } = getWavyPath(center, baseRadius, phaseRef.current);
+
+      if (trackPathRef.current) {
+        trackPathRef.current.setAttribute('d', path);
+      }
+      if (progressPathRef.current) {
+        progressPathRef.current.setAttribute('d', path);
+        progressPathRef.current.style.strokeDasharray = `${length} ${length}`;
+        progressPathRef.current.style.strokeDashoffset = `${length - fractionRef.current * length}`;
+      }
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [status, center, baseRadius, fraction, initial.length]);
 
   return (
     <div className="relative flex flex-col items-center justify-center my-4 select-none">
-      {/* Organic Wavy Progress Gauge */}
+      {/* Organic Living Progress Gauge (Clean background, undulating ring) */}
       <div className="relative w-72 h-72 md:w-80 md:h-80 flex items-center justify-center">
-        {/* Subtle breathing ambient aura when timer is running */}
-        <div
-          className={clsx(
-            'absolute w-48 h-48 rounded-full blur-3xl pointer-events-none transition-all duration-1000 ease-out',
-            status === 'RUNNING' ? 'opacity-25 scale-105 animate-pulse' : 'opacity-10 scale-95'
-          )}
-          style={{ backgroundColor: sessionMeta.color }}
-        />
-
         <svg
           height="100%"
           width="100%"
           viewBox={`0 0 ${viewBoxSize} ${viewBoxSize}`}
-          className="drop-shadow-sm overflow-visible"
+          className="drop-shadow-xs overflow-visible"
         >
-          <defs>
-            <filter id="organic-soft-glow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow
-                dx="0"
-                dy="2"
-                stdDeviation="3"
-                floodColor={sessionMeta.color}
-                floodOpacity="0.22"
-              />
-            </filter>
-          </defs>
-
           {/* Background Wavy Track Ring */}
           <path
-            d={pathData}
+            ref={trackPathRef}
+            d={initial.path}
             stroke={sessionMeta.bgRing}
             fill="transparent"
             strokeWidth={stroke}
@@ -117,28 +142,27 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
             strokeLinejoin="round"
           />
 
-          {/* Animated Foreground Wavy Progress Arc */}
+          {/* Animated Living Progress Arc */}
           <path
-            d={pathData}
+            ref={progressPathRef}
+            d={initial.path}
             stroke={sessionMeta.color}
             fill="transparent"
             strokeWidth={stroke}
-            strokeDasharray={`${pathLength} ${pathLength}`}
+            strokeDasharray={`${initial.length} ${initial.length}`}
             style={{
-              strokeDashoffset,
-              transition: status === 'RUNNING' ? 'stroke-dashoffset 0.4s linear' : 'stroke-dashoffset 0.3s ease',
+              strokeDashoffset: initial.length - fraction * initial.length,
             }}
             strokeLinecap="round"
             strokeLinejoin="round"
-            filter={status === 'RUNNING' ? 'url(#organic-soft-glow)' : undefined}
           />
         </svg>
 
         {/* Central Display Stack */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center z-10">
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center z-10 pointer-events-none">
           {/* Status Badge */}
           <div
-            className="px-3.5 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors tracking-wide"
+            className="px-3.5 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors tracking-wide pointer-events-auto"
             style={{
               backgroundColor: sessionMeta.bgRing,
               color: sessionMeta.color,
