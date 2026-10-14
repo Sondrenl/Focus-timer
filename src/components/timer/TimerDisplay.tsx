@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
 import { useApp } from '../../context/AppContext';
+import { useTimer } from '../../hooks/useTimer';
 
 interface TimerDisplayProps {
   remainingSeconds: number;
@@ -10,7 +11,7 @@ interface TimerDisplayProps {
   status: TimerStatus;
 }
 
-// Generate organic undulating ring path with very subtle wave amplitude (1.8px and 1.0px)
+// Generate organic undulating ring path with very subtle, gentle wave amplitude (1.4px and 0.7px)
 function getWavyPath(center: number, radius: number, phase: number, samples = 140) {
   let path = '';
   let length = 0;
@@ -20,7 +21,7 @@ function getWavyPath(center: number, radius: number, phase: number, samples = 14
   for (let i = 0; i <= samples; i++) {
     const alpha = (i / samples) * 2 * Math.PI; // 0 to 2pi clockwise starting at 12 o'clock
     // Integer wave harmonics (4 and 2) guarantee seamless 360-degree closure at all phases
-    const r = radius + 1.8 * Math.sin(4 * alpha - phase) + 1.0 * Math.cos(2 * alpha + phase * 0.7);
+    const r = radius + 1.4 * Math.sin(4 * alpha - phase) + 0.7 * Math.cos(2 * alpha + phase * 0.7);
     const x = center + r * Math.sin(alpha);
     const y = center - r * Math.cos(alpha);
 
@@ -43,6 +44,8 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   status,
 }) => {
   const { activeTagId, activeTags } = useApp();
+  const { targetEndTime } = useTimer();
+
   const currentTag = activeTags.find((t) => t.id === activeTagId);
   const tagColor = currentTag ? currentTag.color : '#6750A4';
 
@@ -69,33 +72,42 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   const center = viewBoxSize / 2;
   const baseRadius = 122;
 
-  const fraction = totalSeconds > 0 ? remainingSeconds / totalSeconds : 0;
-
   // Refs for direct DOM animation (60fps smooth with zero React re-render overhead)
   const trackPathRef = useRef<SVGPathElement>(null);
   const progressPathRef = useRef<SVGPathElement>(null);
   const phaseRef = useRef<number>(0);
-  const fractionRef = useRef<number>(fraction);
-  fractionRef.current = fraction;
+
+  const targetEndTimeRef = useRef<number | null>(targetEndTime);
+  targetEndTimeRef.current = targetEndTime;
+
+  const totalSecondsRef = useRef<number>(totalSeconds);
+  totalSecondsRef.current = totalSeconds;
+
+  const remainingSecondsRef = useRef<number>(remainingSeconds);
+  remainingSecondsRef.current = remainingSeconds;
 
   // Initial resting path
   const initial = useMemo(() => getWavyPath(center, baseRadius, 0), [center, baseRadius]);
 
-  // Animate the organic wave continuously while the timer is RUNNING
+  const initialFraction = totalSeconds > 0 ? remainingSeconds / totalSeconds : 0;
+
+  // Continuous millisecond-smooth progress and calm wave animation
   useEffect(() => {
     if (status !== 'RUNNING') {
-      // When paused or idle, ensure the current fraction is rendered on the path
+      // When paused or idle, render exact static fraction position
       if (progressPathRef.current) {
-        const currentLength = initial.length;
-        progressPathRef.current.style.strokeDasharray = `${currentLength} ${currentLength}`;
-        progressPathRef.current.style.strokeDashoffset = `${currentLength - fraction * currentLength}`;
+        const len = initial.length;
+        const frac = totalSecondsRef.current > 0 ? remainingSecondsRef.current / totalSecondsRef.current : 0;
+        progressPathRef.current.style.strokeDasharray = `${len} ${len}`;
+        progressPathRef.current.style.strokeDashoffset = `${len - frac * len}`;
       }
       return;
     }
 
     let animationFrameId: number;
     let lastTime = performance.now();
-    const waveSpeed = 0.85; // Radians per second (~7.4s per gentle cycle)
+    // Calibrated very slow, peaceful wave speed (~28s per full wave rotation)
+    const waveSpeed = 0.22;
 
     const animate = (currentTime: number) => {
       const delta = (currentTime - lastTime) / 1000;
@@ -105,13 +117,22 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
       const { path, length } = getWavyPath(center, baseRadius, phaseRef.current);
 
+      // Continuous sub-second progress calculation down to the millisecond
+      let currentFraction = 0;
+      if (targetEndTimeRef.current !== null && totalSecondsRef.current > 0) {
+        const remainingMs = Math.max(0, targetEndTimeRef.current - Date.now());
+        currentFraction = remainingMs / (totalSecondsRef.current * 1000);
+      } else if (totalSecondsRef.current > 0) {
+        currentFraction = remainingSecondsRef.current / totalSecondsRef.current;
+      }
+
       if (trackPathRef.current) {
         trackPathRef.current.setAttribute('d', path);
       }
       if (progressPathRef.current) {
         progressPathRef.current.setAttribute('d', path);
         progressPathRef.current.style.strokeDasharray = `${length} ${length}`;
-        progressPathRef.current.style.strokeDashoffset = `${length - fractionRef.current * length}`;
+        progressPathRef.current.style.strokeDashoffset = `${length - currentFraction * length}`;
       }
 
       animationFrameId = requestAnimationFrame(animate);
@@ -119,11 +140,11 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
     animationFrameId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [status, center, baseRadius, fraction, initial.length]);
+  }, [status, center, baseRadius, initial.length]);
 
   return (
     <div className="relative flex flex-col items-center justify-center my-4 select-none">
-      {/* Organic Living Progress Gauge (Clean background, undulating ring) */}
+      {/* Organic Living Progress Gauge (Clean background, smooth continuous countdown) */}
       <div className="relative w-72 h-72 md:w-80 md:h-80 flex items-center justify-center">
         <svg
           height="100%"
@@ -142,7 +163,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
             strokeLinejoin="round"
           />
 
-          {/* Animated Living Progress Arc */}
+          {/* Animated Living Progress Arc (Continuous, non-stepping countdown) */}
           <path
             ref={progressPathRef}
             d={initial.path}
@@ -151,7 +172,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
             strokeWidth={stroke}
             strokeDasharray={`${initial.length} ${initial.length}`}
             style={{
-              strokeDashoffset: initial.length - fraction * initial.length,
+              strokeDashoffset: initial.length - initialFraction * initial.length,
             }}
             strokeLinecap="round"
             strokeLinejoin="round"

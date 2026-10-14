@@ -39,6 +39,7 @@ export interface TimerContextValue {
   status: TimerStatus;
   remainingSeconds: number;
   totalSeconds: number;
+  targetEndTime: number | null;
   currentCycle: number;
   maxCycles: number;
   toggleStartPause: () => void;
@@ -129,6 +130,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       : null;
 
   const targetEndTimeRef = useRef<number | null>(initialTargetEndTime);
+  const [targetEndTime, setTargetEndTime] = useState<number | null>(() => initialTargetEndTime);
   const workerRef = useRef<Worker | null>(null);
 
   // Persist state to localStorage on updates
@@ -171,7 +173,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Start timer helper
   const startTimer = useCallback((overrideSec?: number) => {
     const secToRun = overrideSec !== undefined ? overrideSec : remainingSeconds;
-    targetEndTimeRef.current = Date.now() + secToRun * 1000;
+    const target = Date.now() + secToRun * 1000;
+    targetEndTimeRef.current = target;
+    setTargetEndTime(target);
     setStatus('RUNNING');
     if (workerRef.current) {
       workerRef.current.postMessage('START');
@@ -184,6 +188,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       workerRef.current.postMessage('STOP');
     }
     targetEndTimeRef.current = null;
+    setTargetEndTime(null);
 
     if (settings.soundEnabled) {
       if (sessionType === 'WORK') {
@@ -320,6 +325,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       workerRef.current.postMessage('STOP');
     }
     targetEndTimeRef.current = null;
+    setTargetEndTime(null);
     setStatus('PAUSED');
   };
 
@@ -336,6 +342,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       workerRef.current.postMessage('STOP');
     }
     targetEndTimeRef.current = null;
+    setTargetEndTime(null);
     const dur = getDurationForType(sessionType);
     setRemainingSeconds(dur);
     setTotalSeconds(dur);
@@ -347,6 +354,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       workerRef.current.postMessage('STOP');
     }
     targetEndTimeRef.current = null;
+    setTargetEndTime(null);
 
     if (sessionType === 'WORK') {
       if (currentCycle >= settings.longBreakInterval) {
@@ -381,6 +389,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       workerRef.current.postMessage('STOP');
     }
     targetEndTimeRef.current = null;
+    setTargetEndTime(null);
     setSessionType(type);
     const dur = getDurationForType(type);
     setTotalSeconds(dur);
@@ -406,6 +415,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         status,
         remainingSeconds,
         totalSeconds,
+        targetEndTime,
         currentCycle,
         maxCycles: settings.longBreakInterval,
         toggleStartPause,
