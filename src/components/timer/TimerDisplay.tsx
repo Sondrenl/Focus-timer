@@ -11,17 +11,20 @@ interface TimerDisplayProps {
   status: TimerStatus;
 }
 
-// Generate organic undulating ring path with very subtle, gentle wave amplitude (1.4px and 0.7px)
+// Generate organic undulating ring path with subtle wave and gentle radial breathing
 function getWavyPath(center: number, radius: number, phase: number, samples = 140) {
   let path = '';
   let length = 0;
   let prevX = 0;
   let prevY = 0;
 
+  // Gentle radial breathing factor (makes the living ring slowly expand/contract)
+  const breath = 0.7 * Math.sin(phase * 0.7);
+
   for (let i = 0; i <= samples; i++) {
     const alpha = (i / samples) * 2 * Math.PI; // 0 to 2pi clockwise starting at 12 o'clock
     // Integer wave harmonics (4 and 2) guarantee seamless 360-degree closure at all phases
-    const r = radius + 1.4 * Math.sin(4 * alpha - phase) + 0.7 * Math.cos(2 * alpha + phase * 0.7);
+    const r = radius + breath + 2.2 * Math.sin(4 * alpha - phase) + 1.1 * Math.cos(2 * alpha + phase * 0.7);
     const x = center + r * Math.sin(alpha);
     const y = center - r * Math.cos(alpha);
 
@@ -91,7 +94,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
   const initialFraction = totalSeconds > 0 ? remainingSeconds / totalSeconds : 0;
 
-  // Continuous millisecond-smooth progress and calm wave animation
+  // Continuous millisecond-smooth progress and animated organic wave
   useEffect(() => {
     if (status !== 'RUNNING') {
       // When paused or idle, render exact static fraction position
@@ -106,8 +109,8 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
 
     let animationFrameId: number;
     let lastTime = performance.now();
-    // Calibrated very slow, peaceful wave speed (~28s per full wave rotation)
-    const waveSpeed = 0.22;
+    // Balanced wave speed (~14 seconds per full gentle revolution)
+    const waveSpeed = 0.45;
 
     const animate = (currentTime: number) => {
       const delta = (currentTime - lastTime) / 1000;
