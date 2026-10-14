@@ -121,4 +121,13 @@ export class TagRepository implements ITagRepository {
     this.storage.setItem(TAGS_STORAGE_KEY, filtered);
     return true;
   }
+
+  async saveAll(tags: Tag[]): Promise<void> {
+    this.storage.setItem(TAGS_STORAGE_KEY, tags);
+  }
+
+  async resetToDefaults(): Promise<Tag[]> {
+    this.storage.setItem(TAGS_STORAGE_KEY, DEFAULT_TAGS);
+    return DEFAULT_TAGS;
+  }
 }

@@ -9,4 +9,7 @@ export interface ISettingsRepository {
 
   /** Saves updated user preferences */
   save(settings: UserSettings): Promise<void>;
+
+  /** Resets preferences back to default */
+  resetToDefaults(): Promise<UserSettings>;
 }

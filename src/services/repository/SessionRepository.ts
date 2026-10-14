@@ -50,6 +50,10 @@ export class SessionRepository implements ISessionRepository {
     return newSession;
   }
 
+  async saveAll(sessions: CompletedSession[]): Promise<void> {
+    this.storage.setItem(SESSIONS_STORAGE_KEY, sessions);
+  }
+
   async clear(): Promise<void> {
     this.storage.setItem(SESSIONS_STORAGE_KEY, []);
   }

@@ -10,6 +10,9 @@ export interface ISessionRepository {
   /** Appends a newly completed focus or break session */
   add(session: Omit<CompletedSession, 'id'>): Promise<CompletedSession>;
 
+  /** Saves an entire list of sessions (used for imports/merges) */
+  saveAll(sessions: CompletedSession[]): Promise<void>;
+
   /** Clears all historical records */
   clear(): Promise<void>;
 }

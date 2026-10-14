@@ -25,4 +25,9 @@ export class SettingsRepository implements ISettingsRepository {
   async save(settings: UserSettings): Promise<void> {
     this.storage.setItem(SETTINGS_STORAGE_KEY, settings);
   }
+
+  async resetToDefaults(): Promise<UserSettings> {
+    this.storage.setItem(SETTINGS_STORAGE_KEY, DEFAULT_SETTINGS);
+    return { ...DEFAULT_SETTINGS };
+  }
 }

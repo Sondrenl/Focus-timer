@@ -28,4 +28,10 @@ export interface ITagRepository {
 
   /** Permanently delete a tag */
   delete(id: string): Promise<boolean>;
+
+  /** Saves an entire list of tags (used for imports/merges) */
+  saveAll(tags: Tag[]): Promise<void>;
+
+  /** Resets tags back to default set */
+  resetToDefaults(): Promise<Tag[]>;
 }
