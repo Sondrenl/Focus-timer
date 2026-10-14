@@ -1,5 +1,6 @@
 {
   "name": "focus-timer",
+  "main": "./worker/index.ts",
   "compatibility_date": "2024-09-23",
   "assets": {
     "directory": "./dist",
@@ -12,5 +13,12 @@
       "persist": true
     }
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "focus-timer-db",
+      "database_id": "0598062d-507e-47a6-a147-8379486bf216"
+    }
+  ],
   "previews": {}
 }
