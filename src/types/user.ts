@@ -8,7 +8,7 @@ import { UserSettings } from './settings';
 export interface UserProfile {
   /** User display name */
   displayName: string;
-  /** Avatar emoji icon */
+  /** Avatar emoji icon, or empty string for default icon */
   avatarEmoji: string;
   /** Target focus duration per day in minutes (default 120 min / 2h) */
   dailyGoalMinutes: number;
@@ -18,7 +18,7 @@ export interface UserProfile {
 
 export const DEFAULT_PROFILE: UserProfile = {
   displayName: 'Focus Practitioner',
-  avatarEmoji: '🎯',
+  avatarEmoji: '', // Default standard icon until user sets one
   dailyGoalMinutes: 120,
   createdAt: new Date().toISOString(),
 };

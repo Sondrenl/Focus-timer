@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Trash2,
   Edit2,
+  User,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
@@ -179,7 +180,11 @@ export const ProfileView: React.FC = () => {
           {/* Avatar Icon */}
           <div className="relative group">
             <div className="w-20 h-20 rounded-3xl bg-md-primary/10 border-2 border-md-primary/30 flex items-center justify-center text-3xl shadow-xs select-none">
-              {profile.avatarEmoji || '🎯'}
+              {profile.avatarEmoji ? (
+                profile.avatarEmoji
+              ) : (
+                <User className="w-10 h-10 text-md-primary" />
+              )}
             </div>
             <button
               onClick={() => {
@@ -417,16 +422,39 @@ export const ProfileView: React.FC = () => {
         <form onSubmit={handleSaveProfile} className="flex flex-col gap-4 pt-1">
           {/* Avatar Emoji Selector */}
           <div>
-            <label className="text-xs font-semibold text-md-on-surface-variant px-1 block mb-2">
-              Choose Avatar
-            </label>
-            <div className="grid grid-cols-6 gap-2">
+            <div className="flex items-center justify-between mb-2 px-1">
+              <label className="text-xs font-semibold text-md-on-surface-variant block">
+                Choose Avatar
+              </label>
+              {editEmoji && (
+                <button
+                  type="button"
+                  onClick={() => setEditEmoji('')}
+                  className="text-xs text-md-primary hover:underline font-medium"
+                >
+                  Reset to default icon
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-7 gap-2">
+              <button
+                type="button"
+                onClick={() => setEditEmoji('')}
+                title="Default Icon"
+                className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${
+                  !editEmoji
+                    ? 'bg-md-primary/15 border-2 border-md-primary text-md-primary scale-105'
+                    : 'bg-md-surface-container-highest hover:bg-md-surface-variant text-md-outline'
+                }`}
+              >
+                <User className="w-5 h-5" />
+              </button>
               {AVATAR_EMOJI_OPTIONS.map((emoji) => (
                 <button
                   key={emoji}
                   type="button"
                   onClick={() => setEditEmoji(emoji)}
-                  className={`w-11 h-11 text-xl rounded-2xl flex items-center justify-center transition-all ${
+                  className={`w-10 h-10 text-lg rounded-2xl flex items-center justify-center transition-all ${
                     editEmoji === emoji
                       ? 'bg-md-primary/15 border-2 border-md-primary scale-105'
                       : 'bg-md-surface-container-highest hover:bg-md-surface-variant'

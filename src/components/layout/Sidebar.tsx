@@ -13,7 +13,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpenOnMobile = false,
   onCloseMobile,
 }) => {
-  const { currentView, setCurrentView } = useApp();
+  const { currentView, setCurrentView, profile } = useApp();
 
   // Navigation items without the duplicate timer item; the top title routes home
   const navItems = [
@@ -26,6 +26,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setCurrentView(view);
     if (onCloseMobile) onCloseMobile();
   };
+
+  const isProfileActive = currentView === 'profile';
 
   return (
     <>
@@ -106,26 +108,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Bottom: User Profile Link */}
-        <div className="border-t border-md-outline-variant/20 pt-4">
+        <div className="border-t border-md-outline-variant/20 pt-3">
           <button
             onClick={() => handleNav('profile')}
-            title="Profile & Sync"
+            title="Profile & Data"
             className={clsx(
-              'flex items-center gap-3.5 p-1.5 rounded-2xl transition-all duration-200 text-left w-full overflow-hidden',
-              currentView === 'profile'
-                ? 'bg-md-secondary-container text-md-on-secondary-container font-semibold'
-                : 'hover:bg-md-surface-container text-md-on-surface-variant'
+              'flex items-center gap-3.5 p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left w-full relative overflow-hidden',
+              isProfileActive
+                ? 'bg-md-primary-container text-md-on-primary-container font-semibold shadow-xs'
+                : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
             )}
           >
-            <div className="w-10 h-10 rounded-full bg-md-primary/10 border border-md-primary/20 flex items-center justify-center text-md-primary shrink-0">
-              <User className="w-5 h-5" />
+            <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+              {profile?.avatarEmoji ? (
+                <span className="text-xl leading-none select-none">{profile.avatarEmoji}</span>
+              ) : (
+                <User
+                  className={clsx(
+                    'w-5 h-5 transition-transform duration-200',
+                    isProfileActive ? 'text-md-primary scale-110' : 'text-md-outline'
+                  )}
+                />
+              )}
             </div>
             <div className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
               <span className="text-sm font-semibold text-md-on-surface truncate block">
-                Focus Practitioner
+                {profile?.displayName || 'Focus Practitioner'}
               </span>
               <span className="text-[11px] text-md-outline truncate block">
-                Profile & Sync
+                Profile & Data
               </span>
             </div>
           </button>
