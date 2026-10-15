@@ -44,7 +44,7 @@ export interface ProductiveMetric {
 }
 
 export function useStatistics() {
-  const { sessions, tags } = useApp();
+  const { sessions, tags, coffeeCups } = useApp();
 
   const [periodType, setPeriodType] = useState<TimePeriodType>('week');
   const [referenceDate, setReferenceDate] = useState<Date>(() => new Date());
@@ -517,16 +517,25 @@ export function useStatistics() {
       };
     }
 
+    // Filter coffee cups within period
+    const startKey = toDateKey(startDate);
+    const endKey = toDateKey(endDate);
+    const filteredCoffee = coffeeCups.filter((cup) => {
+      return cup.date >= startKey && cup.date <= endKey;
+    });
+    const totalCoffeeCups = filteredCoffee.length;
+
     return {
       periodLabel,
       totalFocusSeconds,
       totalFocusHours,
       totalWorkCount,
+      totalCoffeeCups,
       tagDistribution,
       activityBars,
       productiveMetric,
     };
-  }, [sessions, tags, periodType, referenceDate, customRange]);
+  }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange]);
 
   return {
     periodType,
@@ -540,6 +549,7 @@ export function useStatistics() {
     totalFocusSeconds: stats.totalFocusSeconds,
     totalFocusHours: stats.totalFocusHours,
     totalWorkCount: stats.totalWorkCount,
+    totalCoffeeCups: stats.totalCoffeeCups,
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,

@@ -4,6 +4,7 @@ import { TimerProvider } from './context/TimerContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { TimerWorkspace } from './components/timer/TimerWorkspace';
+import { CoffeeWorkspace } from './components/coffee/CoffeeWorkspace';
 import { TagManager } from './components/tags/TagManager';
 import { StatisticsView } from './components/stats/StatisticsView';
 import { SettingsView } from './components/settings/SettingsView';
@@ -31,6 +32,7 @@ const MainContent: React.FC = () => {
             <TimerWorkspace isActiveView={currentView === 'timer'} />
           </div>
 
+          {currentView === 'coffee' && <CoffeeWorkspace />}
           {currentView === 'tags' && <TagManager />}
           {currentView === 'stats' && <StatisticsView />}
           {currentView === 'settings' && <SettingsView />}

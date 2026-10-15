@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tag, BarChart3, Settings, User } from 'lucide-react';
+import { Coffee, Tag, BarChart3, Settings, User } from 'lucide-react';
 import { EggTimerIcon } from '../ui/EggTimerIcon';
 import { useApp } from '../../context/AppContext';
 import { clsx } from 'clsx';
@@ -17,12 +17,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Navigation items without the duplicate timer item; the top title routes home
   const navItems = [
+    { id: 'coffee' as const, label: 'Coffee', icon: Coffee },
     { id: 'tags' as const, label: 'Tags', icon: Tag },
     { id: 'stats' as const, label: 'Statistics', icon: BarChart3 },
     { id: 'settings' as const, label: 'Settings', icon: Settings },
   ];
 
-  const handleNav = (view: 'timer' | 'tags' | 'stats' | 'settings' | 'profile') => {
+  const handleNav = (view: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile') => {
     setCurrentView(view);
     if (onCloseMobile) onCloseMobile();
   };
@@ -51,14 +52,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           'lg:w-[72px] lg:hover:w-64'
         )}
       >
-        {/* Top: Pomodor Brand / Home Navigation with Egg Timer Icon */}
+        {/* Top: Pomodor Brand / Home Navigation with Tomato Icon */}
         <div className="flex flex-col gap-6">
           <button
             onClick={() => handleNav('timer')}
             className="flex items-center gap-3.5 p-1 rounded-2xl transition-colors text-left group/brand hover:bg-md-surface-container"
             title="Pomodor Home"
           >
-            {/* Crisp Egg Timer Brand Icon without offset background halos */}
+            {/* Crisp Tomato Brand Icon */}
             <div className="w-11 h-11 shrink-0 rounded-2xl bg-md-primary flex items-center justify-center text-white shadow-xs transition-transform group-hover/brand:scale-105">
               <EggTimerIcon className="w-6 h-6" />
             </div>

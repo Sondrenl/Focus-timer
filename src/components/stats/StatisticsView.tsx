@@ -4,6 +4,7 @@ import { Card } from '../ui/Card';
 import {
   Clock,
   CheckCircle2,
+  Coffee,
   Calendar,
   Tag as TagIcon,
   Award,
@@ -29,6 +30,7 @@ export const StatisticsView: React.FC = () => {
     goToToday,
     totalFocusSeconds,
     totalWorkCount,
+    totalCoffeeCups,
     tagDistribution,
     activityBars,
     productiveMetric,
@@ -156,7 +158,7 @@ export const StatisticsView: React.FC = () => {
       </div>
 
       {/* 2. Top Summary Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Focus Duration */}
         <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
           <div className="w-12 h-12 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center shrink-0">
@@ -183,6 +185,21 @@ export const StatisticsView: React.FC = () => {
             </div>
             <div className="text-xs font-medium text-md-on-surface-variant">
               Completed Pomodoros
+            </div>
+          </div>
+        </Card>
+
+        {/* Total Coffee Cups */}
+        <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
+          <div className="w-12 h-12 rounded-2xl bg-amber-700/10 text-amber-700 flex items-center justify-center shrink-0">
+            <Coffee className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="text-2xl font-extrabold text-md-on-surface tracking-tight">
+              {totalCoffeeCups}
+            </div>
+            <div className="text-xs font-medium text-md-on-surface-variant">
+              Coffee {totalCoffeeCups === 1 ? 'Cup' : 'Cups'}
             </div>
           </div>
         </Card>

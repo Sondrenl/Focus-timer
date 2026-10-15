@@ -1,6 +1,7 @@
 import { Tag } from './tag';
 import { CompletedSession } from './session';
 import { UserSettings } from './settings';
+import { CoffeeCup } from './coffee';
 
 /**
  * User Profile data model for focus tracking, goals, and optional cloud sync
@@ -56,4 +57,5 @@ export interface BackupData {
   settings?: Partial<UserSettings>;
   tags: Tag[];
   sessions: CompletedSession[];
+  coffeeCups?: CoffeeCup[];
 }

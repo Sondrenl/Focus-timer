@@ -14,6 +14,7 @@ import { UserProfile, AuthState } from '../../types/user';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
 import { UserSettings } from '../../types/settings';
+import { CoffeeCup } from '../../types/coffee';
 
 const TOKEN_KEY = 'focus_timer_auth_token';
 const USER_KEY = 'focus_timer_cloud_user';
@@ -26,6 +27,7 @@ export interface CloudDataResponse {
   deletedTagIds?: string[];
   sessions: CompletedSession[];
   settings: UserSettings | null;
+  coffeeCups?: CoffeeCup[];
   syncedAt: string;
 }
 
@@ -204,6 +206,7 @@ export class AuthService {
     deletedTagIds?: string[];
     clearSessions?: boolean;
     sessions?: CompletedSession[];
+    coffeeCups?: CoffeeCup[];
     settings?: UserSettings;
   }): Promise<{ success: boolean; syncedAt: string }> {
     const token = this.getStoredToken();

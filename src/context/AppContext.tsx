@@ -3,6 +3,8 @@ import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { UserProfile, DEFAULT_PROFILE, BackupData, AuthState } from '../types/user';
+import { CoffeeCup } from '../types/coffee';
+import { CoffeeRepository } from '../services/repository/CoffeeRepository';
 import { LocalStorageService } from '../services/storage/LocalStorageService';
 import { TagRepository } from '../services/repository/TagRepository';
 import { SessionRepository } from '../services/repository/SessionRepository';
@@ -57,9 +59,14 @@ interface AppContextValue {
   sound: SoundService;
   notifications: NotificationService;
 
+  // Coffee Cups
+  coffeeCups: CoffeeCup[];
+  addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
+  removeCoffeeCup: (date?: string, tagId?: string | null) => Promise<boolean>;
+
   // View Navigation
-  currentView: 'timer' | 'tags' | 'stats' | 'settings' | 'profile';
-  setCurrentView: (view: 'timer' | 'tags' | 'stats' | 'settings' | 'profile') => void;
+  currentView: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile';
+  setCurrentView: (view: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile') => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -70,6 +77,7 @@ const tagRepository = new TagRepository(storageService);
 const sessionRepository = new SessionRepository(storageService);
 const settingsRepository = new SettingsRepository(storageService);
 const profileRepository = new ProfileRepository(storageService);
+const coffeeRepository = new CoffeeRepository(storageService);
 const authService = AuthService.getInstance();
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -78,7 +86,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState<'timer' | 'tags' | 'stats' | 'settings' | 'profile'>('timer');
+  const [coffeeCups, setCoffeeCups] = useState<CoffeeCup[]>([]);
+  const [currentView, setCurrentView] = useState<'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile'>('timer');
   const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState());
 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
@@ -106,6 +115,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tags: currentTags,
         deletedTagIds: Array.from(deletedTagIds),
         sessions: currentSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')),
+        coffeeCups: await coffeeRepository.getAll(),
         settings: currentSettings,
       });
 
@@ -156,6 +166,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const mergedSettings = { ...currentSettings, ...cloudData.settings };
           await settingsRepository.save(mergedSettings);
           setSettings(mergedSettings);
+        }
+
+        // Merge cloud coffee cups
+        if (cloudData.coffeeCups) {
+          const localCoffee = await coffeeRepository.getAll();
+          const cupMap = new Map<string, CoffeeCup>();
+          localCoffee.forEach((c) => cupMap.set(c.id, c));
+          cloudData.coffeeCups.forEach((c) => {
+            const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
+            cupMap.set(c.id, { ...c, tagId: effectiveTagId });
+          });
+          const finalCoffee = Array.from(cupMap.values());
+          await coffeeRepository.saveAll(finalCoffee);
+          setCoffeeCups(finalCoffee);
         }
 
         // Merge cloud profile
@@ -386,6 +410,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return success;
   };
 
+  // Coffee Operations
+  const addCoffeeCup = async (tagId: string | null, dateStr?: string): Promise<CoffeeCup> => {
+    const today = dateStr || new Date().toISOString().slice(0, 10);
+    const created = await coffeeRepository.addCup(today, tagId);
+    setCoffeeCups((prev) => [...prev, created]);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
+    return created;
+  };
+
+  const removeCoffeeCup = async (dateStr?: string, tagId?: string | null): Promise<boolean> => {
+    const today = dateStr || new Date().toISOString().slice(0, 10);
+    const success = await coffeeRepository.removeCup(today, tagId);
+    if (success) {
+      const updated = await coffeeRepository.getAll();
+      setCoffeeCups(updated);
+      if (auth.isAuthenticated) {
+        syncWithCloud();
+      }
+    }
+    return success;
+  };
+
   // Session Operations
   const recordSession = async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
     const created = await sessionRepository.add(sessionData);
@@ -446,6 +494,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       settings,
       tags,
       sessions: cleanSessions,
+      coffeeCups,
     };
   };
 
@@ -602,6 +651,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sessions,
         recordSession,
         clearSessions,
+        coffeeCups,
+        addCoffeeCup,
+        removeCoffeeCup,
         settings,
         updateSettings,
         exportBackup,

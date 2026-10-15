@@ -48,6 +48,14 @@ const SCHEMA_STATEMENTS = [
     completed_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at)`,
+  `CREATE TABLE IF NOT EXISTS coffee_cups (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT,
+    date TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_date ON coffee_cups(user_id, date)`,
   `CREATE TABLE IF NOT EXISTS user_settings (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     work_duration_minutes INTEGER DEFAULT 25,
@@ -398,7 +406,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
       }
 
-      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows] = await Promise.all([
+      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows] = await Promise.all([
+        env.DB.prepare("SELECT * FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC").bind(currentUserId).all<{
+          id: string;
+          tag_id: string | null;
+          date: string;
+          created_at: string;
+        }>(),
         env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
           id: string;
           email: string;
@@ -481,6 +495,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         : null;
 
       const deletedTagIds = (deletedTagRows.results || []).map((r) => r.tag_id);
+      const coffeeCups = (coffeeRows.results || []).map((c) => ({
+        id: c.id,
+        tagId: c.tag_id,
+        date: c.date,
+        createdAt: c.created_at,
+      }));
 
       return new Response(
         JSON.stringify({
@@ -489,6 +509,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           sessions,
           settings,
           deletedTagIds,
+          coffeeCups,
           syncedAt: new Date().toISOString(),
         }),
         { headers: corsHeaders }
@@ -524,6 +545,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           durationSeconds: number;
           completedAt: string;
         }>;
+        coffeeCups?: Array<{
+          id: string;
+          tagId: string | null;
+          date: string;
+          createdAt?: string;
+        }>;
         settings?: {
           workDurationMinutes?: number;
           shortBreakDurationMinutes?: number;
@@ -545,6 +572,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           env.DB.prepare('DELETE FROM tags WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ?').bind(currentUserId),
         ]);
       } else if (body.clearSessions) {
         await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId).run();
@@ -635,6 +663,28 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         }
       }
 
+      // 4.5 Upsert Coffee Cups
+      if (Array.isArray(body.coffeeCups) && body.coffeeCups.length > 0) {
+        for (const cup of body.coffeeCups) {
+          const effectiveTagId = cup.tagId && deletedSet.has(cup.tagId) ? null : cup.tagId;
+          statements.push(
+            env.DB.prepare(
+              `INSERT INTO coffee_cups (id, user_id, tag_id, date, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 tag_id = excluded.tag_id,
+                 date = excluded.date`
+            ).bind(
+              cup.id,
+              currentUserId,
+              effectiveTagId,
+              cup.date,
+              cup.createdAt || new Date().toISOString()
+            )
+          );
+        }
+      }
+
       // 5. Upsert Settings
       if (body.settings) {
         const s = body.settings;
@@ -681,6 +731,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return new Response(
         JSON.stringify({
           success: true,
+          coffeeCups,
           syncedAt: new Date().toISOString(),
           processedRecords: {
             tags: body.tags?.length || 0,
