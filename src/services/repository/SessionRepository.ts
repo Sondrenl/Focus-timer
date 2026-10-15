@@ -40,11 +40,14 @@ export class SessionRepository implements ISessionRepository {
     return clean;
   }
 
-  async add(session: Omit<CompletedSession, 'id'>): Promise<CompletedSession> {
+  async add(session: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> {
     const all = await this.getAll();
+    const sessionId = session.id || `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const existing = all.find((s) => s.id === sessionId);
+    if (existing) return existing;
     const newSession: CompletedSession = {
       ...session,
-      id: `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: sessionId,
     };
     all.push(newSession);
     this.storage.setItem(SESSIONS_STORAGE_KEY, all);

@@ -41,7 +41,7 @@ interface AppContextValue {
 
   // Sessions
   sessions: CompletedSession[];
-  recordSession: (session: Omit<CompletedSession, 'id'>) => Promise<CompletedSession>;
+  recordSession: (session: Omit<CompletedSession, 'id'> & { id?: string }) => Promise<CompletedSession>;
   clearSessions: () => Promise<void>;
 
   // Settings
@@ -387,9 +387,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Session Operations
-  const recordSession = async (sessionData: Omit<CompletedSession, 'id'>): Promise<CompletedSession> => {
+  const recordSession = async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
     const created = await sessionRepository.add(sessionData);
-    setSessions((prev) => [...prev, created]);
+    setSessions((prev) => {
+      if (prev.some((s) => s.id === created.id)) return prev;
+      return [...prev.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')), created];
+    });
     if (auth.isAuthenticated) {
       syncWithCloud();
     }

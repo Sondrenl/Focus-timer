@@ -1,3 +1,15 @@
+export interface RemoteTimerState {
+  sessionType: "WORK" | "SHORT_BREAK" | "LONG_BREAK";
+  status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
+  remainingSeconds: number;
+  totalSeconds: number;
+  targetEndTime: number | null;
+  currentCycle: number;
+  activeTagId: string | null;
+  timerRunId: string | null;
+  updatedAtMs: number;
+}
+
 import { UserProfile, AuthState } from '../../types/user';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
@@ -216,5 +228,39 @@ export class AuthService {
       localStorage.setItem(LAST_SYNC_KEY, data.syncedAt);
     }
     return data;
+  }
+
+  public async fetchRemoteTimer(): Promise<RemoteTimerState | null> {
+    const token = this.getStoredToken();
+    if (!token) return null;
+
+    try {
+      const res = await fetch("/api/timer", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { timer: RemoteTimerState | null };
+      return data.timer;
+    } catch {
+      return null;
+    }
+  }
+
+  public async pushRemoteTimer(timer: RemoteTimerState): Promise<void> {
+    const token = this.getStoredToken();
+    if (!token) return;
+
+    try {
+      await fetch("/api/timer", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(timer),
+      });
+    } catch (e) {
+      console.warn("Failed to push remote timer", e);
+    }
   }
 }

@@ -8,7 +8,7 @@ export interface ISessionRepository {
   getAll(): Promise<CompletedSession[]>;
 
   /** Appends a newly completed focus or break session */
-  add(session: Omit<CompletedSession, 'id'>): Promise<CompletedSession>;
+  add(session: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession>;
 
   /** Saves an entire list of sessions (used for imports/merges) */
   saveAll(sessions: CompletedSession[]): Promise<void>;

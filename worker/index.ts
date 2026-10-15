@@ -117,6 +117,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         } else {
           await ensureSchema(env.DB);
           await env.DB.prepare('SELECT count(*) FROM deleted_tags').first();
+          await env.DB.prepare('SELECT count(*) FROM active_timers').first();
           tablesReady = true;
         }
       } catch (err) {
@@ -300,6 +301,97 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return new Response(JSON.stringify({ success: true, deletedTagId: tagId }), { headers: corsHeaders });
     }
 
+    // GET /api/timer — Fetch current active timer state
+    if (url.pathname === "/api/timer" && request.method === "GET") {
+      if (!currentUserId) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+      }
+
+      const timerRow = await env.DB.prepare(
+        "SELECT * FROM active_timers WHERE user_id = ?"
+      ).bind(currentUserId).first<{
+        session_type: string;
+        status: string;
+        remaining_seconds: number;
+        total_seconds: number;
+        target_end_time: number | null;
+        current_cycle: number;
+        tag_id: string | null;
+        timer_run_id: string | null;
+        updated_at_ms: number;
+      }>();
+
+      const timer = timerRow
+        ? {
+            sessionType: timerRow.session_type,
+            status: timerRow.status,
+            remainingSeconds: timerRow.remaining_seconds,
+            totalSeconds: timerRow.total_seconds,
+            targetEndTime: timerRow.target_end_time,
+            currentCycle: timerRow.current_cycle,
+            activeTagId: timerRow.tag_id,
+            timerRunId: timerRow.timer_run_id,
+            updatedAtMs: timerRow.updated_at_ms,
+          }
+        : null;
+
+      return new Response(JSON.stringify({ timer }), { headers: corsHeaders });
+    }
+
+    // POST /api/timer — Update active timer state
+    if (url.pathname === "/api/timer" && request.method === "POST") {
+      if (!currentUserId) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        sessionType?: string;
+        status?: string;
+        remainingSeconds?: number;
+        totalSeconds?: number;
+        targetEndTime?: number | null;
+        currentCycle?: number;
+        activeTagId?: string | null;
+        timerRunId?: string | null;
+        updatedAtMs?: number;
+      };
+
+      if (!body.sessionType || !body.status || typeof body.updatedAtMs !== "number") {
+        return new Response(JSON.stringify({ error: "Invalid timer payload" }), { status: 400, headers: corsHeaders });
+      }
+
+      await env.DB.prepare(
+        `INSERT INTO active_timers (
+           user_id, session_type, status, remaining_seconds, total_seconds,
+           target_end_time, current_cycle, tag_id, timer_run_id, updated_at_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           session_type = excluded.session_type,
+           status = excluded.status,
+           remaining_seconds = excluded.remaining_seconds,
+           total_seconds = excluded.total_seconds,
+           target_end_time = excluded.target_end_time,
+           current_cycle = excluded.current_cycle,
+           tag_id = excluded.tag_id,
+           timer_run_id = excluded.timer_run_id,
+           updated_at_ms = excluded.updated_at_ms
+         WHERE excluded.updated_at_ms >= active_timers.updated_at_ms`
+      ).bind(
+        currentUserId,
+        body.sessionType,
+        body.status,
+        body.remainingSeconds ?? 1500,
+        body.totalSeconds ?? 1500,
+        body.targetEndTime ?? null,
+        body.currentCycle ?? 1,
+        body.activeTagId ?? null,
+        body.timerRunId ?? null,
+        body.updatedAtMs
+      ).run();
+
+      return new Response(JSON.stringify({ success: true, updatedAtMs: body.updatedAtMs }), { headers: corsHeaders });
+    }
+
     // GET /api/sync — Fetch all cloud user data
     if (url.pathname === '/api/sync' && request.method === 'GET') {
       if (!currentUserId) {
@@ -452,6 +544,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM tags WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?').bind(currentUserId),
         ]);
       } else if (body.clearSessions) {
         await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId).run();
