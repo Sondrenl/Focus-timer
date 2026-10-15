@@ -166,7 +166,7 @@ export const ProfileView: React.FC = () => {
         }
 
         setPendingBackup({
-          version: parsed.version || '2.0.0',
+          version: parsed.version || '2.0.1',
           exportedAt: parsed.exportedAt || new Date().toISOString(),
           profile: parsed.profile,
           settings: parsed.settings,

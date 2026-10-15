@@ -1,15 +1,12 @@
 import { ISessionRepository } from './ISessionRepository';
 import { CompletedSession } from '../../types/session';
 import { IStorageService } from '../storage/IStorageService';
-import { isProduction } from '../../utils/environment';
-import { generateSampleSessions } from '../../utils/sampleData';
 
 const SESSIONS_STORAGE_KEY = 'sessions_v1';
 
 /**
  * Implementation of ISessionRepository backed by IStorageService.
- * - Production: Starts 100% clean with 0 mock sessions.
- * - Preview / Dev: Auto-seeds realistic sample sessions if empty for rich testing.
+ * Clean, production-ready storage that never auto-seeds sample or mock data.
  */
 export class SessionRepository implements ISessionRepository {
   private storage: IStorageService;
@@ -20,39 +17,27 @@ export class SessionRepository implements ISessionRepository {
   }
 
   private initSessions(): void {
-    if (isProduction()) {
-      // Production: Always purge mock or sample sessions
-      const existing = this.storage.getItem<CompletedSession[] | null>(SESSIONS_STORAGE_KEY, null);
-      if (existing && Array.isArray(existing)) {
-        const clean = existing.filter(
-          (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
-        );
-        if (clean.length !== existing.length) {
-          this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
-        }
-      }
-    } else {
-      // Preview / Development: Auto-seed sample sessions if empty or first launch
-      const existing = this.storage.getItem<CompletedSession[] | null>(SESSIONS_STORAGE_KEY, null);
-      if (!existing || existing.length === 0) {
-        const sampleSessions = generateSampleSessions();
-        this.storage.setItem(SESSIONS_STORAGE_KEY, sampleSessions);
+    // Purge any legacy sample or seed sessions from local storage
+    const existing = this.storage.getItem<CompletedSession[] | null>(SESSIONS_STORAGE_KEY, null);
+    if (existing && Array.isArray(existing)) {
+      const clean = existing.filter(
+        (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
+      );
+      if (clean.length !== existing.length) {
+        this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
       }
     }
   }
 
   async getAll(): Promise<CompletedSession[]> {
     const sessions = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
-    if (isProduction()) {
-      const clean = sessions.filter(
-        (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
-      );
-      if (clean.length !== sessions.length) {
-        this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
-      }
-      return clean;
+    const clean = sessions.filter(
+      (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
+    );
+    if (clean.length !== sessions.length) {
+      this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
     }
-    return sessions;
+    return clean;
   }
 
   async add(session: Omit<CompletedSession, 'id'>): Promise<CompletedSession> {
@@ -67,17 +52,14 @@ export class SessionRepository implements ISessionRepository {
   }
 
   async saveAll(sessions: CompletedSession[]): Promise<void> {
-    const toSave = isProduction()
-      ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
-      : sessions;
-    this.storage.setItem(SESSIONS_STORAGE_KEY, toSave);
+    const clean = sessions.filter(
+      (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
+    );
+    this.storage.setItem(SESSIONS_STORAGE_KEY, clean);
   }
 
   async loadSampleData(): Promise<CompletedSession[]> {
-    if (isProduction()) return [];
-    const sample = generateSampleSessions();
-    this.storage.setItem(SESSIONS_STORAGE_KEY, sample);
-    return sample;
+    return [];
   }
 
   async clear(): Promise<void> {

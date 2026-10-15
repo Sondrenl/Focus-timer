@@ -437,7 +437,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
       : sessions;
     return {
-      version: '2.0.0',
+      version: '2.0.1',
       exportedAt: new Date().toISOString(),
       profile,
       settings,
