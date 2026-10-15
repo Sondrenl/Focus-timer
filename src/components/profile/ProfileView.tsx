@@ -1,16 +1,20 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Download,
   Upload,
   Check,
   Sparkles,
   Target,
-  Clock,
   AlertTriangle,
   RotateCcw,
   Trash2,
   Edit2,
   User,
+  Cloud,
+  RefreshCw,
+  LogOut,
+  CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
@@ -21,10 +25,18 @@ import { AVATAR_EMOJI_OPTIONS, BackupData } from '../../types/user';
 import { toDateKey } from '../../utils/dates';
 import { formatDurationHoursMins } from '../../utils/formatters';
 
+const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
+
 export const ProfileView: React.FC = () => {
   const {
     isDemoEnvironment,
     reloadSampleData,
+    auth,
+    loginWithGoogle,
+    logout,
+    syncWithCloud,
     profile,
     updateProfile,
     sessions,
@@ -52,6 +64,49 @@ export const ProfileView: React.FC = () => {
 
   // Danger Zone confirmation modal state
   const [resetModalScope, setResetModalScope] = useState<'sessions-only' | 'factory-reset' | null>(null);
+
+  // Google Sign-In button container ref
+  const googleButtonContainerRef = useRef<HTMLDivElement>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // Render Google Identity Services button
+  useEffect(() => {
+    if (auth.isAuthenticated) return;
+
+    const renderGoogleBtn = () => {
+      if (window.google?.accounts?.id && googleButtonContainerRef.current) {
+        try {
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: async (response) => {
+              if (response.credential) {
+                try {
+                  setAuthError(null);
+                  await loginWithGoogle(response.credential);
+                } catch (err) {
+                  setAuthError((err as Error).message || 'Google authentication failed');
+                }
+              }
+            },
+          });
+
+          window.google.accounts.id.renderButton(googleButtonContainerRef.current, {
+            theme: 'outline',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'pill',
+            width: 260,
+          });
+        } catch (e) {
+          console.warn('Google Identity initialization error', e);
+        }
+      }
+    };
+
+    renderGoogleBtn();
+    const timer = setTimeout(renderGoogleBtn, 800);
+    return () => clearTimeout(timer);
+  }, [auth.isAuthenticated, loginWithGoogle]);
 
   // Calculate today's focus minutes
   const todayKey = toDateKey(new Date());
@@ -101,11 +156,10 @@ export const ProfileView: React.FC = () => {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target?.result as string);
-        if (!parsed || (typeof parsed !== 'object')) {
+        if (!parsed || typeof parsed !== 'object') {
           throw new Error('Invalid JSON format');
         }
 
-        // Validate basic structure
         const hasTags = Array.isArray(parsed.tags);
         const hasSessions = Array.isArray(parsed.sessions);
 
@@ -125,7 +179,6 @@ export const ProfileView: React.FC = () => {
         const msg = err instanceof Error ? err.message : 'Failed to parse JSON backup file';
         setImportError(msg);
       } finally {
-        // Reset file input so user can choose the same file again if desired
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
@@ -172,7 +225,7 @@ export const ProfileView: React.FC = () => {
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">User Profile & Data</h2>
         <p className="text-xs text-md-on-surface-variant mt-0.5">
-          Personal identity, daily focus goals, and local data backup management.
+          Personal identity, daily focus goals, and cross-device cloud synchronization.
         </p>
       </div>
 
@@ -206,9 +259,11 @@ export const ProfileView: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 text-center sm:text-left">
           {/* Avatar Icon */}
           <div className="relative group">
-            <div className="w-20 h-20 rounded-3xl bg-md-primary/10 border-2 border-md-primary/30 flex items-center justify-center text-3xl shadow-xs select-none">
+            <div className="w-20 h-20 rounded-3xl bg-md-primary/10 border-2 border-md-primary/30 flex items-center justify-center text-3xl shadow-xs select-none overflow-hidden">
               {profile.avatarEmoji ? (
                 profile.avatarEmoji
+              ) : profile.avatarUrl ? (
+                <img src={profile.avatarUrl} alt="User Avatar" className="w-full h-full object-cover" />
               ) : (
                 <User className="w-10 h-10 text-md-primary" />
               )}
@@ -231,7 +286,11 @@ export const ProfileView: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-xl font-bold text-md-on-surface">{profile.displayName}</h3>
-                {isDemoEnvironment ? (
+                {auth.isAuthenticated && auth.user?.email ? (
+                  <span className="inline-flex items-center gap-1 text-xs text-md-on-surface-variant font-mono mt-0.5">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {auth.user.email}
+                  </span>
+                ) : isDemoEnvironment ? (
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-500/15 px-2 py-0.5 rounded-full mt-0.5">
                     <Sparkles className="w-3 h-3" /> Preview Test Account
                   </span>
@@ -308,54 +367,99 @@ export const ProfileView: React.FC = () => {
         </div>
       </Card>
 
-      {/* Cloud Sync & Google Sign-In Card (Preview / Next Phase) */}
+      {/* Cloud Sync & Google Authentication Card */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-md-secondary-container flex items-center justify-center text-md-on-secondary-container">
-              <Clock className="w-5 h-5" />
+        {auth.isAuthenticated && auth.user ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-600 shrink-0">
+                  <Cloud className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-base font-bold text-md-on-surface">Cloud Account Connected</h4>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-700">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Active Sync
+                    </span>
+                  </div>
+                  <p className="text-xs text-md-on-surface-variant">
+                    Logged in as <strong>{auth.user.email}</strong>. Data is synchronized across your devices.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <Button
+                  variant="outlined"
+                  size="sm"
+                  onClick={() => syncWithCloud()}
+                  disabled={auth.isSyncing}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${auth.isSyncing ? 'animate-spin' : ''}`} />
+                  {auth.isSyncing ? 'Syncing...' : 'Sync Now'}
+                </Button>
+
+                <Button
+                  variant="text"
+                  size="sm"
+                  className="text-md-on-surface-variant hover:text-md-error"
+                  onClick={logout}
+                  title="Disconnect account"
+                >
+                  <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                  Sign Out
+                </Button>
+              </div>
             </div>
-            <div>
-              <h4 className="text-base font-bold text-md-on-surface flex items-center gap-2">
-                Cloud Sync & Google Login
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-md-primary-container text-md-on-primary-container">
-                  Coming Next
+
+            {/* Sync Status Banner */}
+            <div className="p-3 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 text-md-on-surface-variant">
+                <ShieldCheck className="w-4 h-4 text-md-primary" />
+                <span>
+                  {auth.lastSyncedAt
+                    ? `Last synchronized: ${new Date(auth.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+                    : 'Synced with Cloudflare D1'}
                 </span>
-              </h4>
-              <p className="text-xs text-md-on-surface-variant">
-                Sync sessions, tags, and stats across devices using Google Sign-In and Cloudflare D1.
-              </p>
+              </div>
+              <span className="text-[11px] text-md-on-surface-variant/80">
+                Offline-capable: Changes save locally and sync when connected.
+              </span>
+            </div>
+
+            {auth.syncError && (
+              <div className="p-3 rounded-2xl bg-md-error-container/20 border border-md-error/30 text-xs font-semibold text-md-error flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Sync note: {auth.syncError}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-md-primary/10 border border-md-primary/20 flex items-center justify-center text-md-primary shrink-0 mt-0.5 sm:mt-0">
+                <Cloud className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-md-on-surface">Cloud Backup & Cross-Device Sync</h4>
+                <p className="text-xs text-md-on-surface-variant max-w-md mt-0.5">
+                  Sign in with Google to automatically sync your focus sessions, custom tags, and settings across your laptop, phone, and tablet.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
+              <div ref={googleButtonContainerRef} className="min-h-[40px] flex items-center" />
+              {authError && (
+                <span className="text-[11px] font-semibold text-md-error">
+                  {authError}
+                </span>
+              )}
             </div>
           </div>
-
-          {/* Google Button Mockup */}
-          <button
-            type="button"
-            disabled
-            className="flex items-center justify-center gap-2 px-4 py-2 rounded-full border border-md-outline-variant bg-md-surface-container-highest/60 text-xs font-semibold text-md-on-surface opacity-60 cursor-not-allowed select-none"
-            title="Google Sign-In will be connected in the next phase"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-              />
-            </svg>
-            Sign in with Google
-          </button>
-        </div>
+        )}
       </Card>
 
       {/* Data Backup & Restore */}

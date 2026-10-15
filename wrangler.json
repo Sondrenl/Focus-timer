@@ -13,6 +13,10 @@
       "persist": true
     }
   },
+  "vars": {
+    "GOOGLE_CLIENT_ID": "229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com",
+    "AUTH_SECRET": "pomodor-focus-timer-secret-jwt-key-2025"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -20,5 +24,17 @@
       "database_id": "0598062d-507e-47a6-a147-8379486bf216"
     }
   ],
-  "previews": {}
+  "previews": {
+    "vars": {
+      "GOOGLE_CLIENT_ID": "229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com",
+      "AUTH_SECRET": "pomodor-focus-timer-secret-jwt-key-2025"
+    },
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "focus-timer-db",
+        "database_id": "0598062d-507e-47a6-a147-8379486bf216"
+      }
+    ]
+  }
 }

@@ -1,13 +1,14 @@
-import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
-import { UserProfile, DEFAULT_PROFILE, BackupData } from '../types/user';
+import { UserProfile, DEFAULT_PROFILE, BackupData, AuthState } from '../types/user';
 import { LocalStorageService } from '../services/storage/LocalStorageService';
 import { TagRepository } from '../services/repository/TagRepository';
 import { SessionRepository } from '../services/repository/SessionRepository';
 import { SettingsRepository } from '../services/repository/SettingsRepository';
 import { ProfileRepository } from '../services/repository/ProfileRepository';
+import { AuthService } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
 import { isPreviewOrDev } from '../utils/environment';
@@ -16,6 +17,12 @@ interface AppContextValue {
   // Environment
   isDemoEnvironment: boolean;
   reloadSampleData: () => Promise<void>;
+
+  // Authentication & Cloud Sync
+  auth: AuthState;
+  loginWithGoogle: (idToken: string) => Promise<void>;
+  logout: () => void;
+  syncWithCloud: () => Promise<void>;
 
   // Profile
   profile: UserProfile;
@@ -63,6 +70,7 @@ const tagRepository = new TagRepository(storageService);
 const sessionRepository = new SessionRepository(storageService);
 const settingsRepository = new SettingsRepository(storageService);
 const profileRepository = new ProfileRepository(storageService);
+const authService = AuthService.getInstance();
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
@@ -71,10 +79,153 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<'timer' | 'tags' | 'stats' | 'settings' | 'profile'>('timer');
+  const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState());
 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
 
-  // Load initial data
+  // Synchronize local data with Cloudflare D1
+  const syncWithCloud = useCallback(async (): Promise<void> => {
+    if (!authService.getStoredToken()) return;
+
+    setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
+
+    try {
+      // 1. Gather current local state
+      const currentTags = await tagRepository.getAll();
+      const currentSessions = await sessionRepository.getAll();
+      const currentSettings = await settingsRepository.get();
+      const currentProfile = await profileRepository.get();
+
+      // 2. Push local state to Cloudflare Worker
+      await authService.pushCloudData({
+        profile: {
+          displayName: currentProfile.displayName,
+          avatarEmoji: currentProfile.avatarEmoji,
+          dailyGoalMinutes: currentProfile.dailyGoalMinutes,
+        },
+        tags: currentTags,
+        sessions: currentSessions,
+        settings: currentSettings,
+      });
+
+      // 3. Fetch latest combined state from Cloudflare
+      const cloudData = await authService.fetchCloudData();
+
+      if (cloudData) {
+        // Merge cloud tags
+        if (cloudData.tags && cloudData.tags.length > 0) {
+          const mergedTagMap = new Map<string, Tag>();
+          currentTags.forEach((t) => mergedTagMap.set(t.id, t));
+          cloudData.tags.forEach((t) => mergedTagMap.set(t.id, t));
+          const finalTags = Array.from(mergedTagMap.values());
+          await tagRepository.saveAll(finalTags);
+          setTags(finalTags);
+        }
+
+        // Merge cloud sessions
+        if (cloudData.sessions && cloudData.sessions.length > 0) {
+          const sessionMap = new Map<string, CompletedSession>();
+          currentSessions.forEach((s) => sessionMap.set(s.id, s));
+          cloudData.sessions.forEach((s) => sessionMap.set(s.id, s));
+          const finalSessions = Array.from(sessionMap.values()).sort(
+            (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+          );
+          await sessionRepository.saveAll(finalSessions);
+          setSessions(finalSessions);
+        }
+
+        // Merge cloud settings
+        if (cloudData.settings) {
+          const mergedSettings = { ...currentSettings, ...cloudData.settings };
+          await settingsRepository.save(mergedSettings);
+          setSettings(mergedSettings);
+        }
+
+        // Merge cloud profile
+        if (cloudData.profile) {
+          const mergedProfile = { ...currentProfile, ...cloudData.profile };
+          await profileRepository.save(mergedProfile);
+          setProfile(mergedProfile);
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      setAuth((prev) => ({
+        ...prev,
+        isSyncing: false,
+        lastSyncedAt: nowIso,
+        syncError: null,
+      }));
+    } catch (err) {
+      console.error('Cloud sync error:', err);
+      setAuth((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncError: (err as Error).message || 'Sync failed',
+      }));
+    }
+  }, []);
+
+  // Google Sign In
+  const loginWithGoogle = async (idToken: string): Promise<void> => {
+    setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
+    try {
+      const { user, token } = await authService.loginWithGoogle(idToken);
+      setAuth({
+        isAuthenticated: true,
+        user,
+        token,
+        isSyncing: false,
+        lastSyncedAt: null,
+        syncError: null,
+      });
+
+      // Update local profile with cloud identity
+      const updatedProfile: UserProfile = {
+        ...profile,
+        id: user.id,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        displayName: user.displayName || profile.displayName,
+      };
+      await profileRepository.save(updatedProfile);
+      setProfile(updatedProfile);
+
+      // Perform initial cloud sync
+      await syncWithCloud();
+    } catch (err) {
+      setAuth((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncError: (err as Error).message || 'Google sign-in failed',
+      }));
+      throw err;
+    }
+  };
+
+  // Sign out
+  const logout = (): void => {
+    authService.logout();
+    setAuth({
+      isAuthenticated: false,
+      user: null,
+      token: null,
+      isSyncing: false,
+      lastSyncedAt: null,
+      syncError: null,
+    });
+    // Remove cloud-specific fields from local profile
+    const cleanedProfile: UserProfile = {
+      ...profile,
+      id: undefined,
+      email: undefined,
+      avatarUrl: undefined,
+    };
+    profileRepository.save(cleanedProfile);
+    setProfile(cleanedProfile);
+  };
+
+  // Load initial local data and verify cloud auth on mount
   useEffect(() => {
     async function init() {
       const [loadedProfile, loadedTags, loadedSessions, loadedSettings] = await Promise.all([
@@ -89,18 +240,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSessions(loadedSessions);
       setSettings(loadedSettings);
 
-      // Default active tag to first non-archived tag if available
       const firstActive = loadedTags.find((t) => !t.isArchived);
       if (firstActive) {
         setActiveTagId(firstActive.id);
       }
+
+      // If already logged in, verify session and trigger background sync
+      if (authService.getStoredToken()) {
+        const verifiedUser = await authService.verifySession();
+        if (verifiedUser) {
+          setAuth((prev) => ({
+            ...prev,
+            isAuthenticated: true,
+            user: verifiedUser,
+            token: authService.getStoredToken(),
+          }));
+          // Run background sync
+          syncWithCloud();
+        } else {
+          setAuth({
+            isAuthenticated: false,
+            user: null,
+            token: null,
+            isSyncing: false,
+            lastSyncedAt: null,
+            syncError: null,
+          });
+        }
+      }
     }
     init();
-  }, []);
+  }, [syncWithCloud]);
 
   const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
 
-  // If currently selected tag ID was deleted or archived, fallback to null (Unspecified) or first active
   useEffect(() => {
     if (activeTagId !== null && activeTags.length > 0) {
       const exists = activeTags.some((t) => t.id === activeTagId);
@@ -115,6 +288,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const merged = { ...profile, ...newProfile };
     await profileRepository.save(merged);
     setProfile(merged);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
   };
 
   // Tag Operations
@@ -123,6 +299,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = await tagRepository.getAll();
     setTags(updated);
     setActiveTagId(created.id);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
     return created;
   };
 
@@ -130,6 +309,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result = await tagRepository.update(id, updates);
     const updated = await tagRepository.getAll();
     setTags(updated);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
     return result;
   };
 
@@ -137,6 +319,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result = await tagRepository.archive(id);
     const updated = await tagRepository.getAll();
     setTags(updated);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
     return result;
   };
 
@@ -144,6 +329,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result = await tagRepository.unarchive(id);
     const updated = await tagRepository.getAll();
     setTags(updated);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
     return result;
   };
 
@@ -155,6 +343,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (activeTagId === id) {
         setActiveTagId(null);
       }
+      if (auth.isAuthenticated) {
+        syncWithCloud();
+      }
     }
     return success;
   };
@@ -163,12 +354,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const recordSession = async (sessionData: Omit<CompletedSession, 'id'>): Promise<CompletedSession> => {
     const created = await sessionRepository.add(sessionData);
     setSessions((prev) => [...prev, created]);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
     return created;
   };
 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();
     setSessions([]);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
   };
 
   const reloadSampleData = async (): Promise<void> => {
@@ -181,6 +378,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const merged = { ...settings, ...newValues };
     await settingsRepository.save(merged);
     setSettings(merged);
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
   };
 
   // Data Operations (Export / Import / Reset)
@@ -224,7 +424,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSettings(mergedSett);
       }
     } else {
-      // Merge mode
       const existingTagIds = new Set(tags.map((t) => t.id));
       const existingTagNames = new Set(tags.map((t) => t.name.toLowerCase().trim()));
       const newTagsToKeep: Tag[] = [];
@@ -256,6 +455,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTags(finalTags);
     setSessions(finalSessions);
 
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
+
     return { sessionsAdded, tagsAdded };
   };
 
@@ -275,6 +478,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProfile(defProfile);
       setActiveTagId(defTags[0]?.id ?? null);
     }
+
+    if (auth.isAuthenticated) {
+      syncWithCloud();
+    }
   };
 
   return (
@@ -282,6 +489,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         isDemoEnvironment: isDemo,
         reloadSampleData,
+        auth,
+        loginWithGoogle,
+        logout,
+        syncWithCloud,
         profile,
         updateProfile,
         tags,

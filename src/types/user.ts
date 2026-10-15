@@ -3,9 +3,15 @@ import { CompletedSession } from './session';
 import { UserSettings } from './settings';
 
 /**
- * User Profile data model for local focus tracking and goals
+ * User Profile data model for focus tracking, goals, and optional cloud sync
  */
 export interface UserProfile {
+  /** Cloud user ID (if authenticated) */
+  id?: string;
+  /** Google account email (if authenticated) */
+  email?: string;
+  /** Google avatar profile picture URL (if authenticated) */
+  avatarUrl?: string;
   /** User display name */
   displayName: string;
   /** Avatar emoji icon, or empty string for default icon */
@@ -27,6 +33,18 @@ export const DEFAULT_PROFILE: UserProfile = {
 export const AVATAR_EMOJI_OPTIONS = [
   '🎯', '🍅', '⚡', '🚀', '🧠', '☕', '🦉', '🌿', '🔥', '💻', '📚', '🌟'
 ];
+
+/**
+ * Cloud authentication and sync state
+ */
+export interface AuthState {
+  isAuthenticated: boolean;
+  user: UserProfile | null;
+  token: string | null;
+  isSyncing: boolean;
+  lastSyncedAt: string | null;
+  syncError: string | null;
+}
 
 /**
  * Schema for exported JSON backup
