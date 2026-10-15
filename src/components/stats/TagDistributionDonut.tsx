@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { TagStat } from '../../hooks/useStatistics';
+import { formatDurationHoursMins } from '../../utils/formatters';
 
 interface TagDistributionDonutProps {
   distribution: TagStat[];
-  totalFocusHours: number;
+  totalFocusSeconds: number;
 }
 
 export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   distribution,
-  totalFocusHours,
+  totalFocusSeconds,
 }) => {
   const [hoveredTagId, setHoveredTagId] = useState<string | null>(null);
 
@@ -65,18 +66,19 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 r={radius}
                 fill="transparent"
                 stroke={slice.color}
-                strokeWidth={isHovered ? strokeWidth + 4 : strokeWidth}
+                strokeWidth={isHovered ? strokeWidth + 6 : strokeWidth}
                 strokeDasharray={slice.strokeDasharray}
                 strokeDashoffset={slice.strokeDashoffset}
-                className="transition-all duration-200 cursor-pointer"
+                strokeLinecap="butt"
                 onMouseEnter={() => setHoveredTagId(slice.tagId)}
                 onMouseLeave={() => setHoveredTagId(null)}
+                className="transition-all duration-200 cursor-pointer"
               />
             );
           })}
         </svg>
 
-        {/* Center Label in Donut Hole */}
+        {/* Center Text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none px-4">
           {hoveredItem ? (
             <>
@@ -87,14 +89,13 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 {hoveredItem.name}
               </span>
               <span className="text-[10px] text-md-outline">
-                {hoveredItem.hours} hrs
+                {formatDurationHoursMins(hoveredItem.totalSeconds)}
               </span>
             </>
           ) : (
             <>
-              <span className="text-2xl font-extrabold text-md-on-surface tracking-tight">
-                {totalFocusHours}
-                <span className="text-xs font-semibold text-md-on-surface-variant ml-0.5">hrs</span>
+              <span className="text-xl font-extrabold text-md-on-surface tracking-tight">
+                {formatDurationHoursMins(totalFocusSeconds)}
               </span>
               <span className="text-xs font-medium text-md-on-surface-variant mt-0.5">
                 Total Focus
@@ -142,7 +143,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
 
               <div className="flex items-center gap-3 shrink-0 text-xs font-semibold">
                 <span className="text-md-on-surface-variant font-medium">
-                  {item.hours}h ({item.sessionCount})
+                  {formatDurationHoursMins(item.totalSeconds)} ({item.sessionCount})
                 </span>
                 <span
                   className="w-10 text-right font-extrabold"

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import { Tag } from '../types/tag';
 import {
   toDateKey,
   WEEKDAY_NAMES,
@@ -10,6 +11,7 @@ import {
   getYearRange,
   formatFriendlyDate,
 } from '../utils/dates';
+import { formatDurationHoursMins } from '../utils/formatters';
 
 export type TimePeriodType = 'day' | 'week' | 'month' | 'year' | 'custom' | 'all';
 
@@ -59,333 +61,258 @@ export function useStatistics() {
 
   // Navigation handlers
   const goToPrev = () => {
-    const next = new Date(referenceDate);
-    if (periodType === 'day') {
-      next.setDate(next.getDate() - 1);
-    } else if (periodType === 'week') {
-      next.setDate(next.getDate() - 7);
-    } else if (periodType === 'month') {
-      next.setMonth(next.getMonth() - 1);
-    } else if (periodType === 'year') {
-      next.setFullYear(next.getFullYear() - 1);
-    } else if (periodType === 'custom') {
-      const startDate = new Date(customRange.start);
-      const endDate = new Date(customRange.end);
-      const diffMs = endDate.getTime() - startDate.getTime();
-      const newStart = new Date(startDate.getTime() - diffMs - 24 * 60 * 60 * 1000);
-      const newEnd = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
-      setCustomRange({ start: toDateKey(newStart), end: toDateKey(newEnd) });
-      return;
-    }
-    setReferenceDate(next);
+    setReferenceDate((prev) => {
+      const d = new Date(prev);
+      if (periodType === 'day') d.setDate(d.getDate() - 1);
+      else if (periodType === 'week') d.setDate(d.getDate() - 7);
+      else if (periodType === 'month') d.setMonth(d.getMonth() - 1);
+      else if (periodType === 'year') d.setFullYear(d.getFullYear() - 1);
+      return d;
+    });
   };
 
   const goToNext = () => {
-    const next = new Date(referenceDate);
-    if (periodType === 'day') {
-      next.setDate(next.getDate() + 1);
-    } else if (periodType === 'week') {
-      next.setDate(next.getDate() + 7);
-    } else if (periodType === 'month') {
-      next.setMonth(next.getMonth() + 1);
-    } else if (periodType === 'year') {
-      next.setFullYear(next.getFullYear() + 1);
-    } else if (periodType === 'custom') {
-      const startDate = new Date(customRange.start);
-      const endDate = new Date(customRange.end);
-      const diffMs = endDate.getTime() - startDate.getTime();
-      const newStart = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
-      const newEnd = new Date(endDate.getTime() + diffMs + 24 * 60 * 60 * 1000);
-      setCustomRange({ start: toDateKey(newStart), end: toDateKey(newEnd) });
-      return;
-    }
-    setReferenceDate(next);
+    setReferenceDate((prev) => {
+      const d = new Date(prev);
+      if (periodType === 'day') d.setDate(d.getDate() + 1);
+      else if (periodType === 'week') d.setDate(d.getDate() + 7);
+      else if (periodType === 'month') d.setMonth(d.getMonth() + 1);
+      else if (periodType === 'year') d.setFullYear(d.getFullYear() + 1);
+      return d;
+    });
   };
 
   const goToToday = () => {
     setReferenceDate(new Date());
-    const today = new Date();
-    const twoWeeksAgo = new Date();
-    twoWeeksAgo.setDate(today.getDate() - 13);
-    setCustomRange({
-      start: toDateKey(twoWeeksAgo),
-      end: toDateKey(today),
-    });
   };
 
-  const computedStats = useMemo(() => {
-    // Determine effective start and end Date for the period
+  // Main statistics derivation
+  const stats = useMemo(() => {
     let startDate: Date;
     let endDate: Date;
-    let periodLabel: string;
+    let periodLabel = '';
+
+    const ref = referenceDate;
 
     if (periodType === 'day') {
-      const range = getDayRange(referenceDate);
-      startDate = range.start;
-      endDate = range.end;
-      periodLabel = referenceDate.toLocaleDateString(undefined, {
-        weekday: 'long',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
+      const r = getDayRange(ref);
+      startDate = r.start;
+      endDate = r.end;
+      periodLabel = formatFriendlyDate(ref);
     } else if (periodType === 'week') {
-      const range = getWeekRange(referenceDate);
-      startDate = range.start;
-      endDate = range.end;
-      const startStr = range.start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      const endStr = range.end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-      periodLabel = `${startStr} – ${endStr}`;
+      const r = getWeekRange(ref);
+      startDate = r.start;
+      endDate = r.end;
+      const sStr = `${MONTH_NAMES[startDate.getMonth()].slice(0, 3)} ${startDate.getDate()}`;
+      const eStr = `${MONTH_NAMES[endDate.getMonth()].slice(0, 3)} ${endDate.getDate()}, ${endDate.getFullYear()}`;
+      periodLabel = `${sStr} – ${eStr}`;
     } else if (periodType === 'month') {
-      const range = getMonthRange(referenceDate);
-      startDate = range.start;
-      endDate = range.end;
-      periodLabel = `${MONTH_NAMES[referenceDate.getMonth()]} ${referenceDate.getFullYear()}`;
+      const r = getMonthRange(ref);
+      startDate = r.start;
+      endDate = r.end;
+      periodLabel = `${MONTH_NAMES[startDate.getMonth()]} ${startDate.getFullYear()}`;
     } else if (periodType === 'year') {
-      const range = getYearRange(referenceDate);
-      startDate = range.start;
-      endDate = range.end;
-      periodLabel = `${referenceDate.getFullYear()}`;
+      const r = getYearRange(ref);
+      startDate = r.start;
+      endDate = r.end;
+      periodLabel = `${startDate.getFullYear()}`;
     } else if (periodType === 'custom') {
-      const s = new Date(customRange.start);
-      s.setHours(0, 0, 0, 0);
-      const e = new Date(customRange.end);
-      e.setHours(23, 59, 59, 999);
+      const s = new Date(`${customRange.start}T00:00:00.000`);
+      const e = new Date(`${customRange.end}T23:59:59.999`);
       startDate = s;
       endDate = e;
-      periodLabel = `${formatFriendlyDate(customRange.start)} – ${formatFriendlyDate(customRange.end)}`;
+      periodLabel = `${formatFriendlyDate(s)} – ${formatFriendlyDate(e)}`;
     } else {
-      // 'all' time
+      // 'all' time: 10 years ago to now
       startDate = new Date(0);
-      endDate = new Date(8640000000000000);
-      periodLabel = 'All Time History (Archived Included)';
+      endDate = new Date(Date.now() + 86400000 * 365);
+      periodLabel = 'All Time History';
     }
 
-    const startMs = startDate.getTime();
-    const endMs = endDate.getTime();
-
-    // Filter focus WORK sessions within period bounds
+    // Filter work sessions within period
     const filteredSessions = sessions.filter((s) => {
       if (s.sessionType !== 'WORK') return false;
-      const t = new Date(s.completedAt).getTime();
-      return t >= startMs && t <= endMs;
+      const d = new Date(s.completedAt);
+      return d >= startDate && d <= endDate;
     });
 
-    // 1. High-level aggregates for period
+    // 1. Total Metrics
     const totalFocusSeconds = filteredSessions.reduce((acc, s) => acc + s.durationSeconds, 0);
     const totalFocusHours = Number((totalFocusSeconds / 3600).toFixed(1));
     const totalWorkCount = filteredSessions.length;
 
-    // Tag Map
-    const tagMap = new Map<string, { name: string; color: string; isArchived: boolean }>();
-    tags.forEach((t) => {
-      tagMap.set(t.id, { name: t.name, color: t.color, isArchived: t.isArchived });
-    });
+    // 2. Tag Distribution
+    const tagMap = new Map<string, Tag>();
+    tags.forEach((t) => tagMap.set(t.id, t));
 
-    // 2. Per-Tag Distribution
     const tagSecondsMap = new Map<string, { seconds: number; count: number }>();
     filteredSessions.forEach((s) => {
-      const tagId = s.tagId || 'untagged';
+      const tagId = s.tagId || 'unassigned';
       const curr = tagSecondsMap.get(tagId) || { seconds: 0, count: 0 };
-      tagSecondsMap.set(tagId, {
-        seconds: curr.seconds + s.durationSeconds,
-        count: curr.count + 1,
-      });
+      curr.seconds += s.durationSeconds;
+      curr.count += 1;
+      tagSecondsMap.set(tagId, curr);
     });
 
-    // If 'all' period is selected, make sure any archived tag that had sessions is explicitly present
-    const tagDistribution: TagStat[] = Array.from(tagSecondsMap.entries()).map(([tagId, data]) => {
-      let name = 'Unspecified';
-      let color = '#8C8690';
-      let isArchived = false;
+    const tagDistribution: TagStat[] = Array.from(tagSecondsMap.entries())
+      .map(([tagId, data]) => {
+        const foundTag = tagMap.get(tagId);
+        const name = tagId === 'unassigned' ? 'Unassigned' : foundTag ? foundTag.name : 'Unknown Tag';
+        const color = tagId === 'unassigned' ? '#9E9E9E' : foundTag ? foundTag.color : '#BDBDBD';
+        const isArchived = foundTag ? foundTag.isArchived : false;
+        const hours = Number((data.seconds / 3600).toFixed(1));
+        const percentage = totalFocusSeconds > 0 ? Math.round((data.seconds / totalFocusSeconds) * 100) : 0;
 
-      if (tagId !== 'untagged' && tagMap.has(tagId)) {
-        const info = tagMap.get(tagId)!;
-        name = info.name;
-        color = info.color;
-        isArchived = info.isArchived;
-      }
+        return {
+          tagId,
+          name,
+          color,
+          isArchived,
+          totalSeconds: data.seconds,
+          hours,
+          percentage,
+          sessionCount: data.count,
+        };
+      })
+      .sort((a, b) => b.totalSeconds - a.totalSeconds);
 
-      const hours = Number((data.seconds / 3600).toFixed(1));
-      const percentage = totalFocusSeconds > 0 ? Math.round((data.seconds / totalFocusSeconds) * 100) : 0;
-
-      return {
-        tagId,
-        name,
-        color,
-        isArchived,
-        totalSeconds: data.seconds,
-        hours,
-        percentage,
-        sessionCount: data.count,
-      };
-    });
-
-    tagDistribution.sort((a, b) => b.totalSeconds - a.totalSeconds);
-
-    // 3. Activity breakdown visualization based on periodType
+    // 3. Activity Breakdown for Bar Chart
     let activityBars: ActivityBarStat[] = [];
 
     if (periodType === 'day') {
-      // 6 time blocks: 00-04, 04-08, 08-12, 12-16, 16-20, 20-24
-      const timeSlots = [
-        { label: '00-04h', sub: 'Night', startH: 0, endH: 4 },
-        { label: '04-08h', sub: 'Dawn', startH: 4, endH: 8 },
-        { label: '08-12h', sub: 'Morning', startH: 8, endH: 12 },
-        { label: '12-16h', sub: 'Afternoon', startH: 12, endH: 16 },
-        { label: '16-20h', sub: 'Evening', startH: 16, endH: 20 },
-        { label: '20-24h', sub: 'Night', startH: 20, endH: 24 },
-      ];
+      const hoursArray = Array.from({ length: 24 }, (_, i) => ({
+        hour: i,
+        seconds: 0,
+        count: 0,
+      }));
 
-      activityBars = timeSlots.map((slot) => {
-        let sec = 0;
-        let count = 0;
-        filteredSessions.forEach((s) => {
-          const d = new Date(s.completedAt);
-          const h = d.getHours();
-          if (h >= slot.startH && h < slot.endH) {
-            sec += s.durationSeconds;
-            count += 1;
-          }
-        });
-        return {
-          key: slot.label,
-          label: slot.label,
-          subLabel: slot.sub,
-          totalSeconds: sec,
-          hours: Number((sec / 3600).toFixed(1)),
-          sessionCount: count,
-        };
-      });
-    } else if (periodType === 'week') {
-      // 7 days of the week from Monday to Sunday
-      const weekStart = getWeekRange(referenceDate).start;
-      const days = [1, 2, 3, 4, 5, 6, 0]; // Mon..Sun indices
-
-      activityBars = days.map((dayIdx, offset) => {
-        const d = new Date(weekStart);
-        d.setDate(weekStart.getDate() + offset);
-        const dateKey = toDateKey(d);
-
-        let sec = 0;
-        let count = 0;
-        filteredSessions.forEach((s) => {
-          if (toDateKey(s.completedAt) === dateKey) {
-            sec += s.durationSeconds;
-            count += 1;
-          }
-        });
-
-        return {
-          key: dateKey,
-          label: WEEKDAY_NAMES[dayIdx].substring(0, 3),
-          subLabel: `${d.getDate()}/${d.getMonth() + 1}`,
-          totalSeconds: sec,
-          hours: Number((sec / 3600).toFixed(1)),
-          sessionCount: count,
-        };
-      });
-    } else if (periodType === 'month') {
-      // Group by weeks or 5-day intervals across the month
-      const totalDays = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 0).getDate();
-      const intervals = Math.ceil(totalDays / 5);
-
-      activityBars = Array.from({ length: intervals }, (_, i) => {
-        const startDay = i * 5 + 1;
-        const endDay = Math.min(totalDays, (i + 1) * 5);
-        let sec = 0;
-        let count = 0;
-
-        filteredSessions.forEach((s) => {
-          const d = new Date(s.completedAt);
-          const dayNum = d.getDate();
-          if (dayNum >= startDay && dayNum <= endDay) {
-            sec += s.durationSeconds;
-            count += 1;
-          }
-        });
-
-        return {
-          key: `m-part-${i}`,
-          label: `${startDay}-${endDay}`,
-          subLabel: MONTH_NAMES[referenceDate.getMonth()].substring(0, 3),
-          totalSeconds: sec,
-          hours: Number((sec / 3600).toFixed(1)),
-          sessionCount: count,
-        };
-      });
-    } else if (periodType === 'year') {
-      // 12 months (Jan..Dec)
-      activityBars = MONTH_NAMES.map((mName, mIdx) => {
-        let sec = 0;
-        let count = 0;
-        filteredSessions.forEach((s) => {
-          const d = new Date(s.completedAt);
-          if (d.getMonth() === mIdx) {
-            sec += s.durationSeconds;
-            count += 1;
-          }
-        });
-        return {
-          key: mName,
-          label: mName.substring(0, 3),
-          totalSeconds: sec,
-          hours: Number((sec / 3600).toFixed(1)),
-          sessionCount: count,
-        };
-      });
-    } else if (periodType === 'all') {
-      // Group by months in history
-      const monthMap = new Map<string, { seconds: number; count: number }>();
       filteredSessions.forEach((s) => {
         const d = new Date(s.completedAt);
-        const key = `${MONTH_NAMES[d.getMonth()].substring(0, 3)} '${d.getFullYear().toString().substring(2)}`;
-        const curr = monthMap.get(key) || { seconds: 0, count: 0 };
-        monthMap.set(key, { seconds: curr.seconds + s.durationSeconds, count: curr.count + 1 });
+        const h = d.getHours();
+        hoursArray[h].seconds += s.durationSeconds;
+        hoursArray[h].count += 1;
       });
 
-      if (monthMap.size === 0) {
-        activityBars = [];
-      } else {
-        activityBars = Array.from(monthMap.entries()).map(([key, data]) => ({
-          key,
-          label: key,
-          totalSeconds: data.seconds,
-          hours: Number((data.seconds / 3600).toFixed(1)),
-          sessionCount: data.count,
-        }));
-      }
-    } else {
-      // 'custom': Group by calendar dates within custom range
-      const sDate = new Date(customRange.start);
-      const eDate = new Date(customRange.end);
-      const dayDiff = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / (24 * 60 * 60 * 1000)));
+      activityBars = hoursArray.map((item) => ({
+        key: `hour-${item.hour}`,
+        label: `${item.hour}:00`,
+        totalSeconds: item.seconds,
+        hours: Number((item.seconds / 3600).toFixed(1)),
+        sessionCount: item.count,
+      }));
+    } else if (periodType === 'week') {
+      const days = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(startDate);
+        d.setDate(d.getDate() + i);
+        return {
+          date: d,
+          dateKey: toDateKey(d),
+          label: WEEKDAY_NAMES[d.getDay()].slice(0, 3),
+          seconds: 0,
+          count: 0,
+        };
+      });
 
-      // If range is under 14 days, show each day; otherwise show chunks
+      filteredSessions.forEach((s) => {
+        const key = toDateKey(s.completedAt);
+        const target = days.find((d) => d.dateKey === key);
+        if (target) {
+          target.seconds += s.durationSeconds;
+          target.count += 1;
+        }
+      });
+
+      activityBars = days.map((item) => ({
+        key: item.dateKey,
+        label: item.label,
+        subLabel: `${item.date.getDate()}`,
+        totalSeconds: item.seconds,
+        hours: Number((item.seconds / 3600).toFixed(1)),
+        sessionCount: item.count,
+      }));
+    } else if (periodType === 'month') {
+      const daysInMonth = new Date(ref.getFullYear(), ref.getMonth() + 1, 0).getDate();
+      const monthDays = Array.from({ length: daysInMonth }, (_, i) => {
+        const d = new Date(ref.getFullYear(), ref.getMonth(), i + 1);
+        return {
+          dateKey: toDateKey(d),
+          dayNum: i + 1,
+          seconds: 0,
+          count: 0,
+        };
+      });
+
+      filteredSessions.forEach((s) => {
+        const key = toDateKey(s.completedAt);
+        const target = monthDays.find((d) => d.dateKey === key);
+        if (target) {
+          target.seconds += s.durationSeconds;
+          target.count += 1;
+        }
+      });
+
+      activityBars = monthDays.map((item) => ({
+        key: item.dateKey,
+        label: `${item.dayNum}`,
+        totalSeconds: item.seconds,
+        hours: Number((item.seconds / 3600).toFixed(1)),
+        sessionCount: item.count,
+      }));
+    } else if (periodType === 'year') {
+      const months = Array.from({ length: 12 }, (_, i) => ({
+        monthIdx: i,
+        label: MONTH_NAMES[i].slice(0, 3),
+        seconds: 0,
+        count: 0,
+      }));
+
+      filteredSessions.forEach((s) => {
+        const m = new Date(s.completedAt).getMonth();
+        months[m].seconds += s.durationSeconds;
+        months[m].count += 1;
+      });
+
+      activityBars = months.map((item) => ({
+        key: `month-${item.monthIdx}`,
+        label: item.label,
+        totalSeconds: item.seconds,
+        hours: Number((item.seconds / 3600).toFixed(1)),
+        sessionCount: item.count,
+      }));
+    } else {
+      // 'custom' or 'all'
+      const sDate = new Date(startDate.getTime());
+      const eDate = new Date(endDate.getTime());
+      const dayDiff = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / (1000 * 60 * 60 * 24)));
+
       if (dayDiff <= 14) {
-        activityBars = Array.from({ length: dayDiff + 1 }, (_, i) => {
+        const dayList = Array.from({ length: dayDiff }, (_, i) => {
           const d = new Date(sDate);
           d.setDate(sDate.getDate() + i);
-          const dateKey = toDateKey(d);
-
-          let sec = 0;
-          let count = 0;
-          filteredSessions.forEach((s) => {
-            if (toDateKey(s.completedAt) === dateKey) {
-              sec += s.durationSeconds;
-              count += 1;
-            }
-          });
-
           return {
-            key: dateKey,
+            dateKey: toDateKey(d),
             label: `${d.getDate()}/${d.getMonth() + 1}`,
-            subLabel: WEEKDAY_NAMES[d.getDay()].substring(0, 3),
-            totalSeconds: sec,
-            hours: Number((sec / 3600).toFixed(1)),
-            sessionCount: count,
+            seconds: 0,
+            count: 0,
           };
         });
+
+        filteredSessions.forEach((s) => {
+          const key = toDateKey(s.completedAt);
+          const target = dayList.find((d) => d.dateKey === key);
+          if (target) {
+            target.seconds += s.durationSeconds;
+            target.count += 1;
+          }
+        });
+
+        activityBars = dayList.map((item) => ({
+          key: item.dateKey,
+          label: item.label,
+          totalSeconds: item.seconds,
+          hours: Number((item.seconds / 3600).toFixed(1)),
+          sessionCount: item.count,
+        }));
       } else {
         const step = Math.ceil(dayDiff / 6);
         activityBars = Array.from({ length: 6 }, (_, i) => {
@@ -429,7 +356,6 @@ export function useStatistics() {
       const hourCounts = new Array(24).fill(0);
       filteredSessions.forEach((s) => {
         const h = new Date(s.completedAt).getHours();
-        // A physical 1-hour window cannot exceed 3600 seconds
         hourCounts[h] = Math.min(3600, hourCounts[h] + s.durationSeconds);
       });
       let maxH = 0;
@@ -441,14 +367,45 @@ export function useStatistics() {
         }
       });
       const clampedSec = Math.min(3600, Math.max(0, maxSec));
-      const minsFocused = Math.round(clampedSec / 60);
       productiveMetric = {
         title: 'Peak Focus Hour',
         value: `${maxH.toString().padStart(2, '0')}:00 – ${(maxH + 1).toString().padStart(2, '0')}:00`,
-        subtext: `${minsFocused} mins focused in this 1-hour window`,
+        subtext: `${formatDurationHoursMins(clampedSec)} focused`,
         hasData: maxSec > 0,
       };
-    } else {
+    } else if (periodType === 'all') {
+      // All Time: Day of week with highest average focus time
+      const weekdaySecs = new Array(7).fill(0);
+      const weekdayDateSets: Set<string>[] = Array.from({ length: 7 }, () => new Set<string>());
+      filteredSessions.forEach((s) => {
+        const d = new Date(s.completedAt);
+        const dayIdx = d.getDay();
+        weekdaySecs[dayIdx] += s.durationSeconds;
+        weekdayDateSets[dayIdx].add(toDateKey(d));
+      });
+
+      let bestWeekday = 1;
+      let highestAvgSec = -1;
+      for (let i = 0; i < 7; i++) {
+        const activeDaysCount = weekdayDateSets[i].size;
+        if (activeDaysCount > 0) {
+          const avg = weekdaySecs[i] / activeDaysCount;
+          if (avg > highestAvgSec) {
+            highestAvgSec = avg;
+            bestWeekday = i;
+          }
+        }
+      }
+
+      const avgFormatted = formatDurationHoursMins(Math.round(highestAvgSec > 0 ? highestAvgSec : 0));
+      productiveMetric = {
+        title: 'Most Productive Day',
+        value: `${WEEKDAY_NAMES[bestWeekday]}s`,
+        subtext: `${avgFormatted} average per ${WEEKDAY_NAMES[bestWeekday].slice(0, 3)}`,
+        hasData: highestAvgSec > 0,
+      };
+    } else if (periodType === 'week') {
+      // Single week: Specific weekday within the week
       const weekdaySecs = new Array(7).fill(0);
       const weekdayCounts = new Array(7).fill(0);
       filteredSessions.forEach((s) => {
@@ -467,9 +424,48 @@ export function useStatistics() {
       productiveMetric = {
         title: 'Most Productive Day',
         value: WEEKDAY_NAMES[maxDay],
-        subtext: `${(maxSec / 3600).toFixed(1)} hrs across ${weekdayCounts[maxDay]} sessions`,
-        hasData: true,
+        subtext: `${formatDurationHoursMins(maxSec)} across ${weekdayCounts[maxDay]} sessions`,
+        hasData: maxSec > 0,
       };
+    } else {
+      // Longer than a week (Month, Year, Custom):
+      // Tell WHICH specific date was most productive (e.g., "Tuesday, Oct 14")
+      const dateMap = new Map<string, { seconds: number; count: number; date: Date }>();
+      filteredSessions.forEach((s) => {
+        const d = new Date(s.completedAt);
+        const key = toDateKey(d);
+        const curr = dateMap.get(key) || { seconds: 0, count: 0, date: d };
+        curr.seconds += s.durationSeconds;
+        curr.count += 1;
+        dateMap.set(key, curr);
+      });
+
+      let bestDateItem: { seconds: number; count: number; date: Date } | null = null;
+      dateMap.forEach((val) => {
+        if (!bestDateItem || val.seconds > bestDateItem.seconds) {
+          bestDateItem = val;
+        }
+      });
+
+      if (bestDateItem && (bestDateItem as { seconds: number; count: number; date: Date }).seconds > 0) {
+        const item = bestDateItem as { seconds: number; count: number; date: Date };
+        const dayName = WEEKDAY_NAMES[item.date.getDay()];
+        const monthName = MONTH_NAMES[item.date.getMonth()].slice(0, 3);
+        const dayNum = item.date.getDate();
+        productiveMetric = {
+          title: 'Most Productive Day',
+          value: `${dayName}, ${monthName} ${dayNum}`,
+          subtext: `${formatDurationHoursMins(item.seconds)} across ${item.count} sessions`,
+          hasData: true,
+        };
+      } else {
+        productiveMetric = {
+          title: 'Most Productive Day',
+          value: 'N/A',
+          subtext: 'No sessions recorded in this period.',
+          hasData: false,
+        };
+      }
     }
 
     return {
@@ -492,6 +488,6 @@ export function useStatistics() {
     goToPrev,
     goToNext,
     goToToday,
-    ...computedStats,
+    ...stats,
   };
 }

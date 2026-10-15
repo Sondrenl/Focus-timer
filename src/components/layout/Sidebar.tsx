@@ -111,7 +111,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="border-t border-md-outline-variant/20 pt-3">
           <button
             onClick={() => handleNav('profile')}
-            title="Profile & Data"
+            title="Profile"
             className={clsx(
               'flex items-center gap-3.5 p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left w-full relative overflow-hidden',
               isProfileActive
@@ -119,9 +119,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
             )}
           >
-            <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+            <div className="w-8 h-8 shrink-0 flex items-center justify-center overflow-hidden rounded-full">
               {profile?.avatarEmoji ? (
                 <span className="text-xl leading-none select-none">{profile.avatarEmoji}</span>
+              ) : profile?.avatarUrl ? (
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.displayName}
+                  className="w-7 h-7 rounded-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
               ) : (
                 <User
                   className={clsx(
@@ -134,9 +141,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
               <span className="text-sm font-semibold text-md-on-surface truncate block">
                 {profile?.displayName || 'Focus Practitioner'}
-              </span>
-              <span className="text-[11px] text-md-outline truncate block">
-                Profile & Data
               </span>
             </div>
           </button>

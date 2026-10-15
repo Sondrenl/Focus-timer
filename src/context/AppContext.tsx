@@ -180,12 +180,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncError: null,
       });
 
-      // Update local profile with cloud identity
+      // Update local profile with Google identity and auto-activate Google avatar
       const updatedProfile: UserProfile = {
         ...profile,
         id: user.id,
         email: user.email,
         avatarUrl: user.avatarUrl,
+        avatarEmoji: '', // Switch to Google account photo
         displayName: user.displayName || profile.displayName,
       };
       await profileRepository.save(updatedProfile);
@@ -386,7 +387,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Data Operations (Export / Import / Reset)
   const exportBackup = (): BackupData => {
     return {
-      version: '1.0.0',
+      version: '2.0.0',
       exportedAt: new Date().toISOString(),
       profile,
       settings,

@@ -7,9 +7,8 @@ import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 
 export const SettingsView: React.FC = () => {
-  const { settings, updateSettings, sound, notifications, clearSessions } = useApp();
+  const { settings, updateSettings, sound, notifications } = useApp();
   const [savedToast, setSavedToast] = useState(false);
-  const [resetConfirm, setResetConfirm] = useState(false);
 
   const showSaved = () => {
     setSavedToast(true);
@@ -42,252 +41,235 @@ export const SettingsView: React.FC = () => {
     showSaved();
   };
 
-  const handleClearSessions = async () => {
-    await clearSessions();
-    setResetConfirm(false);
-    showSaved();
-  };
-
   return (
     <div className="w-full max-w-3xl mx-auto py-6 px-4 flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-md-on-surface">Settings & Preferences</h2>
-          <p className="text-xs text-md-on-surface-variant mt-0.5">
-            Customize intervals, sound notifications, and automatic cycle transitions.
-          </p>
         </div>
 
         {savedToast && (
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-md-primary-container text-md-on-primary-container text-xs font-semibold animate-in fade-in duration-200">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 text-xs font-semibold animate-in fade-in">
             <Check className="w-3.5 h-3.5" />
-            <span>Saved</span>
+            <span>Preferences Saved</span>
           </div>
         )}
       </div>
 
-      {/* 1. Interval Durations Section */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
-        <div className="flex items-center gap-2.5 pb-2 border-b border-md-outline-variant/20">
-          <Clock className="w-5 h-5 text-md-primary" />
-          <h3 className="text-base font-bold text-md-on-surface">Interval Durations</h3>
+      {/* 1. Timer Intervals Configuration */}
+      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center">
+            <Clock className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-md-on-surface">Timer Intervals</h3>
+            <p className="text-xs text-md-on-surface-variant">
+              Configure session lengths in minutes
+            </p>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Work Duration */}
-          <div className="flex flex-col gap-1.5 p-3.5 rounded-2xl bg-md-surface-container">
+          <div className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
             <label className="text-xs font-bold text-md-on-surface">
-              Pomodoro Focus Duration
+              Focus Duration
             </label>
-            <div className="flex items-center gap-3 mt-1">
+            <div className="flex items-center gap-2">
               <input
                 type="number"
                 min="1"
                 max="120"
                 value={settings.workDurationMinutes}
                 onChange={(e) => handleDurationChange('workDurationMinutes', parseInt(e.target.value) || 25)}
-                className="w-20 px-3 py-1.5 text-center font-bold text-base bg-md-surface-container-high rounded-xl border border-md-outline-variant/40 focus:outline-none focus:border-md-primary"
+                className="w-full px-3 py-2 bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
-              <span className="text-xs text-md-on-surface-variant font-medium">minutes</span>
+              <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
             </div>
           </div>
 
-          {/* Short Break Duration */}
-          <div className="flex flex-col gap-1.5 p-3.5 rounded-2xl bg-md-surface-container">
+          {/* Short Break */}
+          <div className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
             <label className="text-xs font-bold text-md-on-surface">
-              Short Break Duration
+              Short Break
             </label>
-            <div className="flex items-center gap-3 mt-1">
+            <div className="flex items-center gap-2">
               <input
                 type="number"
                 min="1"
                 max="60"
                 value={settings.shortBreakDurationMinutes}
                 onChange={(e) => handleDurationChange('shortBreakDurationMinutes', parseInt(e.target.value) || 5)}
-                className="w-20 px-3 py-1.5 text-center font-bold text-base bg-md-surface-container-high rounded-xl border border-md-outline-variant/40 focus:outline-none focus:border-md-primary"
+                className="w-full px-3 py-2 bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
-              <span className="text-xs text-md-on-surface-variant font-medium">minutes</span>
+              <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
             </div>
           </div>
 
-          {/* Long Break Duration */}
-          <div className="flex flex-col gap-1.5 p-3.5 rounded-2xl bg-md-surface-container">
+          {/* Long Break */}
+          <div className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
             <label className="text-xs font-bold text-md-on-surface">
-              Long Break Duration
+              Long Break
             </label>
-            <div className="flex items-center gap-3 mt-1">
+            <div className="flex items-center gap-2">
               <input
                 type="number"
                 min="1"
-                max="90"
+                max="60"
                 value={settings.longBreakDurationMinutes}
                 onChange={(e) => handleDurationChange('longBreakDurationMinutes', parseInt(e.target.value) || 25)}
-                className="w-20 px-3 py-1.5 text-center font-bold text-base bg-md-surface-container-high rounded-xl border border-md-outline-variant/40 focus:outline-none focus:border-md-primary"
+                className="w-full px-3 py-2 bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
-              <span className="text-xs text-md-on-surface-variant font-medium">minutes</span>
+              <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
             </div>
           </div>
+        </div>
 
-          {/* Long Break Cycle Interval */}
-          <div className="flex flex-col gap-1.5 p-3.5 rounded-2xl bg-md-surface-container">
-            <label className="text-xs font-bold text-md-on-surface">
-              Long Break Cycle Interval
-            </label>
-            <div className="flex items-center gap-3 mt-1">
-              <input
-                type="number"
-                min="1"
-                max="12"
-                value={settings.longBreakInterval}
-                onChange={(e) => handleDurationChange('longBreakInterval', parseInt(e.target.value) || 4)}
-                className="w-20 px-3 py-1.5 text-center font-bold text-base bg-md-surface-container-high rounded-xl border border-md-outline-variant/40 focus:outline-none focus:border-md-primary"
-              />
-              <span className="text-xs text-md-on-surface-variant font-medium">sessions</span>
+        {/* Long Break Interval */}
+        <div className="flex items-center justify-between pt-2 border-t border-md-outline-variant/15">
+          <div>
+            <div className="text-sm font-semibold text-md-on-surface">Long Break Interval</div>
+            <div className="text-xs text-md-on-surface-variant">
+              Number of Pomodoros before taking an extended rest
             </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="1"
+              max="12"
+              value={settings.longBreakInterval}
+              onChange={(e) => handleDurationChange('longBreakInterval', parseInt(e.target.value) || 4)}
+              className="w-16 px-2.5 py-1.5 bg-md-surface-container rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
+            />
+            <span className="text-xs text-md-on-surface-variant">cycles</span>
           </div>
         </div>
       </Card>
 
-      {/* 2. Automation & Transitions */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        <div className="flex items-center gap-2.5 pb-2 border-b border-md-outline-variant/20">
-          <Sparkles className="w-5 h-5 text-md-primary" />
-          <h3 className="text-base font-bold text-md-on-surface">Transitions & Automation</h3>
+      {/* 2. Automation Switches */}
+      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-md-secondary/10 text-md-secondary flex items-center justify-center">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-md-on-surface">Flow & Automation</h3>
+            <p className="text-xs text-md-on-surface-variant">
+              Continuous session pacing preferences
+            </p>
+          </div>
         </div>
 
-        <Switch
-          checked={settings.autoStartBreaks}
-          onChange={(checked) => {
-            updateSettings({ autoStartBreaks: checked });
-            showSaved();
-          }}
-          label="Auto-start Breaks"
-          description="Automatically trigger break countdown when a focus session concludes"
-        />
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-semibold text-md-on-surface">Auto-start Breaks</div>
+              <div className="text-xs text-md-on-surface-variant">
+                Automatically begin break countdown when a focus session completes
+              </div>
+            </div>
+            <Switch
+              checked={settings.autoStartBreaks}
+              onChange={(val) => {
+                updateSettings({ autoStartBreaks: val });
+                showSaved();
+              }}
+            />
+          </div>
 
-        <div className="border-t border-md-outline-variant/20" />
-
-        <Switch
-          checked={settings.autoStartPomodoros}
-          onChange={(checked) => {
-            updateSettings({ autoStartPomodoros: checked });
-            showSaved();
-          }}
-          label="Auto-start Focus Sessions"
-          description="Automatically start the next focus interval when break time finishes"
-        />
+          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
+            <div>
+              <div className="text-sm font-semibold text-md-on-surface">Auto-start Pomodoros</div>
+              <div className="text-xs text-md-on-surface-variant">
+                Automatically begin work interval when a break ends
+              </div>
+            </div>
+            <Switch
+              checked={settings.autoStartPomodoros}
+              onChange={(val) => {
+                updateSettings({ autoStartPomodoros: val });
+                showSaved();
+              }}
+            />
+          </div>
+        </div>
       </Card>
 
       {/* 3. Audio & Notifications */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        <div className="flex items-center gap-2.5 pb-2 border-b border-md-outline-variant/20">
-          <Volume2 className="w-5 h-5 text-md-primary" />
-          <h3 className="text-base font-bold text-md-on-surface">Audio Chimes & Alerts</h3>
+      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center">
+            <Volume2 className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-md-on-surface">Audio & Alerts</h3>
+            <p className="text-xs text-md-on-surface-variant">
+              Sound cues and desktop notification permissions
+            </p>
+          </div>
         </div>
 
-        <Switch
-          checked={settings.soundEnabled}
-          onChange={(checked) => {
-            updateSettings({ soundEnabled: checked });
-            showSaved();
-          }}
-          label="Sound Chime Feedback"
-          description="Plays synthesized harmonic chime upon interval completion"
-        />
-
-        {settings.soundEnabled && (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 bg-md-surface-container rounded-2xl">
-            <div className="flex flex-col">
-              <span className="text-xs font-bold text-md-on-surface">Volume Level</span>
-              <span className="text-[11px] text-md-on-surface-variant">
-                Adjust chime loudness ({Math.round(settings.soundVolume * 100)}%)
-              </span>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-semibold text-md-on-surface">Completion Sound</div>
+              <div className="text-xs text-md-on-surface-variant">
+                Gentle Tibetan bowl chime when an interval finishes
+              </div>
             </div>
             <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min="0.1"
-                max="1.0"
-                step="0.05"
-                value={settings.soundVolume}
-                onChange={(e) => {
-                  updateSettings({ soundVolume: parseFloat(e.target.value) });
-                }}
-                className="w-32 accent-md-primary cursor-pointer"
-              />
-              <Button size="sm" variant="tonal" onClick={handleTestSound}>
+              <button
+                onClick={handleTestSound}
+                className="text-xs font-semibold text-md-primary hover:underline"
+              >
                 Test Sound
-              </Button>
+              </button>
+              <Switch
+                checked={settings.soundEnabled}
+                onChange={(val) => {
+                  updateSettings({ soundEnabled: val });
+                  showSaved();
+                }}
+              />
             </div>
           </div>
-        )}
 
-        <div className="border-t border-md-outline-variant/20" />
-
-        <div className="flex items-center justify-between py-2">
-          <div className="flex items-center gap-3">
-            <Bell className="w-5 h-5 text-md-outline" />
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-md-on-surface">Desktop Notifications</span>
-              <span className="text-xs text-md-on-surface-variant">
-                Alerts when browser tab is running in the background
-              </span>
+          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
+            <div>
+              <div className="text-sm font-semibold text-md-on-surface">Desktop Notifications</div>
+              <div className="text-xs text-md-on-surface-variant">
+                Show system popup notification when backgrounded
+              </div>
             </div>
-          </div>
-          {notifications.hasPermission() ? (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
-              Enabled
-            </span>
-          ) : (
-            <Button size="sm" variant="tonal" onClick={handleRequestNotifications}>
-              Allow Notifications
+            <Button
+              variant={settings.notificationsEnabled ? 'tonal' : 'outlined'}
+              size="sm"
+              onClick={handleRequestNotifications}
+            >
+              <Bell className="w-3.5 h-3.5 mr-1.5" />
+              <span>{settings.notificationsEnabled ? 'Enabled' : 'Enable'}</span>
             </Button>
-          )}
+          </div>
         </div>
       </Card>
 
-      {/* 4. Danger Zone & Reset */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col">
-            <span className="text-sm font-bold text-md-on-surface">Reset Settings</span>
-            <span className="text-xs text-md-on-surface-variant">Restore default durations (25/5/25)</span>
-          </div>
-          <Button variant="outlined" size="sm" onClick={handleResetDefaults}>
-            <RotateCcw className="w-3.5 h-3.5 mr-1" />
-            Reset to Defaults
-          </Button>
-        </div>
-
-        <div className="border-t border-md-outline-variant/20" />
-
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col">
-            <span className="text-sm font-bold text-md-error">Clear Session History</span>
-            <span className="text-xs text-md-on-surface-variant">Erase completed focus session logs and reset statistics</span>
-          </div>
-          {resetConfirm ? (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleClearSessions}
-                className="px-3 py-1.5 rounded-full text-xs font-bold bg-md-error text-md-on-error hover:bg-red-700 transition-colors"
-              >
-                Yes, Clear
-              </button>
-              <button
-                onClick={() => setResetConfirm(false)}
-                className="px-2 py-1.5 rounded-full text-xs text-md-on-surface-variant hover:bg-md-surface-container"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <Button variant="outlined" size="sm" onClick={() => setResetConfirm(true)} className="border-md-error text-md-error hover:bg-md-error/5">
-              Clear History
-            </Button>
-          )}
-        </div>
-      </Card>
+      {/* 4. Restore Defaults */}
+      <div className="flex items-center justify-between pt-2">
+        <span className="text-xs text-md-on-surface-variant">
+          Reset preferences to their standard 25/5/25 presets
+        </span>
+        <Button
+          variant="text"
+          size="sm"
+          onClick={handleResetDefaults}
+          className="text-md-outline hover:text-md-on-surface"
+        >
+          <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+          <span>Reset Settings</span>
+        </Button>
+      </div>
     </div>
   );
 };

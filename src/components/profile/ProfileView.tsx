@@ -31,8 +31,6 @@ const GOOGLE_CLIENT_ID =
 
 export const ProfileView: React.FC = () => {
   const {
-    isDemoEnvironment,
-    reloadSampleData,
     auth,
     loginWithGoogle,
     logout,
@@ -168,7 +166,7 @@ export const ProfileView: React.FC = () => {
         }
 
         setPendingBackup({
-          version: parsed.version || '1.0.0',
+          version: parsed.version || '2.0.0',
           exportedAt: parsed.exportedAt || new Date().toISOString(),
           profile: parsed.profile,
           settings: parsed.settings,
@@ -224,35 +222,7 @@ export const ProfileView: React.FC = () => {
       {/* Title */}
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">User Profile & Data</h2>
-        <p className="text-xs text-md-on-surface-variant mt-0.5">
-          Personal identity, daily focus goals, and cross-device cloud synchronization.
-        </p>
       </div>
-
-      {/* Preview Environment Banner */}
-      {isDemoEnvironment && (
-        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 text-amber-900 dark:text-amber-200">
-            <Sparkles className="w-4 h-4 shrink-0 text-amber-600" />
-            <span>
-              <strong>Preview Mode Active</strong>: Sample focus sessions are loaded so you can test stats and goals. Production stays 100% clean.
-            </span>
-          </div>
-          <Button
-            variant="tonal"
-            size="sm"
-            className="text-xs shrink-0 self-end sm:self-auto bg-amber-500/15 text-amber-900 dark:text-amber-100 hover:bg-amber-500/25"
-            onClick={async () => {
-              await reloadSampleData();
-              setImportSuccessMessage('Sample focus data reloaded successfully!');
-              setTimeout(() => setImportSuccessMessage(null), 3000);
-            }}
-          >
-            <RotateCcw className="w-3.5 h-3.5 mr-1" />
-            Reload Demo Data
-          </Button>
-        </div>
-      )}
 
       {/* Profile Header Card */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
@@ -263,7 +233,12 @@ export const ProfileView: React.FC = () => {
               {profile.avatarEmoji ? (
                 profile.avatarEmoji
               ) : profile.avatarUrl ? (
-                <img src={profile.avatarUrl} alt="User Avatar" className="w-full h-full object-cover" />
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.displayName}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
               ) : (
                 <User className="w-10 h-10 text-md-primary" />
               )}
@@ -290,13 +265,9 @@ export const ProfileView: React.FC = () => {
                   <span className="inline-flex items-center gap-1 text-xs text-md-on-surface-variant font-mono mt-0.5">
                     <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {auth.user.email}
                   </span>
-                ) : isDemoEnvironment ? (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-500/15 px-2 py-0.5 rounded-full mt-0.5">
-                    <Sparkles className="w-3 h-3" /> Preview Test Account
-                  </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-xs font-medium text-md-primary mt-0.5">
-                    <Sparkles className="w-3 h-3" /> Local Focus Account
+                    <Sparkles className="w-3 h-3" /> Focus Account
                   </span>
                 )}
               </div>
@@ -373,8 +344,17 @@ export const ProfileView: React.FC = () => {
           <div className="flex flex-col gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-600 shrink-0">
-                  <Cloud className="w-6 h-6" />
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center overflow-hidden shrink-0">
+                  {auth.user.avatarUrl ? (
+                    <img
+                      src={auth.user.avatarUrl}
+                      alt="Google Avatar"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <Cloud className="w-6 h-6 text-emerald-600" />
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -569,7 +549,7 @@ export const ProfileView: React.FC = () => {
                   onClick={() => setEditEmoji('')}
                   className="text-xs text-md-primary hover:underline font-medium"
                 >
-                  Reset to default icon
+                  {profile.avatarUrl ? 'Reset to Google photo' : 'Reset to default icon'}
                 </button>
               )}
             </div>
@@ -577,14 +557,23 @@ export const ProfileView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setEditEmoji('')}
-                title="Default Icon"
-                className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${
+                title={profile.avatarUrl ? 'Google Account Photo' : 'Default Icon'}
+                className={`w-10 h-10 rounded-2xl flex items-center justify-center overflow-hidden transition-all ${
                   !editEmoji
-                    ? 'bg-md-primary/15 border-2 border-md-primary text-md-primary scale-105'
+                    ? 'ring-2 ring-md-primary scale-105'
                     : 'bg-md-surface-container-highest hover:bg-md-surface-variant text-md-outline'
                 }`}
               >
-                <User className="w-5 h-5" />
+                {profile.avatarUrl ? (
+                  <img
+                    src={profile.avatarUrl}
+                    alt="Google Profile"
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <User className="w-5 h-5" />
+                )}
               </button>
               {AVATAR_EMOJI_OPTIONS.map((emoji) => (
                 <button

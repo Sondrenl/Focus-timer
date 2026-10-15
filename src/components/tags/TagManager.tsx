@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon, CheckCircle2 } from 'lucide-react';
+import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Tag } from '../../types/tag';
 import { Button } from '../ui/Button';
 import { TagFormModal } from './TagFormModal';
-import { formatFriendlyDate } from '../../utils/dates';
 import { clsx } from 'clsx';
 
 export const TagManager: React.FC = () => {
@@ -40,9 +39,6 @@ export const TagManager: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-2">
         <div>
           <h2 className="text-2xl font-bold text-md-on-surface">Tags</h2>
-          <p className="text-xs text-md-on-surface-variant mt-0.5">
-            Organize focus sessions into projects, clients, or learning domains.
-          </p>
         </div>
         <Button onClick={handleCreateNew} variant="filled" className="shadow-xs">
           <Plus className="w-4 h-4 mr-1.5" />
@@ -61,8 +57,8 @@ export const TagManager: React.FC = () => {
               : 'border-transparent text-md-on-surface-variant hover:text-md-on-surface'
           )}
         >
-          <span>Active Tags</span>
-          <span className="px-2 py-0.5 rounded-full text-xs bg-md-primary-container text-md-on-primary-container">
+          <span>Active</span>
+          <span className="text-xs px-2 py-0.5 rounded-full bg-md-surface-container font-medium">
             {activeTags.length}
           </span>
         </button>
@@ -76,115 +72,101 @@ export const TagManager: React.FC = () => {
               : 'border-transparent text-md-on-surface-variant hover:text-md-on-surface'
           )}
         >
-          <span>Archived Tags</span>
-          <span className="px-2 py-0.5 rounded-full text-xs bg-md-surface-container-high text-md-on-surface-variant">
+          <span>Archived</span>
+          <span className="text-xs px-2 py-0.5 rounded-full bg-md-surface-container font-medium">
             {archivedTags.length}
           </span>
         </button>
       </div>
 
-      {/* Tags Grid / List */}
+      {/* Tags List */}
       {currentList.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-12 bg-md-surface-container-low rounded-3xl border border-dashed border-md-outline-variant/40 text-center">
-          <TagIcon className="w-12 h-12 text-md-outline/60 mb-3" />
+        <div className="flex flex-col items-center justify-center py-16 text-center border-2 border-dashed border-md-outline-variant/40 rounded-3xl p-6">
+          <div className="w-12 h-12 rounded-2xl bg-md-surface-container flex items-center justify-center text-md-outline mb-3">
+            {activeTab === 'active' ? <TagIcon className="w-6 h-6" /> : <Archive className="w-6 h-6" />}
+          </div>
           <h3 className="text-base font-bold text-md-on-surface">
             {activeTab === 'active' ? 'No active tags yet' : 'No archived tags'}
           </h3>
           <p className="text-xs text-md-on-surface-variant max-w-sm mt-1 mb-4">
             {activeTab === 'active'
               ? 'Create tags to organize and track focus time across different activities.'
-              : 'Archived tags are soft-deleted from selector dropdowns but preserve historical analytics.'}
+              : 'Archived tags are hidden from the timer while keeping your stats intact.'}
           </p>
           {activeTab === 'active' && (
             <Button onClick={handleCreateNew} variant="tonal" size="sm">
-              <Plus className="w-4 h-4 mr-1" />
-              Create First Tag
+              <Plus className="w-4 h-4 mr-1.5" />
+              <span>Create First Tag</span>
             </Button>
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {currentList.map((tag) => {
             const count = getSessionCountForTag(tag.id);
-            const isDeleting = deleteConfirmId === tag.id;
-
             return (
               <div
                 key={tag.id}
-                className="flex items-center justify-between p-4 bg-md-surface-container-low border border-md-outline-variant/30 rounded-3xl shadow-xs hover:shadow-elevation-1 transition-all"
+                className="group p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 hover:border-md-primary/40 transition-all flex items-center justify-between shadow-xs hover:shadow-elevation-1"
               >
-                {/* Left Tag Meta */}
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div
-                    className="w-5 h-5 rounded-full shrink-0 shadow-xs"
-                    style={{ backgroundColor: tag.color }}
-                  />
+                    className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
+                    style={{ backgroundColor: `${tag.color}25`, border: `1.5px solid ${tag.color}` }}
+                  >
+                    <span
+                      className="w-3.5 h-3.5 rounded-full"
+                      style={{ backgroundColor: tag.color }}
+                    />
+                  </div>
+
                   <div className="min-w-0">
                     <h4 className="text-sm font-bold text-md-on-surface truncate">
                       {tag.name}
                     </h4>
-                    <div className="flex items-center gap-2 text-xs text-md-on-surface-variant mt-0.5">
-                      <span>{count} session{count === 1 ? '' : 's'}</span>
-                      <span>•</span>
-                      <span>{formatFriendlyDate(tag.createdAt)}</span>
-                    </div>
+                    <p className="text-[11px] text-md-on-surface-variant">
+                      {count} focus session{count === 1 ? '' : 's'} logged
+                    </p>
                   </div>
                 </div>
 
-                {/* Right Actions */}
-                <div className="flex items-center gap-1 shrink-0 ml-3">
+                {/* Actions */}
+                <div className="flex items-center gap-1">
                   {activeTab === 'active' ? (
                     <>
                       <button
                         onClick={() => handleEdit(tag)}
-                        className="p-2 rounded-full text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface transition-colors"
+                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container transition-colors"
                         title="Edit Tag"
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
+
                       <button
                         onClick={() => archiveTag(tag.id)}
-                        className="p-2 rounded-full text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-primary transition-colors"
-                        title="Archive Tag (Soft Delete)"
+                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
+                        title="Archive Tag (Keeps stats intact)"
                       >
                         <Archive className="w-4 h-4" />
                       </button>
                     </>
                   ) : (
                     <>
-                      {isDeleting ? (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => deleteTag(tag.id)}
-                            className="px-2.5 py-1 rounded-full text-xs font-semibold bg-md-error text-md-on-error hover:bg-red-700 transition-colors"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirmId(null)}
-                            className="px-2 py-1 rounded-full text-xs text-md-on-surface-variant hover:bg-md-surface-container"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => unarchiveTag(tag.id)}
-                            className="p-2 rounded-full text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-primary transition-colors"
-                            title="Restore Tag"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirmId(tag.id)}
-                            className="p-2 rounded-full text-md-on-surface-variant hover:bg-md-error-container hover:text-md-error transition-colors"
-                            title="Permanently Delete Tag"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </>
-                      )}
+                      <button
+                        onClick={() => unarchiveTag(tag.id)}
+                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                        title="Restore Tag"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => setDeleteConfirmId(tag.id)}
+                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
+                        title="Delete Permanently"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </>
                   )}
                 </div>
@@ -194,24 +176,42 @@ export const TagManager: React.FC = () => {
         </div>
       )}
 
-      {/* Info Card on Archiving */}
-      <div className="p-4 bg-md-surface-container rounded-2xl border border-md-outline-variant/20 text-xs text-md-on-surface-variant flex items-start gap-3">
-        <CheckCircle2 className="w-5 h-5 text-md-primary shrink-0 mt-0.5" />
-        <div>
-          <span className="font-semibold text-md-on-surface block mb-0.5">
-            Archival Preservation
-          </span>
-          Archived tags are safely removed from the active session picker, but your historical sessions, logs, and total focus statistics will always retain full attribution.
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-sm w-full border border-md-outline-variant/30 shadow-elevation-3">
+            <h3 className="text-base font-bold text-md-on-surface mb-2">Delete Tag Permanently?</h3>
+            <p className="text-xs text-md-on-surface-variant mb-5 leading-relaxed">
+              This will permanently delete this tag. Completed sessions associated with this tag will become "Unassigned".
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="text"
+                size="sm"
+                onClick={() => setDeleteConfirmId(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="filled"
+                size="sm"
+                className="bg-md-error text-white hover:bg-red-700"
+                onClick={async () => {
+                  await deleteTag(deleteConfirmId);
+                  setDeleteConfirmId(null);
+                }}
+              >
+                Delete Tag
+              </Button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Modal */}
+      {/* Create / Edit Tag Modal */}
       <TagFormModal
         isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setTagToEdit(null);
-        }}
+        onClose={() => setIsModalOpen(false)}
         tagToEdit={tagToEdit}
       />
     </div>
