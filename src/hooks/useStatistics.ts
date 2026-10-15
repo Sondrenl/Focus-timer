@@ -1,3 +1,4 @@
+import { isProduction } from "../utils/environment";
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Tag } from '../types/tag';
@@ -132,6 +133,7 @@ export function useStatistics() {
     // Filter work sessions within period
     const filteredSessions = sessions.filter((s) => {
       if (s.sessionType !== 'WORK') return false;
+      if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) return false;
       const d = new Date(s.completedAt);
       return d >= startDate && d <= endDate;
     });

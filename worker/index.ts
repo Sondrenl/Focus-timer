@@ -323,7 +323,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           is_archived: number;
           created_at: string;
         }>(),
-        env.DB.prepare('SELECT * FROM sessions WHERE user_id = ? ORDER BY completed_at DESC').bind(currentUserId).all<{
+        env.DB.prepare('SELECT * FROM sessions WHERE user_id = ? AND id NOT LIKE \x27sample-session-%\x27 AND id NOT LIKE \x27seed-session-%\x27 ORDER BY completed_at DESC').bind(currentUserId).all<{
           id: string;
           tag_id: string | null;
           session_type: string;
@@ -519,6 +519,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       // 4. Upsert Sessions
       if (Array.isArray(body.sessions) && body.sessions.length > 0) {
         for (const session of body.sessions) {
+          if (session.id.startsWith('sample-session-') || session.id.startsWith('seed-session-')) continue;
           const effectiveTagId = session.tagId && deletedSet.has(session.tagId) ? null : session.tagId;
           statements.push(
             env.DB.prepare(

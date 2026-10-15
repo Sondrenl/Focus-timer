@@ -29,7 +29,9 @@ export function isProduction(): boolean {
     return hostname === 'focus-timer.sondrelassen.workers.dev';
   }
 
-  // Default to false (preview/staging) for unknown branches or custom preview domains
+  if (import.meta.env.PROD && !hostname.includes('preview') && !hostname.includes('stage') && !hostname.includes('dev')) {
+    return true;
+  }
   return false;
 }
 

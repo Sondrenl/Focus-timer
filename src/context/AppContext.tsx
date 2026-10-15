@@ -11,7 +11,7 @@ import { ProfileRepository } from '../services/repository/ProfileRepository';
 import { AuthService } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
-import { isPreviewOrDev } from '../utils/environment';
+import { isPreviewOrDev, isProduction } from '../utils/environment';
 
 interface AppContextValue {
   // Environment
@@ -105,7 +105,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
         tags: currentTags,
         deletedTagIds: Array.from(deletedTagIds),
-        sessions: currentSessions,
+        sessions: currentSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')),
         settings: currentSettings,
       });
 
@@ -139,9 +139,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
             sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
           });
-          const finalSessions = Array.from(sessionMap.values()).sort(
+          let finalSessions = Array.from(sessionMap.values()).sort(
             (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
           );
+          if (isProduction()) {
+            finalSessions = finalSessions.filter(
+              (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
+            );
+          }
           await sessionRepository.saveAll(finalSessions);
           setSessions(finalSessions);
         }
@@ -247,10 +252,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         settingsRepository.get(),
       ]);
 
+      const cleanSessions = isProduction()
+        ? loadedSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
+        : loadedSessions;
       setProfile(loadedProfile);
       setTags(loadedTags);
-      setSessions(loadedSessions);
+      setSessions(cleanSessions);
       setSettings(loadedSettings);
+      if (isProduction() && cleanSessions.length !== loadedSessions.length) {
+        await sessionRepository.saveAll(cleanSessions);
+      }
 
       const firstActive = loadedTags.find((t) => !t.isArchived);
       if (firstActive) {
@@ -405,6 +416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const reloadSampleData = async (): Promise<void> => {
+    if (isProduction()) return;
     const samples = await sessionRepository.loadSampleData();
     setSessions(samples);
   };
@@ -421,13 +433,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Data Operations (Export / Import / Reset)
   const exportBackup = (): BackupData => {
+    const cleanSessions = isProduction()
+      ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
+      : sessions;
     return {
       version: '2.0.0',
       exportedAt: new Date().toISOString(),
       profile,
       settings,
       tags,
-      sessions,
+      sessions: cleanSessions,
     };
   };
 

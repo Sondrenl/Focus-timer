@@ -67,10 +67,14 @@ export class SessionRepository implements ISessionRepository {
   }
 
   async saveAll(sessions: CompletedSession[]): Promise<void> {
-    this.storage.setItem(SESSIONS_STORAGE_KEY, sessions);
+    const toSave = isProduction()
+      ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
+      : sessions;
+    this.storage.setItem(SESSIONS_STORAGE_KEY, toSave);
   }
 
   async loadSampleData(): Promise<CompletedSession[]> {
+    if (isProduction()) return [];
     const sample = generateSampleSessions();
     this.storage.setItem(SESSIONS_STORAGE_KEY, sample);
     return sample;
