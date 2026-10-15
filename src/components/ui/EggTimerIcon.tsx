@@ -5,7 +5,7 @@ interface EggTimerIconProps extends React.SVGProps<SVGSVGElement> {
 }
 
 /**
- * Custom SVG icon representing a classic Pomodoro tomato with stem and calyx
+ * Custom SVG line-art icon representing a mechanical Pomodoro tomato timer
  */
 export const EggTimerIcon: React.FC<EggTimerIconProps> = ({
   className = 'w-6 h-6',
@@ -14,31 +14,36 @@ export const EggTimerIcon: React.FC<EggTimerIconProps> = ({
   return (
     <svg
       viewBox="0 0 24 24"
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       className={className}
       {...props}
     >
-      {/* Plump organic tomato body */}
-      <path
-        d="M12 5.5C8.8 4 3.5 5.8 3.2 12.2C3 18.2 7.2 21.5 12 21.5C16.8 21.5 21 18.2 20.8 12.2C20.5 5.8 15.2 4 12 5.5Z"
-        fill="currentColor"
-      />
+      {/* Tomato timer stem */}
+      <path d="M12 6.2C12 4.2 13 2.8 15.2 2.2" />
 
-      {/* Curved tomato stem */}
-      <path
-        d="M12 6C12 3.8 12.8 2 14.8 1.5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        fill="none"
-      />
+      {/* Tomato calyx leaves in line style */}
+      <path d="M12 6.5L8.5 4.5" />
+      <path d="M12 6.5L15.5 4.5" />
+      <path d="M12 6.5L6.5 6.8" />
+      <path d="M12 6.5L17.5 6.8" />
 
-      {/* Calyx leaves radiating across the top dip */}
-      <path
-        d="M12 6L14 3.8L12.5 5.8L16 4.8L13 6.8L14.8 8.5L12 7.2L9.2 8.5L11 6.8L8 4.8L11.5 5.8L10 3.8L12 6Z"
-        fill="currentColor"
-      />
+      {/* Tomato timer upper body (rotatable dome) with organic tomato curve */}
+      <path d="M3.8 13C3.5 9 6.8 6.5 10 6.5C11 6.5 11.5 6.8 12 7C12.5 6.8 13 6.5 14 6.5C17.2 6.5 20.5 9 20.2 13" />
+
+      {/* Tomato timer lower base */}
+      <path d="M3.8 13C3.5 17.5 7.2 20.5 12 20.5C16.8 20.5 20.5 17.5 20.2 13" />
+
+      {/* Mechanical dial seam line */}
+      <line x1="3.8" y1="13" x2="20.2" y2="13" />
+
+      {/* Calibration tick marks on the rotating dial */}
+      <line x1="12" y1="11" x2="12" y2="15" />
+      <line x1="8" y1="13" x2="8" y2="15.5" />
+      <line x1="16" y1="13" x2="16" y2="15.5" />
     </svg>
   );
 };

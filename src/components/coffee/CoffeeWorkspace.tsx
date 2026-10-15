@@ -8,6 +8,7 @@ export const CoffeeWorkspace: React.FC = () => {
   const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags } = useApp();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [viewDate, setViewDate] = useState<Date>(() => new Date());
+  const [feedbackToast, setFeedbackToast] = useState<{ text: string; color: string } | null>(null);
 
   const viewDateKey = toDateKey(viewDate);
   const isToday = viewDateKey === toDateKey(new Date());
@@ -17,18 +18,74 @@ export const CoffeeWorkspace: React.FC = () => {
     return coffeeCups.filter((c) => c.date === viewDateKey);
   }, [coffeeCups, viewDateKey]);
 
-  const count = cupsForDate.length;
+  const totalCount = cupsForDate.length;
 
   const currentTag = activeTags.find((t) => t.id === selectedTagId);
-  const accentColor = currentTag ? currentTag.color : '#8D6E63'; // Warm coffee tone by default
+  const currentTagColor = currentTag ? currentTag.color : '#8D6E63';
+  const currentTagName = currentTag ? currentTag.name : 'No Tag';
+
+  // Compute breakdown of cups by tag for this date
+  const tagBreakdown = useMemo(() => {
+    const counts = new Map<string | null, number>();
+    cupsForDate.forEach((c) => {
+      const tid = c.tagId || null;
+      counts.set(tid, (counts.get(tid) || 0) + 1);
+    });
+
+    const list: { tagId: string | null; name: string; color: string; count: number }[] = [];
+    counts.forEach((count, tid) => {
+      if (tid === null) {
+        list.push({ tagId: null, name: 'No Tag', color: '#8D6E63', count });
+      } else {
+        const found = activeTags.find((t) => t.id === tid);
+        list.push({
+          tagId: tid,
+          name: found ? found.name : 'Unknown Tag',
+          color: found ? found.color : '#9E9E9E',
+          count,
+        });
+      }
+    });
+
+    return list.sort((a, b) => b.count - a.count);
+  }, [cupsForDate, activeTags]);
+
+  const showFeedback = (text: string, color: string) => {
+    setFeedbackToast({ text, color });
+    setTimeout(() => {
+      setFeedbackToast((prev) => (prev?.text === text ? null : prev));
+    }, 2200);
+  };
 
   const handleAdd = async () => {
     await addCoffeeCup(selectedTagId, viewDateKey);
+    showFeedback(`+1 Cup added (${currentTagName})`, currentTagColor);
   };
 
   const handleRemove = async () => {
-    if (count <= 0) return;
-    await removeCoffeeCup(viewDateKey, selectedTagId);
+    if (totalCount <= 0) return;
+
+    // If selectedTagId has cups logged on this date, remove that specific tag cup
+    const cupsOfSelectedTag = cupsForDate.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
+    let tagToRemove = selectedTagId;
+
+    if (cupsOfSelectedTag.length === 0) {
+      // Fallback: remove the latest cup of any tag
+      const latestCup = cupsForDate[cupsForDate.length - 1];
+      tagToRemove = latestCup ? latestCup.tagId : null;
+    }
+
+    const removedTagName = tagToRemove
+      ? activeTags.find((t) => t.id === tagToRemove)?.name || 'Tagged'
+      : 'No Tag';
+    const removedColor = tagToRemove
+      ? activeTags.find((t) => t.id === tagToRemove)?.color || '#8D6E63'
+      : '#8D6E63';
+
+    const success = await removeCoffeeCup(viewDateKey, tagToRemove);
+    if (success) {
+      showFeedback(`-1 Cup removed (${removedTagName})`, removedColor);
+    }
   };
 
   const goToPrevDay = () => {
@@ -53,7 +110,7 @@ export const CoffeeWorkspace: React.FC = () => {
 
   return (
     <div className="w-full max-w-xl mx-auto flex flex-col items-center justify-center py-6 px-4">
-      {/* Top Tag Selector for Coffee */}
+      {/* 1. Top Tag Selector for Next Cup */}
       <div className="w-full flex flex-col items-center mb-4">
         <CoffeeTagSelector
           selectedTagId={selectedTagId}
@@ -61,7 +118,7 @@ export const CoffeeWorkspace: React.FC = () => {
         />
       </div>
 
-      {/* Date Switcher */}
+      {/* 2. Date Switcher */}
       <div className="flex items-center gap-2 mb-4 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 text-xs font-semibold shadow-xs">
         <button
           onClick={goToPrevDay}
@@ -93,80 +150,130 @@ export const CoffeeWorkspace: React.FC = () => {
         </button>
       </div>
 
-      {/* Central Coffee Hero Circle (matches TimerDisplay layout) */}
-      <div className="relative flex flex-col items-center justify-center my-4 select-none">
+      {/* 3. Central Coffee Hero Circle (Permanent Coffee Theme - does not change to tag color) */}
+      <div className="relative flex flex-col items-center justify-center my-2 select-none">
         <div className="relative w-72 h-72 md:w-80 md:h-80 flex items-center justify-center">
-          {/* Subtle Outer Track Ring */}
-          <div
-            className="w-full h-full rounded-full border-[10px] flex items-center justify-center transition-all duration-300 shadow-sm"
-            style={{
-              borderColor: `${accentColor}30`,
-              backgroundColor: `${accentColor}08`,
-            }}
-          >
+          {/* Subtle Neutral Coffee Outer Track Ring */}
+          <div className="w-full h-full rounded-full border-[10px] border-[#795548]/25 bg-[#795548]/05 flex items-center justify-center transition-all duration-300 shadow-sm">
             {/* Center Content Stack */}
-            <div className="flex flex-col items-center justify-center text-center">
+            <div className="flex flex-col items-center justify-center text-center px-4">
               {/* Coffee Icon */}
-              <div
-                className="w-16 h-16 rounded-3xl flex items-center justify-center mb-2 shadow-xs transition-transform duration-300 hover:scale-105"
-                style={{
-                  backgroundColor: `${accentColor}20`,
-                  color: accentColor,
-                }}
-              >
-                <Coffee className="w-8 h-8" />
+              <div className="w-14 h-14 rounded-2xl bg-[#795548]/15 text-[#795548] flex items-center justify-center mb-1.5 shadow-xs">
+                <Coffee className="w-7 h-7" />
               </div>
 
-              {/* Number of Cups */}
+              {/* Total Cups Number */}
               <div className="text-6xl md:text-7xl font-extrabold text-md-on-surface tracking-tighter tabular-nums font-mono drop-shadow-xs">
-                {count}
+                {totalCount}
               </div>
 
-              <div className="text-sm font-bold text-md-on-surface-variant mt-1">
-                {count === 1 ? 'cup' : 'cups'} {isToday ? 'today' : ''}
+              <div className="text-xs font-bold text-md-on-surface-variant mt-0.5 uppercase tracking-wider">
+                {totalCount === 1 ? 'Cup Total' : 'Cups Total'}
               </div>
             </div>
           </div>
         </div>
+
+        {/* Floating feedback toast */}
+        {feedbackToast && (
+          <div className="absolute -top-3 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-md-surface-container-highest border border-md-outline-variant/40 shadow-elevation-2 text-xs font-bold animate-in fade-in zoom-in-95 duration-150">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs"
+              style={{ backgroundColor: feedbackToast.color }}
+            />
+            <span className="text-md-on-surface">{feedbackToast.text}</span>
+          </div>
+        )}
       </div>
 
-      {/* Coffee Controls (matches TimerControls layout) */}
-      <div className="flex items-center justify-center gap-6 mt-4">
+      {/* 4. Tag Breakdown Chips for Today */}
+      <div className="w-full flex flex-col items-center mt-2 mb-4">
+        {tagBreakdown.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
+            {tagBreakdown.map((item) => {
+              const isSelected = selectedTagId === item.tagId;
+              return (
+                <button
+                  key={item.name}
+                  onClick={() => setSelectedTagId(item.tagId)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all border ${
+                    isSelected
+                      ? 'border-md-primary bg-md-primary/10 shadow-xs'
+                      : 'border-md-outline-variant/30 bg-md-surface-container hover:bg-md-surface-container-high'
+                  }`}
+                  title={`Click to set next cup tag to ${item.name}`}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="text-md-on-surface">{item.name}:</span>
+                  <span className="font-bold text-md-on-surface">{item.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <span className="text-xs text-md-outline">
+            No coffee logged for this day yet.
+          </span>
+        )}
+      </div>
+
+      {/* 5. Visual Cup Tray (Color-coded cups logged today) */}
+      {totalCount > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-sm mb-4 px-2 py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+          {cupsForDate.map((cup, idx) => {
+            const cupTag = activeTags.find((t) => t.id === cup.tagId);
+            const cupColor = cupTag ? cupTag.color : '#8D6E63';
+            const cupName = cupTag ? cupTag.name : 'No Tag';
+
+            return (
+              <div
+                key={cup.id}
+                className="flex items-center justify-center w-7 h-7 rounded-xl transition-transform hover:scale-115 cursor-help"
+                style={{ backgroundColor: `${cupColor}20` }}
+                title={`Cup #${idx + 1}: ${cupName}`}
+              >
+                <Coffee className="w-4 h-4" style={{ color: cupColor }} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 6. Controls */}
+      <div className="flex items-center justify-center gap-6 mt-1">
         {/* Left: Minus Button */}
         <button
           onClick={handleRemove}
-          disabled={count <= 0}
-          title="Remove a cup"
+          disabled={totalCount <= 0}
+          title="Remove cup"
           className={`flex items-center justify-center w-14 h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
-            count <= 0
+            totalCount <= 0
               ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed'
               : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
           }`}
-          aria-label="Remove a cup of coffee"
+          aria-label="Remove cup of coffee"
         >
           <Minus className="w-6 h-6" />
         </button>
 
-        {/* Center: Add Button (Large Hero M3 FAB) */}
+        {/* Center: Add Button (Hero FAB showing next cup tag indicator) */}
         <button
           onClick={handleAdd}
-          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 text-lg group"
-          style={{ backgroundColor: accentColor }}
-          aria-label="Add a cup of coffee"
+          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
+          style={{ backgroundColor: currentTagColor }}
+          aria-label={`Add cup of coffee with tag ${currentTagName}`}
+          title={`Add cup (${currentTagName})`}
         >
           <Plus className="w-9 h-9 stroke-[2.5]" />
         </button>
       </div>
 
-      {/* Helpful Hint */}
-      <div className="text-xs text-md-outline mt-6 select-none text-center">
-        {currentTag ? (
-          <span>
-            Logging for <span className="font-semibold text-md-on-surface">{currentTag.name}</span>
-          </span>
-        ) : (
-          <span>Logging without a tag</span>
-        )}
+      {/* Bottom Cue */}
+      <div className="text-[11px] text-md-outline mt-5 select-none text-center">
+        Tapping <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> logs a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
       </div>
     </div>
   );

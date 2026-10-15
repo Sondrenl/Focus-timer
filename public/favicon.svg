@@ -1,41 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="none">
-  <defs>
-    <linearGradient id="pomodoroRed" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FF5252"/>
-      <stop offset="100%" stop-color="#D32F2F"/>
-    </linearGradient>
-    <linearGradient id="pomodoroStem" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4CAF50"/>
-      <stop offset="100%" stop-color="#2E7D32"/>
-    </linearGradient>
-  </defs>
+  <!-- Tomato timer stem -->
+  <path d="M16 8.5C16 5.8 17.5 3.8 20.5 3" stroke="#D32F2F" stroke-width="2.2" stroke-linecap="round"/>
 
-  <!-- Plump Tomato Body (Transparent Background - No Rect/Box) -->
-  <path
-    d="M16 8C11.5 5.5 4 8 4 17C4 24.5 10 28.5 16 28.5C22 28.5 28 24.5 28 17C28 8 20.5 5.5 16 8Z"
-    fill="url(#pomodoroRed)"
-  />
+  <!-- Tomato calyx leaves -->
+  <path d="M16 9L11.5 6.2" stroke="#2E7D32" stroke-width="2" stroke-linecap="round"/>
+  <path d="M16 9L20.5 6.2" stroke="#2E7D32" stroke-width="2" stroke-linecap="round"/>
+  <path d="M16 9L8.8 9.5" stroke="#2E7D32" stroke-width="2" stroke-linecap="round"/>
+  <path d="M16 9L23.2 9.5" stroke="#2E7D32" stroke-width="2" stroke-linecap="round"/>
 
-  <!-- Subtle Specular Reflection / Highlight Curve -->
-  <path
-    d="M8.5 14C8.5 11 11 9.5 13.5 9"
-    stroke="#FFFFFF"
-    stroke-width="1.8"
-    stroke-linecap="round"
-    opacity="0.45"
-  />
+  <!-- Tomato timer upper dome -->
+  <path d="M5 17.5C4.6 12 9 8.8 13.5 8.8C14.8 8.8 15.5 9.2 16 9.5C16.5 9.2 17.2 8.8 18.5 8.8C23 8.8 27.4 12 27 17.5" stroke="#D32F2F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <!-- Curved Tomato Stem -->
-  <path
-    d="M16 8.5C16 5.2 17.5 3 20.5 2.2"
-    stroke="url(#pomodoroStem)"
-    stroke-width="2.4"
-    stroke-linecap="round"
-  />
+  <!-- Tomato timer lower base -->
+  <path d="M5 17.5C4.6 23.5 9.5 27.5 16 27.5C22.5 27.5 27.4 23.5 27 17.5" stroke="#D32F2F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <!-- 5-Pointed Tomato Calyx Leaves -->
-  <path
-    d="M16 8.5L18.8 4.8L16.8 7.8L21.5 6.5L17.5 9.2L19.5 11.5L16 9.8L12.5 11.5L14.5 9.2L10.5 6.5L15.2 7.8L13.2 4.8L16 8.5Z"
-    fill="url(#pomodoroStem)"
-  />
+  <!-- Dial seam line -->
+  <line x1="5" y1="17.5" x2="27" y2="17.5" stroke="#D32F2F" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Calibration dial tick marks -->
+  <line x1="16" y1="15" x2="16" y2="20" stroke="#D32F2F" stroke-width="2.2" stroke-linecap="round"/>
+  <line x1="10.5" y1="17.5" x2="10.5" y2="21" stroke="#D32F2F" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="21.5" y1="17.5" x2="21.5" y2="21" stroke="#D32F2F" stroke-width="1.8" stroke-linecap="round"/>
 </svg>
