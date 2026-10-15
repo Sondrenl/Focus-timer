@@ -287,16 +287,29 @@ export const ProfileView: React.FC = () => {
               </Button>
             </div>
 
-            {/* Daily Goal Progress Bar */}
+            {/* Daily Goal Progress Bar with clear Edit Target button */}
             <div className="mt-4 p-3.5 rounded-2xl bg-md-surface-container/70 border border-md-outline-variant/15">
               <div className="flex items-center justify-between text-xs font-semibold mb-1.5">
                 <span className="flex items-center gap-1.5 text-md-on-surface">
                   <Target className="w-4 h-4 text-md-primary" />
                   Today's Focus Target
                 </span>
-                <span className="text-md-on-surface-variant font-mono">
-                  {todayFocusMinutes}m / {profile.dailyGoalMinutes}m ({goalProgressPercent}%)
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-md-on-surface-variant font-mono">
+                    {todayFocusMinutes}m / {profile.dailyGoalMinutes}m ({goalProgressPercent}%)
+                  </span>
+                  <button
+                    onClick={() => {
+                      setEditName(profile.displayName);
+                      setEditEmoji(profile.avatarEmoji);
+                      setEditGoalMinutes(profile.dailyGoalMinutes);
+                      setIsEditingProfile(true);
+                    }}
+                    className="text-xs font-bold text-md-primary hover:underline ml-1 px-1.5 py-0.5 rounded-lg bg-md-primary/10"
+                  >
+                    Edit Goal
+                  </button>
+                </div>
               </div>
 
               <div className="w-full h-2.5 rounded-full bg-md-surface-variant overflow-hidden">
@@ -319,174 +332,140 @@ export const ProfileView: React.FC = () => {
                 <span className="block font-bold text-sm text-md-on-surface">
                   {formatDurationHoursMins(totalFocusSeconds)}
                 </span>
-                <span className="text-[11px]">Total Focus</span>
+                Total Focus Time
               </div>
               <div>
                 <span className="block font-bold text-sm text-md-on-surface">
                   {sessions.filter((s) => s.sessionType === 'WORK').length}
                 </span>
-                <span className="text-[11px]">Sessions</span>
+                Pomodoros Completed
               </div>
               <div>
                 <span className="block font-bold text-sm text-md-on-surface">
-                  {tags.filter((t) => !t.isArchived).length}
+                  {tags.length}
                 </span>
-                <span className="text-[11px]">Active Tags</span>
+                Tags Created
               </div>
             </div>
           </div>
         </div>
       </Card>
 
-      {/* Cloud Sync & Google Authentication Card */}
+      {/* Cloud Account Sync Card */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        {auth.isAuthenticated && auth.user ? (
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center overflow-hidden shrink-0">
-                  {auth.user.avatarUrl ? (
-                    <img
-                      src={auth.user.avatarUrl}
-                      alt="Google Avatar"
-                      className="w-full h-full object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <Cloud className="w-6 h-6 text-emerald-600" />
-                  )}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-base font-bold text-md-on-surface">Cloud Account Connected</h4>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-700">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Active Sync
-                    </span>
-                  </div>
-                  <p className="text-xs text-md-on-surface-variant">
-                    Logged in as <strong>{auth.user.email}</strong>. Data is synchronized across your devices.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <Button
-                  variant="outlined"
-                  size="sm"
-                  onClick={() => syncWithCloud()}
-                  disabled={auth.isSyncing}
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${auth.isSyncing ? 'animate-spin' : ''}`} />
-                  {auth.isSyncing ? 'Syncing...' : 'Sync Now'}
-                </Button>
-
-                <Button
-                  variant="text"
-                  size="sm"
-                  className="text-md-on-surface-variant hover:text-md-error"
-                  onClick={logout}
-                  title="Disconnect account"
-                >
-                  <LogOut className="w-3.5 h-3.5 mr-1.5" />
-                  Sign Out
-                </Button>
-              </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center">
+              <Cloud className="w-5 h-5" />
             </div>
-
-            {/* Sync Status Banner */}
-            <div className="p-3 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-2 text-md-on-surface-variant">
-                <ShieldCheck className="w-4 h-4 text-md-primary" />
-                <span>
-                  {auth.lastSyncedAt
-                    ? `Last synchronized: ${new Date(auth.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
-                    : 'Synced with Cloudflare D1'}
-                </span>
-              </div>
-              <span className="text-[11px] text-md-on-surface-variant/80">
-                Offline-capable: Changes save locally and sync when connected.
-              </span>
+            <div>
+              <h3 className="text-base font-bold text-md-on-surface">Cloud Account & Sync</h3>
             </div>
+          </div>
 
-            {auth.syncError && (
-              <div className="p-3 rounded-2xl bg-md-error-container/20 border border-md-error/30 text-xs font-semibold text-md-error flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>Sync note: {auth.syncError}</span>
+          {auth.isAuthenticated && (
+            <Button
+              variant="tonal"
+              size="sm"
+              onClick={syncWithCloud}
+              disabled={auth.isSyncing}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${auth.isSyncing ? 'animate-spin' : ''}`} />
+              <span>{auth.isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+            </Button>
+          )}
+        </div>
+
+        {auth.isAuthenticated ? (
+          <div className="flex flex-col gap-3 pt-2 border-t border-md-outline-variant/15">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-semibold text-md-on-surface">Sync Active</span>
               </div>
-            )}
+              <Button
+                variant="text"
+                size="sm"
+                onClick={logout}
+                className="text-md-error hover:bg-md-error/10"
+              >
+                <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                <span>Sign Out</span>
+              </Button>
+            </div>
           </div>
         ) : (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-md-primary/10 border border-md-primary/20 flex items-center justify-center text-md-primary shrink-0 mt-0.5 sm:mt-0">
-                <Cloud className="w-6 h-6" />
-              </div>
-              <div>
-                <h4 className="text-base font-bold text-md-on-surface">Cloud Backup & Cross-Device Sync</h4>
-                <p className="text-xs text-md-on-surface-variant max-w-md mt-0.5">
-                  Sign in with Google to automatically sync your focus sessions, custom tags, and settings across your laptop, phone, and tablet.
-                </p>
-              </div>
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-md-outline-variant/15">
+            <div className="text-xs text-md-on-surface-variant">
+              Sign in with your Google account to automatically synchronize sessions and tags across all devices.
             </div>
+            <div ref={googleButtonContainerRef} className="shrink-0 min-h-[40px]" />
+          </div>
+        )}
 
-            <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
-              <div ref={googleButtonContainerRef} className="min-h-[40px] flex items-center" />
-              {authError && (
-                <span className="text-[11px] font-semibold text-md-error">
-                  {authError}
-                </span>
-              )}
-            </div>
+        {authError && (
+          <div className="text-xs text-md-error bg-md-error/10 p-2.5 rounded-xl border border-md-error/20">
+            {authError}
           </div>
         )}
       </Card>
 
-      {/* Data Backup & Restore */}
+      {/* Data Backup & Portability */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        <div>
-          <h4 className="text-base font-bold text-md-on-surface">Data Backup & Restore</h4>
-          <p className="text-xs text-md-on-surface-variant mt-0.5">
-            Export a full JSON backup of your tags, sessions, and settings to move data between devices, or restore an existing backup.
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-md-secondary/10 text-md-secondary flex items-center justify-center">
+            <Download className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-md-on-surface">Data Backup & Portability</h3>
+          </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-3 pt-1">
-          {/* Export Button */}
-          <Button variant="tonal" size="sm" onClick={handleExport}>
-            {exportedSuccess ? <Check className="w-4 h-4 mr-1.5" /> : <Download className="w-4 h-4 mr-1.5" />}
-            <span>{exportedSuccess ? 'Backup Downloaded!' : 'Export JSON Backup'}</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-md-outline-variant/15">
+          <Button
+            variant="tonal"
+            className="w-full justify-center"
+            onClick={handleExport}
+          >
+            {exportedSuccess ? (
+              <>
+                <Check className="w-4 h-4 mr-2 text-emerald-600" />
+                <span>Downloaded Backup!</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4 mr-2" />
+                <span>Export Backup (JSON)</span>
+              </>
+            )}
           </Button>
 
-          {/* Import Button */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleSelectImportFile}
-            accept=".json,application/json"
-            className="hidden"
-          />
           <Button
             variant="outlined"
-            size="sm"
+            className="w-full justify-center"
             onClick={() => fileInputRef.current?.click()}
           >
-            <Upload className="w-4 h-4 mr-1.5" />
-            <span>Restore from File</span>
+            <Upload className="w-4 h-4 mr-2" />
+            <span>Import Backup...</span>
           </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            onChange={handleSelectImportFile}
+            className="hidden"
+          />
         </div>
 
-        {/* Feedback Messages */}
         {importSuccessMessage && (
-          <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs font-semibold text-emerald-700 flex items-center gap-2 animate-in fade-in">
-            <Check className="w-4 h-4 shrink-0 text-emerald-600" />
+          <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 text-xs font-semibold flex items-center gap-2">
+            <Check className="w-4 h-4 shrink-0" />
             <span>{importSuccessMessage}</span>
           </div>
         )}
 
         {importError && (
-          <div className="p-3 rounded-2xl bg-md-error-container/20 border border-md-error/30 text-xs font-semibold text-md-error flex items-center gap-2 animate-in fade-in">
+          <div className="p-3 rounded-2xl bg-md-error/10 border border-md-error/20 text-md-error text-xs font-semibold flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>{importError}</span>
           </div>
@@ -495,40 +474,35 @@ export const ProfileView: React.FC = () => {
 
       {/* Danger Zone */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-error/20 flex flex-col gap-4">
-        <div>
-          <h4 className="text-base font-bold text-md-error flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4" />
-            Reset Data
-          </h4>
-          <p className="text-xs text-md-on-surface-variant mt-0.5">
-            Clear your recorded sessions or restore the entire application to its factory defaults.
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-md-error">Danger Zone</h3>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 pt-1">
+        <div className="flex flex-col sm:flex-row gap-3 pt-2 border-t border-md-outline-variant/15">
           <Button
-            variant="outlined"
-            size="sm"
-            className="border-md-outline-variant text-md-on-surface hover:bg-md-error/5 hover:text-md-error hover:border-md-error/50"
+            variant="text"
+            className="text-md-error hover:bg-md-error/10 justify-center flex-1"
             onClick={() => setResetModalScope('sessions-only')}
           >
-            <RotateCcw className="w-4 h-4 mr-1.5" />
-            Clear Sessions Only
+            <Trash2 className="w-4 h-4 mr-2" />
+            <span>Clear History Only</span>
           </Button>
 
           <Button
-            variant="outlined"
-            size="sm"
-            className="border-md-error/40 text-md-error hover:bg-md-error/10"
+            variant="filled"
+            className="bg-md-error hover:bg-red-700 text-white justify-center flex-1"
             onClick={() => setResetModalScope('factory-reset')}
           >
-            <Trash2 className="w-4 h-4 mr-1.5" />
-            Factory Reset
+            <RotateCcw className="w-4 h-4 mr-2" />
+            <span>Full Reset (Erase All)</span>
           </Button>
         </div>
       </Card>
-
-      {/* --- MODALS --- */}
 
       {/* Edit Profile Modal */}
       <Modal
@@ -536,54 +510,44 @@ export const ProfileView: React.FC = () => {
         onClose={() => setIsEditingProfile(false)}
         title="Edit Profile & Goals"
       >
-        <form onSubmit={handleSaveProfile} className="flex flex-col gap-4 pt-1">
-          {/* Avatar Emoji Selector */}
-          <div>
-            <div className="flex items-center justify-between mb-2 px-1">
-              <label className="text-xs font-semibold text-md-on-surface-variant block">
-                Choose Avatar
-              </label>
-              {editEmoji && (
-                <button
-                  type="button"
-                  onClick={() => setEditEmoji('')}
-                  className="text-xs text-md-primary hover:underline font-medium"
-                >
-                  {profile.avatarUrl ? 'Reset to Google photo' : 'Reset to default icon'}
-                </button>
-              )}
-            </div>
-            <div className="grid grid-cols-7 gap-2">
+        <form onSubmit={handleSaveProfile} className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-md-on-surface-variant">
+              Display Name
+            </label>
+            <Input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="Your name or handle"
+              maxLength={30}
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-md-on-surface-variant">
+              Avatar Icon
+            </label>
+            <div className="grid grid-cols-6 gap-2">
               <button
                 type="button"
                 onClick={() => setEditEmoji('')}
-                title={profile.avatarUrl ? 'Google Account Photo' : 'Default Icon'}
-                className={`w-10 h-10 rounded-2xl flex items-center justify-center overflow-hidden transition-all ${
-                  !editEmoji
-                    ? 'ring-2 ring-md-primary scale-105'
-                    : 'bg-md-surface-container-highest hover:bg-md-surface-variant text-md-outline'
+                className={`p-2.5 rounded-2xl text-xs font-bold border transition-all text-center ${
+                  editEmoji === ''
+                    ? 'border-md-primary bg-md-primary/10 text-md-primary shadow-xs'
+                    : 'border-md-outline-variant/30 hover:bg-md-surface-container'
                 }`}
               >
-                {profile.avatarUrl ? (
-                  <img
-                    src={profile.avatarUrl}
-                    alt="Google Profile"
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <User className="w-5 h-5" />
-                )}
+                {profile.avatarUrl ? 'Photo' : 'Default'}
               </button>
               {AVATAR_EMOJI_OPTIONS.map((emoji) => (
                 <button
-                  key={emoji}
                   type="button"
+                  key={emoji}
                   onClick={() => setEditEmoji(emoji)}
-                  className={`w-10 h-10 text-lg rounded-2xl flex items-center justify-center transition-all ${
+                  className={`p-2.5 rounded-2xl text-xl border transition-all text-center ${
                     editEmoji === emoji
-                      ? 'bg-md-primary/15 border-2 border-md-primary scale-105'
-                      : 'bg-md-surface-container-highest hover:bg-md-surface-variant'
+                      ? 'border-md-primary bg-md-primary/10 shadow-xs scale-105'
+                      : 'border-md-outline-variant/30 hover:bg-md-surface-container'
                   }`}
                 >
                   {emoji}
@@ -592,199 +556,131 @@ export const ProfileView: React.FC = () => {
             </div>
           </div>
 
-          {/* Display Name Input */}
-          <Input
-            label="Display Name"
-            value={editName}
-            onChange={(e) => setEditName(e.target.value)}
-            placeholder="Focus Practitioner"
-            required
-          />
-
-          {/* Daily Goal Input */}
-          <div>
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold text-md-on-surface-variant">
+              Daily Focus Target (Minutes)
+            </label>
             <Input
-              label="Daily Target (minutes)"
               type="number"
-              min="10"
-              max="1440"
-              step="5"
+              min={15}
+              max={1440}
+              step={15}
               value={editGoalMinutes}
-              onChange={(e) => setEditGoalMinutes(Number(e.target.value))}
-              helperText={`Equal to ${(editGoalMinutes / 60).toFixed(1)} hours of focus per day`}
-              required
+              onChange={(e) => setEditGoalMinutes(parseInt(e.target.value) || 120)}
             />
-
-            {/* Quick goal presets */}
-            <div className="flex items-center gap-1.5 mt-2">
-              {[60, 90, 120, 180, 240].map((mins) => (
-                <button
-                  key={mins}
-                  type="button"
-                  onClick={() => setEditGoalMinutes(mins)}
-                  className={`text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors ${
-                    editGoalMinutes === mins
-                      ? 'bg-md-primary text-md-on-primary'
-                      : 'bg-md-surface-variant text-md-on-surface-variant hover:bg-md-surface-container-highest'
-                  }`}
-                >
-                  {mins / 60}h
-                </button>
-              ))}
-            </div>
+            <span className="text-[11px] text-md-outline">
+              Goal: {(editGoalMinutes / 60).toFixed(1)} hours per day
+            </span>
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-md-outline-variant/20">
-            <Button
-              variant="text"
-              size="sm"
-              type="button"
-              onClick={() => setIsEditingProfile(false)}
-            >
+            <Button type="button" variant="text" size="sm" onClick={() => setIsEditingProfile(false)}>
               Cancel
             </Button>
-            <Button variant="filled" size="sm" type="submit">
-              Save Changes
+            <Button type="submit" variant="filled" size="sm">
+              Save Profile
             </Button>
           </div>
         </form>
       </Modal>
 
       {/* Import Confirmation Modal */}
-      <Modal
-        isOpen={Boolean(pendingBackup)}
-        onClose={() => setPendingBackup(null)}
-        title="Confirm Data Import"
-      >
-        {pendingBackup && (
-          <div className="flex flex-col gap-4 pt-1 text-xs">
-            <p className="text-md-on-surface-variant">
-              The selected file contains valid Pomodor data from{' '}
-              <strong className="text-md-on-surface">
-                {new Date(pendingBackup.exportedAt).toLocaleDateString()}
-              </strong>
-              .
-            </p>
-
-            {/* Summary preview */}
-            <div className="p-3 rounded-2xl bg-md-surface-container flex flex-col gap-1.5 text-md-on-surface">
-              <div className="flex items-center justify-between">
-                <span>Sessions in file:</span>
-                <span className="font-bold">{pendingBackup.sessions?.length || 0}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Tags in file:</span>
-                <span className="font-bold">{pendingBackup.tags?.length || 0}</span>
-              </div>
-              {pendingBackup.profile?.displayName && (
-                <div className="flex items-center justify-between">
-                  <span>Profile name:</span>
-                  <span className="font-bold">{pendingBackup.profile.displayName}</span>
-                </div>
-              )}
+      {pendingBackup && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-md w-full border border-md-outline-variant/30 shadow-elevation-3 flex flex-col gap-4">
+            <h3 className="text-base font-bold text-md-on-surface">Import Backup Data</h3>
+            <div className="p-3 rounded-2xl bg-md-surface-container text-xs text-md-on-surface-variant flex flex-col gap-1">
+              <span>• Sessions to import: {pendingBackup.sessions.length}</span>
+              <span>• Tags to import: {pendingBackup.tags.length}</span>
+              <span>• Exported on: {new Date(pendingBackup.exportedAt).toLocaleDateString()}</span>
             </div>
 
-            {/* Import Mode Selection */}
             <div className="flex flex-col gap-2">
-              <label className="font-semibold text-md-on-surface">Choose import method:</label>
-
-              <label className="flex items-start gap-2.5 p-2.5 rounded-xl border border-md-outline-variant/30 hover:bg-md-surface-container cursor-pointer transition-colors">
-                <input
-                  type="radio"
-                  name="importMode"
-                  value="merge"
-                  checked={importMode === 'merge'}
-                  onChange={() => setImportMode('merge')}
-                  className="mt-0.5 accent-md-primary"
-                />
-                <div>
-                  <span className="font-bold text-md-on-surface block">
-                    Merge with existing data (Recommended)
-                  </span>
-                  <span className="text-md-on-surface-variant text-[11px]">
-                    Preserves your current tags and sessions, and adds non-duplicate records from the file.
-                  </span>
-                </div>
+              <label className="text-xs font-semibold text-md-on-surface">
+                Choose Import Mode:
               </label>
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-md-outline-variant/30 hover:bg-md-surface-container cursor-pointer text-xs">
+                  <input
+                    type="radio"
+                    name="importMode"
+                    value="merge"
+                    checked={importMode === 'merge'}
+                    onChange={() => setImportMode('merge')}
+                    className="accent-md-primary"
+                  />
+                  <div>
+                    <span className="font-bold block text-md-on-surface">Merge with Existing</span>
+                    <span className="text-md-on-surface-variant text-[11px]">
+                      Preserves your current sessions and tags, adding missing ones.
+                    </span>
+                  </div>
+                </label>
 
-              <label className="flex items-start gap-2.5 p-2.5 rounded-xl border border-md-outline-variant/30 hover:bg-md-surface-container cursor-pointer transition-colors">
-                <input
-                  type="radio"
-                  name="importMode"
-                  value="replace"
-                  checked={importMode === 'replace'}
-                  onChange={() => setImportMode('replace')}
-                  className="mt-0.5 accent-md-primary"
-                />
-                <div>
-                  <span className="font-bold text-md-error block">
-                    Replace existing data
-                  </span>
-                  <span className="text-md-on-surface-variant text-[11px]">
-                    Completely overwrites all your current sessions, tags, and settings with the file's data.
-                  </span>
-                </div>
-              </label>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-md-outline-variant/30 hover:bg-md-surface-container cursor-pointer text-xs">
+                  <input
+                    type="radio"
+                    name="importMode"
+                    value="replace"
+                    checked={importMode === 'replace'}
+                    onChange={() => setImportMode('replace')}
+                    className="accent-md-primary"
+                  />
+                  <div>
+                    <span className="font-bold block text-md-error">Replace (Override)</span>
+                    <span className="text-md-on-surface-variant text-[11px]">
+                      Replaces all existing sessions and tags with the backup contents.
+                    </span>
+                  </div>
+                </label>
+              </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-md-outline-variant/20">
-              <Button
-                variant="text"
-                size="sm"
-                onClick={() => setPendingBackup(null)}
-              >
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-md-outline-variant/20">
+              <Button variant="text" size="sm" onClick={() => setPendingBackup(null)}>
                 Cancel
               </Button>
               <Button variant="filled" size="sm" onClick={handleConfirmImport}>
-                Import Now
+                Confirm Import
               </Button>
             </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
-      {/* Danger Zone Confirmation Modal */}
-      <Modal
-        isOpen={Boolean(resetModalScope)}
-        onClose={() => setResetModalScope(null)}
-        title={
-          resetModalScope === 'sessions-only'
-            ? 'Clear Session History?'
-            : 'Factory Reset Application?'
-        }
-      >
-        <div className="flex flex-col gap-4 pt-1 text-xs">
-          <div className="p-3 rounded-2xl bg-md-error-container/20 border border-md-error/30 text-md-on-surface">
-            {resetModalScope === 'sessions-only' ? (
-              <p>
-                Are you sure you want to permanently clear all completed focus sessions? Your custom tags, profile, and timer settings will remain untouched.
+      {/* Reset Confirmation Modal */}
+      {resetModalScope && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-sm w-full border border-md-outline-variant/30 shadow-elevation-3 flex flex-col gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-md-on-surface">
+                {resetModalScope === 'sessions-only' ? 'Clear Focus History?' : 'Reset Everything?'}
+              </h3>
+              <p className="text-xs text-md-on-surface-variant mt-1 leading-relaxed">
+                {resetModalScope === 'sessions-only'
+                  ? 'This will delete all completed focus sessions. Your custom tags and preferences will remain intact.'
+                  : 'This will erase all sessions, custom tags, and reset all settings back to default.'}
               </p>
-            ) : (
-              <p>
-                <strong>Warning:</strong> This will permanently delete all session logs and restore tags, settings, and profile to their original defaults. This cannot be undone.
-              </p>
-            )}
-          </div>
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-md-outline-variant/20">
-            <Button
-              variant="text"
-              size="sm"
-              onClick={() => setResetModalScope(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="filled"
-              size="sm"
-              className="bg-md-error hover:bg-red-700 text-white"
-              onClick={handleConfirmReset}
-            >
-              {resetModalScope === 'sessions-only' ? 'Clear Sessions' : 'Reset Everything'}
-            </Button>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button variant="text" size="sm" onClick={() => setResetModalScope(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="filled"
+                size="sm"
+                className="bg-md-error text-white hover:bg-red-700"
+                onClick={handleConfirmReset}
+              >
+                Confirm Delete
+              </Button>
+            </div>
           </div>
         </div>
-      </Modal>
+      )}
     </div>
   );
 };

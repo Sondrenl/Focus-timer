@@ -91,7 +91,7 @@ export const TagManager: React.FC = () => {
           <p className="text-xs text-md-on-surface-variant max-w-sm mt-1 mb-4">
             {activeTab === 'active'
               ? 'Create tags to organize and track focus time across different activities.'
-              : 'Archived tags are hidden from the timer while keeping your stats intact.'}
+              : 'Archived tags are hidden from the timer while keeping your stats intact. You can delete or restore them here.'}
           </p>
           {activeTab === 'active' && (
             <Button onClick={handleCreateNew} variant="tonal" size="sm">
@@ -130,7 +130,7 @@ export const TagManager: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Actions */}
+                {/* Actions: Active tags can only be Edited or Archived. Deletion is reserved for Archived tags. */}
                 <div className="flex items-center gap-1">
                   {activeTab === 'active' ? (
                     <>
@@ -145,17 +145,9 @@ export const TagManager: React.FC = () => {
                       <button
                         onClick={() => archiveTag(tag.id)}
                         className="p-2 rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
-                        title="Archive Tag (Keeps stats intact)"
+                        title="Archive Tag (Move to archived list before deleting)"
                       >
                         <Archive className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        onClick={() => setDeleteConfirmId(tag.id)}
-                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
-                        title="Delete Tag"
-                      >
-                        <Trash2 className="w-4 h-4" />
                       </button>
                     </>
                   ) : (
@@ -171,7 +163,7 @@ export const TagManager: React.FC = () => {
                       <button
                         onClick={() => setDeleteConfirmId(tag.id)}
                         className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
-                        title="Delete Permanently"
+                        title="Delete Tag Permanently"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Check } from 'lucide-react';
@@ -20,6 +20,15 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
   const [start, setStart] = useState(currentRange.start);
   const [end, setEnd] = useState(currentRange.end);
   const [error, setError] = useState('');
+
+  // Keep state in sync with currentRange whenever modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setStart(currentRange.start);
+      setEnd(currentRange.end);
+      setError('');
+    }
+  }, [isOpen, currentRange.start, currentRange.end]);
 
   const presets = [
     {
@@ -90,11 +99,14 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
     onClose();
   };
 
-  const applyPreset = (preset: (typeof presets)[0]) => {
+  const handleSelectPreset = (preset: (typeof presets)[0]) => {
     const dates = preset.getDates();
     setStart(dates.start);
     setEnd(dates.end);
     setError('');
+    // Immediately apply and close for instant one-click preset selection
+    onApplyRange(dates);
+    onClose();
   };
 
   return (
@@ -110,8 +122,8 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
               <button
                 type="button"
                 key={p.label}
-                onClick={() => applyPreset(p)}
-                className="px-2.5 py-2 rounded-xl bg-md-surface-container text-xs font-medium text-md-on-surface hover:bg-md-surface-container-high transition-colors text-center"
+                onClick={() => handleSelectPreset(p)}
+                className="px-2.5 py-2.5 rounded-xl bg-md-surface-container text-xs font-semibold text-md-on-surface hover:bg-md-primary hover:text-white transition-all text-center shadow-xs active:scale-95"
               >
                 {p.label}
               </button>
@@ -123,7 +135,7 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
         <div className="grid grid-cols-2 gap-3 pt-2">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-md-on-surface-variant px-1">
-              Start Date
+              Start Date (DD/MM/YYYY)
             </label>
             <div className="relative">
               <input
@@ -140,7 +152,7 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-md-on-surface-variant px-1">
-              End Date
+              End Date (DD/MM/YYYY)
             </label>
             <div className="relative">
               <input

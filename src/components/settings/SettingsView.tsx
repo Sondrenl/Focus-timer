@@ -3,11 +3,11 @@ import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
 import { Switch } from '../ui/Switch';
 import { Button } from '../ui/Button';
-import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles } from 'lucide-react';
+import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 
 export const SettingsView: React.FC = () => {
-  const { settings, updateSettings, sound, notifications } = useApp();
+  const { settings, updateSettings, profile, updateProfile, sound, notifications } = useApp();
   const [savedToast, setSavedToast] = useState(false);
 
   const showSaved = () => {
@@ -21,6 +21,12 @@ export const SettingsView: React.FC = () => {
   ) => {
     const num = Math.max(1, Math.min(120, val));
     updateSettings({ [key]: num });
+    showSaved();
+  };
+
+  const handleDailyGoalChange = (val: number) => {
+    const num = Math.max(1, Math.min(1440, val));
+    updateProfile({ dailyGoalMinutes: num });
     showSaved();
   };
 
@@ -38,6 +44,7 @@ export const SettingsView: React.FC = () => {
 
   const handleResetDefaults = () => {
     updateSettings(DEFAULT_SETTINGS);
+    updateProfile({ dailyGoalMinutes: 120 });
     showSaved();
   };
 
@@ -45,7 +52,7 @@ export const SettingsView: React.FC = () => {
     <div className="w-full max-w-3xl mx-auto py-6 px-4 flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-md-on-surface">Settings & Preferences</h2>
+          <h2 className="text-2xl font-bold text-md-on-surface">Settings</h2>
         </div>
 
         {savedToast && (
@@ -58,16 +65,26 @@ export const SettingsView: React.FC = () => {
 
       {/* 1. Timer Intervals Configuration */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-6">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center">
-            <Clock className="w-5 h-5" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-md-on-surface">Timer Intervals</h3>
+            </div>
           </div>
-          <div>
-            <h3 className="text-base font-bold text-md-on-surface">Timer Intervals</h3>
-            <p className="text-xs text-md-on-surface-variant">
-              Configure session lengths in minutes
-            </p>
-          </div>
+
+          {/* Prominent Restore Defaults Button */}
+          <Button
+            variant="tonal"
+            size="sm"
+            onClick={handleResetDefaults}
+            className="text-xs font-semibold"
+          >
+            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+            <span>Restore Defaults</span>
+          </Button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -128,12 +145,7 @@ export const SettingsView: React.FC = () => {
 
         {/* Long Break Interval */}
         <div className="flex items-center justify-between pt-2 border-t border-md-outline-variant/15">
-          <div>
-            <div className="text-sm font-semibold text-md-on-surface">Long Break Interval</div>
-            <div className="text-xs text-md-on-surface-variant">
-              Number of Pomodoros before taking an extended rest
-            </div>
-          </div>
+          <div className="text-sm font-semibold text-md-on-surface">Long Break Interval</div>
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -148,28 +160,48 @@ export const SettingsView: React.FC = () => {
         </div>
       </Card>
 
-      {/* 2. Automation Switches */}
+      {/* 2. Daily Goal Configuration */}
+      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+            <Target className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-md-on-surface">Daily Focus Goal</h3>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between pt-2">
+          <div className="text-sm font-semibold text-md-on-surface">Target Time per Day</div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="15"
+              max="1440"
+              step="15"
+              value={profile.dailyGoalMinutes || 120}
+              onChange={(e) => handleDailyGoalChange(parseInt(e.target.value) || 120)}
+              className="w-24 px-2.5 py-1.5 bg-md-surface-container rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
+            />
+            <span className="text-xs text-md-on-surface-variant">minutes ({(profile.dailyGoalMinutes / 60).toFixed(1)}h)</span>
+          </div>
+        </div>
+      </Card>
+
+      {/* 3. Flow (Automation Switches) */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-md-secondary/10 text-md-secondary flex items-center justify-center">
             <Sparkles className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-md-on-surface">Flow & Automation</h3>
-            <p className="text-xs text-md-on-surface-variant">
-              Continuous session pacing preferences
-            </p>
+            <h3 className="text-base font-bold text-md-on-surface">Flow</h3>
           </div>
         </div>
 
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-semibold text-md-on-surface">Auto-start Breaks</div>
-              <div className="text-xs text-md-on-surface-variant">
-                Automatically begin break countdown when a focus session completes
-              </div>
-            </div>
+            <div className="text-sm font-semibold text-md-on-surface">Auto-start Breaks</div>
             <Switch
               checked={settings.autoStartBreaks}
               onChange={(val) => {
@@ -180,12 +212,7 @@ export const SettingsView: React.FC = () => {
           </div>
 
           <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
-            <div>
-              <div className="text-sm font-semibold text-md-on-surface">Auto-start Pomodoros</div>
-              <div className="text-xs text-md-on-surface-variant">
-                Automatically begin work interval when a break ends
-              </div>
-            </div>
+            <div className="text-sm font-semibold text-md-on-surface">Auto-start Pomodoros</div>
             <Switch
               checked={settings.autoStartPomodoros}
               onChange={(val) => {
@@ -197,7 +224,7 @@ export const SettingsView: React.FC = () => {
         </div>
       </Card>
 
-      {/* 3. Audio & Notifications */}
+      {/* 4. Audio & Alerts */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center">
@@ -205,44 +232,22 @@ export const SettingsView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-md-on-surface">Audio & Alerts</h3>
-            <p className="text-xs text-md-on-surface-variant">
-              Sound cues and desktop notification permissions
-            </p>
           </div>
         </div>
 
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-semibold text-md-on-surface">Completion Sound</div>
-              <div className="text-xs text-md-on-surface-variant">
-                Gentle Tibetan bowl chime when an interval finishes
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleTestSound}
-                className="text-xs font-semibold text-md-primary hover:underline"
-              >
-                Test Sound
-              </button>
-              <Switch
-                checked={settings.soundEnabled}
-                onChange={(val) => {
-                  updateSettings({ soundEnabled: val });
-                  showSaved();
-                }}
-              />
-            </div>
+            <div className="text-sm font-semibold text-md-on-surface">Chime</div>
+            <button
+              onClick={handleTestSound}
+              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors"
+            >
+              Test Chime
+            </button>
           </div>
 
           <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
-            <div>
-              <div className="text-sm font-semibold text-md-on-surface">Desktop Notifications</div>
-              <div className="text-xs text-md-on-surface-variant">
-                Show system popup notification when backgrounded
-              </div>
-            </div>
+            <div className="text-sm font-semibold text-md-on-surface">Desktop Notifications</div>
             <Button
               variant={settings.notificationsEnabled ? 'tonal' : 'outlined'}
               size="sm"
@@ -254,22 +259,6 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
       </Card>
-
-      {/* 4. Restore Defaults */}
-      <div className="flex items-center justify-between pt-2">
-        <span className="text-xs text-md-on-surface-variant">
-          Reset preferences to their standard 25/5/25 presets
-        </span>
-        <Button
-          variant="text"
-          size="sm"
-          onClick={handleResetDefaults}
-          className="text-md-outline hover:text-md-on-surface"
-        >
-          <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-          <span>Reset Settings</span>
-        </Button>
-      </div>
     </div>
   );
 };

@@ -38,15 +38,28 @@ export const MONTH_NAMES = [
 ];
 
 /**
- * Returns friendly formatted date like "Mon, Oct 12"
+ * Returns friendly formatted date with day first, e.g. "Mon, 12 Oct" or "12 Oct 2026"
  */
-export function formatFriendlyDate(dateStr: string | Date): string {
+export function formatFriendlyDate(dateStr: string | Date, includeYear = false): string {
   const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
-  return d.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
+  const day = d.getDate();
+  const month = MONTH_NAMES[d.getMonth()].slice(0, 3);
+  const weekday = WEEKDAY_NAMES[d.getDay()].slice(0, 3);
+  if (includeYear) {
+    return `${day} ${month} ${d.getFullYear()}`;
+  }
+  return `${weekday}, ${day} ${month}`;
+}
+
+/**
+ * Returns numeric date in day/month/year format: DD/MM/YYYY
+ */
+export function formatNumericDate(dateStr: string | Date): string {
+  const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
 }
 
 /**

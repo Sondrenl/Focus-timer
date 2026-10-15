@@ -21,16 +21,21 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   // Filter out tags with 0 seconds in this period
   const activeSlices = distribution.filter((item) => item.totalSeconds > 0);
 
-  // Calculate cumulative offsets
-  let accumulatedPercent = 0;
-  const slicesWithOffsets = activeSlices.map((item) => {
-    const strokeDasharray = `${(item.percentage / 100) * circumference} ${circumference}`;
-    const strokeDashoffset = -((accumulatedPercent / 100) * circumference);
-    accumulatedPercent += item.percentage;
+  // Calculate cumulative offsets using exact total seconds ratio to guarantee 0 gaps
+  let accumulatedRatio = 0;
+  const slicesWithOffsets = activeSlices.map((item, index) => {
+    const ratio = totalFocusSeconds > 0 ? item.totalSeconds / totalFocusSeconds : 0;
+    // Add tiny 0.4px overlap when there are multiple slices to prevent subpixel retina anti-aliasing gaps
+    const sliceLength = ratio * circumference + (activeSlices.length > 1 ? 0.4 : 0);
+    const strokeDasharray = `${sliceLength} ${circumference}`;
+    const strokeDashoffset = -(accumulatedRatio * circumference);
+    accumulatedRatio += ratio;
+
     return {
       ...item,
       strokeDasharray,
       strokeDashoffset,
+      isLast: index === activeSlices.length - 1,
     };
   });
 
@@ -78,7 +83,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
           })}
         </svg>
 
-        {/* Center Text */}
+        {/* Center Text - Removed redundant tag count */}
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none px-4">
           {hoveredItem ? (
             <>
@@ -99,9 +104,6 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
               </span>
               <span className="text-xs font-medium text-md-on-surface-variant mt-0.5">
                 Total Focus
-              </span>
-              <span className="text-[10px] text-md-outline">
-                {activeSlices.length} tag{activeSlices.length === 1 ? '' : 's'}
               </span>
             </>
           )}

@@ -39,14 +39,25 @@ export const StatisticsView: React.FC = () => {
   // Maximum seconds for scaling bar charts
   const maxSeconds = Math.max(1, ...activityBars.map((b) => b.totalSeconds));
 
+  // Custom placed on the far right as requested
   const periodOptions: { type: TimePeriodType; label: string }[] = [
     { type: 'day', label: 'Day' },
     { type: 'week', label: 'Week' },
     { type: 'month', label: 'Month' },
     { type: 'year', label: 'Year' },
-    { type: 'custom', label: 'Custom' },
     { type: 'all', label: 'All Time' },
+    { type: 'custom', label: 'Custom' },
   ];
+
+  // Mobile-friendly min-width for activity breakdown horizontal scrolling
+  const chartMinWidth =
+    periodType === 'month'
+      ? Math.max(activityBars.length * 28, 680)
+      : periodType === 'year' || periodType === 'all'
+      ? Math.max(activityBars.length * 42, 480)
+      : periodType === 'custom' && activityBars.length > 7
+      ? activityBars.length * 40
+      : undefined;
 
   return (
     <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6">
@@ -225,7 +236,7 @@ export const StatisticsView: React.FC = () => {
           <div className="flex items-center gap-2.5">
             <Calendar className="w-5 h-5 text-md-primary" />
             <h3 className="text-base font-bold text-md-on-surface">
-              Activity Breakdown ({periodType.toUpperCase()})
+              Activity Breakdown
             </h3>
           </div>
         </div>
@@ -235,43 +246,46 @@ export const StatisticsView: React.FC = () => {
             No activity logged in this period.
           </div>
         ) : (
-          <div
-            className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
-            style={{
-              gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))`,
-            }}
-          >
-            {activityBars.map((bar) => {
-              const heightPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
-              const hasHours = bar.totalSeconds > 0;
+          <div className="w-full overflow-x-auto pb-2 scrollbar-thin">
+            <div
+              className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
+              style={{
+                gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))`,
+                minWidth: chartMinWidth ? `${chartMinWidth}px` : undefined,
+              }}
+            >
+              {activityBars.map((bar) => {
+                const heightPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
+                const hasHours = bar.totalSeconds > 0;
 
-              return (
-                <div key={bar.key} className="flex flex-col items-center gap-1.5 h-full justify-end group">
-                  <span className="text-[10px] md:text-xs font-semibold text-md-on-surface opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                    {formatDurationHoursMins(bar.totalSeconds)}
-                  </span>
-                  <div className="w-full max-w-[42px] bg-md-surface-container rounded-t-xl h-full flex items-end overflow-hidden">
-                    <div
-                      className={`w-full rounded-t-xl transition-all duration-500 ease-out ${
-                        hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
-                      }`}
-                      style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
-                      title={`${bar.label} ${bar.subLabel || ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`}
-                    />
-                  </div>
-                  <div className="flex flex-col items-center text-center w-full">
-                    <span className="text-[11px] font-semibold text-md-on-surface-variant group-hover:text-md-on-surface truncate w-full">
-                      {bar.label}
+                return (
+                  <div key={bar.key} className="flex flex-col items-center gap-1.5 h-full justify-end group">
+                    <span className="text-[10px] md:text-xs font-semibold text-md-on-surface opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                      {formatDurationHoursMins(bar.totalSeconds)}
                     </span>
-                    {bar.subLabel && (
-                      <span className="text-[9px] text-md-outline truncate w-full">
-                        {bar.subLabel}
+                    <div className="w-full max-w-[42px] min-w-[12px] bg-md-surface-container rounded-t-xl h-full flex items-end overflow-hidden">
+                      <div
+                        className={`w-full rounded-t-xl transition-all duration-500 ease-out ${
+                          hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
+                        }`}
+                        style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
+                        title={`${bar.label} ${bar.subLabel || ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`}
+                      />
+                    </div>
+                    <div className="flex flex-col items-center text-center w-full min-w-0">
+                      <span className="text-[11px] font-semibold text-md-on-surface-variant group-hover:text-md-on-surface truncate w-full px-0.5">
+                        {bar.label}
                       </span>
-                    )}
+                      {bar.subLabel && (
+                        <span className="text-[9px] text-md-outline truncate w-full px-0.5">
+                          {bar.subLabel}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
       </Card>
@@ -281,8 +295,8 @@ export const StatisticsView: React.FC = () => {
         isOpen={isCalendarModalOpen}
         onClose={() => setIsCalendarModalOpen(false)}
         currentRange={customRange}
-        onApplyRange={(newRange) => {
-          setCustomRange(newRange);
+        onApplyRange={(range) => {
+          setCustomRange(range);
           setPeriodType('custom');
         }}
       />

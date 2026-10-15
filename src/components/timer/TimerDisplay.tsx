@@ -119,8 +119,8 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
       lastTime = currentTime;
 
       const targetMorph = status === 'RUNNING' ? 1 : 0;
-      // Smooth exponential easing between 0 (perfect circle) and 1 (living wave) in ~600ms
-      morphRef.current += (targetMorph - morphRef.current) * Math.min(1, 4.5 * delta);
+      // Gentle, slightly slower exponential easing between 0 (circle) and 1 (wave) in ~1.2s
+      morphRef.current += (targetMorph - morphRef.current) * Math.min(1, 2.2 * delta);
 
       // Advance wave phase while active or transitioning
       if (status === 'RUNNING' || morphRef.current > 0.005) {

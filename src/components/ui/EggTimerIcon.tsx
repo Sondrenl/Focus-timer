@@ -5,7 +5,7 @@ interface EggTimerIconProps extends React.SVGProps<SVGSVGElement> {
 }
 
 /**
- * Custom SVG icon representing a classic mechanical egg / kitchen timer
+ * Custom SVG icon representing a classic Pomodoro tomato with stem and calyx
  */
 export const EggTimerIcon: React.FC<EggTimerIconProps> = ({
   className = 'w-6 h-6',
@@ -14,31 +14,31 @@ export const EggTimerIcon: React.FC<EggTimerIconProps> = ({
   return (
     <svg
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
       className={className}
       {...props}
     >
-      {/* Top winding knob */}
-      <path d="M10 2.5h4" />
-      <path d="M12 2.5v1.5" />
+      {/* Plump organic tomato body */}
+      <path
+        d="M12 5.5C8.8 4 3.5 5.8 3.2 12.2C3 18.2 7.2 21.5 12 21.5C16.8 21.5 21 18.2 20.8 12.2C20.5 5.8 15.2 4 12 5.5Z"
+        fill="currentColor"
+      />
 
-      {/* Egg timer body: upper rotating dome */}
-      <path d="M12 4C7.8 4 5 7.8 5 12.5h14C19 7.8 16.2 4 12 4z" />
+      {/* Curved tomato stem */}
+      <path
+        d="M12 6C12 3.8 12.8 2 14.8 1.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        fill="none"
+      />
 
-      {/* Egg timer body: lower base */}
-      <path d="M5 12.5c0 4.5 3.2 8.5 7 8.5s7-4 7-8.5H5z" />
-
-      {/* Dial separation line */}
-      <line x1="5" y1="12.5" x2="19" y2="12.5" />
-
-      {/* Calibration tick marks on the rotating dial */}
-      <line x1="12" y1="10.5" x2="12" y2="14.5" />
-      <line x1="8.5" y1="12.5" x2="8.5" y2="15" />
-      <line x1="15.5" y1="12.5" x2="15.5" y2="15" />
+      {/* Calyx leaves radiating across the top dip */}
+      <path
+        d="M12 6L14 3.8L12.5 5.8L16 4.8L13 6.8L14.8 8.5L12 7.2L9.2 8.5L11 6.8L8 4.8L11.5 5.8L10 3.8L12 6Z"
+        fill="currentColor"
+      />
     </svg>
   );
 };

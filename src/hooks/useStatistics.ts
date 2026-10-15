@@ -14,7 +14,7 @@ import {
 } from '../utils/dates';
 import { formatDurationHoursMins } from '../utils/formatters';
 
-export type TimePeriodType = 'day' | 'week' | 'month' | 'year' | 'custom' | 'all';
+export type TimePeriodType = 'day' | 'week' | 'month' | 'year' | 'all' | 'custom';
 
 export interface TagStat {
   tagId: string;
@@ -104,8 +104,8 @@ export function useStatistics() {
       const r = getWeekRange(ref);
       startDate = r.start;
       endDate = r.end;
-      const sStr = `${MONTH_NAMES[startDate.getMonth()].slice(0, 3)} ${startDate.getDate()}`;
-      const eStr = `${MONTH_NAMES[endDate.getMonth()].slice(0, 3)} ${endDate.getDate()}, ${endDate.getFullYear()}`;
+      const sStr = `${startDate.getDate()} ${MONTH_NAMES[startDate.getMonth()].slice(0, 3)}`;
+      const eStr = `${endDate.getDate()} ${MONTH_NAMES[endDate.getMonth()].slice(0, 3)} ${endDate.getFullYear()}`;
       periodLabel = `${sStr} – ${eStr}`;
     } else if (periodType === 'month') {
       const r = getMonthRange(ref);
@@ -122,9 +122,9 @@ export function useStatistics() {
       const e = new Date(`${customRange.end}T23:59:59.999`);
       startDate = s;
       endDate = e;
-      periodLabel = `${formatFriendlyDate(s)} – ${formatFriendlyDate(e)}`;
+      periodLabel = `${formatFriendlyDate(s, true)} – ${formatFriendlyDate(e, true)}`;
     } else {
-      // 'all' time: 10 years ago to now
+      // 'all' time
       startDate = new Date(0);
       endDate = new Date(Date.now() + 86400000 * 365);
       periodLabel = 'All Time History';
@@ -182,26 +182,42 @@ export function useStatistics() {
     let activityBars: ActivityBarStat[] = [];
 
     if (periodType === 'day') {
-      const hoursArray = Array.from({ length: 24 }, (_, i) => ({
-        hour: i,
-        seconds: 0,
-        count: 0,
-      }));
+      if (filteredSessions.length === 0) {
+        activityBars = [];
+      } else {
+        // Leftmost column: hour when first session was completed. Rightmost: latest hour.
+        const sessionHours = filteredSessions.map((s) => new Date(s.completedAt).getHours());
+        const minHour = Math.min(...sessionHours);
+        const maxHour = Math.max(...sessionHours);
 
-      filteredSessions.forEach((s) => {
-        const d = new Date(s.completedAt);
-        const h = d.getHours();
-        hoursArray[h].seconds += s.durationSeconds;
-        hoursArray[h].count += 1;
-      });
+        const hoursCount = maxHour - minHour + 1;
+        const hoursArray = Array.from({ length: hoursCount }, (_, i) => {
+          const hour = minHour + i;
+          return {
+            hour,
+            seconds: 0,
+            count: 0,
+          };
+        });
 
-      activityBars = hoursArray.map((item) => ({
-        key: `hour-${item.hour}`,
-        label: `${item.hour}:00`,
-        totalSeconds: item.seconds,
-        hours: Number((item.seconds / 3600).toFixed(1)),
-        sessionCount: item.count,
-      }));
+        filteredSessions.forEach((s) => {
+          const d = new Date(s.completedAt);
+          const h = d.getHours();
+          const target = hoursArray.find((item) => item.hour === h);
+          if (target) {
+            target.seconds += s.durationSeconds;
+            target.count += 1;
+          }
+        });
+
+        activityBars = hoursArray.map((item) => ({
+          key: `hour-${item.hour}`,
+          label: `${item.hour.toString().padStart(2, '0')}:00`,
+          totalSeconds: item.seconds,
+          hours: Number((item.seconds / 3600).toFixed(1)),
+          sessionCount: item.count,
+        }));
+      }
     } else if (periodType === 'week') {
       const days = Array.from({ length: 7 }, (_, i) => {
         const d = new Date(startDate);
@@ -281,16 +297,79 @@ export function useStatistics() {
         hours: Number((item.seconds / 3600).toFixed(1)),
         sessionCount: item.count,
       }));
+    } else if (periodType === 'all') {
+      if (filteredSessions.length === 0) {
+        activityBars = [];
+      } else {
+        const sessionYears = Array.from(
+          new Set(filteredSessions.map((s) => new Date(s.completedAt).getFullYear()))
+        ).sort();
+
+        if (sessionYears.length <= 1) {
+          // Within a single year: breakdown by all 12 months with the year specified
+          const yr = sessionYears[0] || new Date().getFullYear();
+          const months = Array.from({ length: 12 }, (_, i) => ({
+            monthIdx: i,
+            label: MONTH_NAMES[i].slice(0, 3),
+            subLabel: `${yr}`,
+            seconds: 0,
+            count: 0,
+          }));
+
+          filteredSessions.forEach((s) => {
+            const m = new Date(s.completedAt).getMonth();
+            months[m].seconds += s.durationSeconds;
+            months[m].count += 1;
+          });
+
+          activityBars = months.map((item) => ({
+            key: `all-month-${item.monthIdx}`,
+            label: item.label,
+            subLabel: item.subLabel,
+            totalSeconds: item.seconds,
+            hours: Number((item.seconds / 3600).toFixed(1)),
+            sessionCount: item.count,
+          }));
+        } else {
+          // Multi-year history: breakdown by each year
+          const minYear = Math.min(...sessionYears);
+          const maxYear = Math.max(...sessionYears);
+          const yearStats: { year: number; seconds: number; count: number }[] = [];
+          for (let y = minYear; y <= maxYear; y++) {
+            yearStats.push({
+              year: y,
+              seconds: 0,
+              count: 0,
+            });
+          }
+
+          filteredSessions.forEach((s) => {
+            const y = new Date(s.completedAt).getFullYear();
+            const target = yearStats.find((item) => item.year === y);
+            if (target) {
+              target.seconds += s.durationSeconds;
+              target.count += 1;
+            }
+          });
+
+          activityBars = yearStats.map((item) => ({
+            key: `year-${item.year}`,
+            label: `${item.year}`,
+            totalSeconds: item.seconds,
+            hours: Number((item.seconds / 3600).toFixed(1)),
+            sessionCount: item.count,
+          }));
+        }
+      }
     } else {
-      // 'custom' or 'all'
-      const sDate = new Date(startDate.getTime());
-      const eDate = new Date(endDate.getTime());
+      // 'custom' date range
+      const sDate = new Date(`${customRange.start}T00:00:00.000`);
+      const eDate = new Date(`${customRange.end}T23:59:59.999`);
       const dayDiff = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / (1000 * 60 * 60 * 24)));
 
       if (dayDiff <= 14) {
         const dayList = Array.from({ length: dayDiff }, (_, i) => {
-          const d = new Date(sDate);
-          d.setDate(sDate.getDate() + i);
+          const d = new Date(sDate.getTime() + i * 86400000);
           return {
             dateKey: toDateKey(d),
             label: `${d.getDate()}/${d.getMonth() + 1}`,
@@ -316,18 +395,16 @@ export function useStatistics() {
           sessionCount: item.count,
         }));
       } else {
-        const step = Math.ceil(dayDiff / 6);
+        const stepDays = Math.ceil(dayDiff / 6);
         activityBars = Array.from({ length: 6 }, (_, i) => {
-          const chunkStart = new Date(sDate);
-          chunkStart.setDate(sDate.getDate() + i * step);
-          const chunkEnd = new Date(sDate);
-          chunkEnd.setDate(Math.min(eDate.getDate(), sDate.getDate() + (i + 1) * step - 1));
+          const chunkStart = new Date(sDate.getTime() + i * stepDays * 86400000);
+          const chunkEnd = new Date(Math.min(eDate.getTime(), sDate.getTime() + ((i + 1) * stepDays - 1) * 86400000));
 
           let sec = 0;
           let count = 0;
           filteredSessions.forEach((s) => {
-            const d = new Date(s.completedAt);
-            if (d >= chunkStart && d <= chunkEnd) {
+            const t = new Date(s.completedAt).getTime();
+            if (t >= chunkStart.getTime() && t <= chunkEnd.getTime()) {
               sec += s.durationSeconds;
               count += 1;
             }
@@ -408,66 +485,36 @@ export function useStatistics() {
       };
     } else if (periodType === 'week') {
       // Single week: Specific weekday within the week
-      const weekdaySecs = new Array(7).fill(0);
-      const weekdayCounts = new Array(7).fill(0);
-      filteredSessions.forEach((s) => {
-        const d = new Date(s.completedAt).getDay();
-        weekdaySecs[d] += s.durationSeconds;
-        weekdayCounts[d] += 1;
-      });
-      let maxDay = 1;
       let maxSec = -1;
-      weekdaySecs.forEach((sec, idx) => {
-        if (sec > maxSec) {
-          maxSec = sec;
-          maxDay = idx;
+      let bestLabel = 'N/A';
+      for (const bar of activityBars) {
+        if (bar.totalSeconds > maxSec) {
+          maxSec = bar.totalSeconds;
+          bestLabel = `${bar.label} ${bar.subLabel || ''}`.trim();
         }
-      });
+      }
       productiveMetric = {
-        title: 'Most Productive Day',
-        value: WEEKDAY_NAMES[maxDay],
-        subtext: `${formatDurationHoursMins(maxSec)} across ${weekdayCounts[maxDay]} sessions`,
+        title: 'Best Day This Week',
+        value: maxSec > 0 ? bestLabel : 'N/A',
+        subtext: maxSec > 0 ? `${formatDurationHoursMins(maxSec)} focused` : 'No sessions logged',
         hasData: maxSec > 0,
       };
     } else {
-      // Longer than a week (Month, Year, Custom):
-      // Tell WHICH specific date was most productive (e.g., "Tuesday, Oct 14")
-      const dateMap = new Map<string, { seconds: number; count: number; date: Date }>();
-      filteredSessions.forEach((s) => {
-        const d = new Date(s.completedAt);
-        const key = toDateKey(d);
-        const curr = dateMap.get(key) || { seconds: 0, count: 0, date: d };
-        curr.seconds += s.durationSeconds;
-        curr.count += 1;
-        dateMap.set(key, curr);
-      });
-
-      let bestDateItem: { seconds: number; count: number; date: Date } | null = null;
-      dateMap.forEach((val) => {
-        if (!bestDateItem || val.seconds > bestDateItem.seconds) {
-          bestDateItem = val;
+      // Month, Year, Custom: Most productive interval
+      let maxSec = -1;
+      let bestLabel = 'N/A';
+      for (const bar of activityBars) {
+        if (bar.totalSeconds > maxSec) {
+          maxSec = bar.totalSeconds;
+          bestLabel = `${bar.label} ${bar.subLabel || ''}`.trim();
         }
-      });
-
-      if (bestDateItem && (bestDateItem as { seconds: number; count: number; date: Date }).seconds > 0) {
-        const item = bestDateItem as { seconds: number; count: number; date: Date };
-        const dayName = WEEKDAY_NAMES[item.date.getDay()];
-        const monthName = MONTH_NAMES[item.date.getMonth()].slice(0, 3);
-        const dayNum = item.date.getDate();
-        productiveMetric = {
-          title: 'Most Productive Day',
-          value: `${dayName}, ${monthName} ${dayNum}`,
-          subtext: `${formatDurationHoursMins(item.seconds)} across ${item.count} sessions`,
-          hasData: true,
-        };
-      } else {
-        productiveMetric = {
-          title: 'Most Productive Day',
-          value: 'N/A',
-          subtext: 'No sessions recorded in this period.',
-          hasData: false,
-        };
       }
+      productiveMetric = {
+        title: 'Most Productive Period',
+        value: maxSec > 0 ? bestLabel : 'N/A',
+        subtext: maxSec > 0 ? `${formatDurationHoursMins(maxSec)} focused` : 'No sessions logged',
+        hasData: maxSec > 0,
+      };
     }
 
     return {
@@ -484,12 +531,17 @@ export function useStatistics() {
   return {
     periodType,
     setPeriodType,
-    referenceDate,
+    periodLabel: stats.periodLabel,
     customRange,
     setCustomRange,
     goToPrev,
     goToNext,
     goToToday,
-    ...stats,
+    totalFocusSeconds: stats.totalFocusSeconds,
+    totalFocusHours: stats.totalFocusHours,
+    totalWorkCount: stats.totalWorkCount,
+    tagDistribution: stats.tagDistribution,
+    activityBars: stats.activityBars,
+    productiveMetric: stats.productiveMetric,
   };
 }
