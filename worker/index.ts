@@ -10,76 +10,71 @@ interface Env {
 const DEFAULT_AUTH_SECRET = 'pomodor-focus-timer-secret-jwt-key-2025';
 const DEFAULT_CLIENT_ID = '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
 
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  google_id TEXT UNIQUE NOT NULL,
-  email TEXT NOT NULL,
-  display_name TEXT,
-  avatar_url TEXT,
-  avatar_emoji TEXT DEFAULT '',
-  daily_goal_minutes INTEGER DEFAULT 120,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS tags (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  color TEXT NOT NULL,
-  is_archived INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id);
-
-CREATE TABLE IF NOT EXISTS deleted_tags (
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  tag_id TEXT NOT NULL,
-  deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, tag_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  tag_id TEXT,
-  session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),
-  duration_seconds INTEGER NOT NULL,
-  completed_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at);
-
-CREATE TABLE IF NOT EXISTS user_settings (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  work_duration_minutes INTEGER DEFAULT 25,
-  short_break_duration_minutes INTEGER DEFAULT 5,
-  long_break_duration_minutes INTEGER DEFAULT 25,
-  long_break_interval INTEGER DEFAULT 4,
-  auto_start_breaks INTEGER DEFAULT 0,
-  auto_start_pomodoros INTEGER DEFAULT 0,
-  sound_enabled INTEGER DEFAULT 1,
-  sound_volume REAL DEFAULT 0.8,
-  notifications_enabled INTEGER DEFAULT 0,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-`;
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    google_id TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    avatar_url TEXT,
+    avatar_emoji TEXT DEFAULT '',
+    daily_goal_minutes INTEGER DEFAULT 120,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    is_archived INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
+  `CREATE TABLE IF NOT EXISTS deleted_tags (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL,
+    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, tag_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT,
+    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),
+    duration_seconds INTEGER NOT NULL,
+    completed_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at)`,
+  `CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    work_duration_minutes INTEGER DEFAULT 25,
+    short_break_duration_minutes INTEGER DEFAULT 5,
+    long_break_duration_minutes INTEGER DEFAULT 25,
+    long_break_interval INTEGER DEFAULT 4,
+    auto_start_breaks INTEGER DEFAULT 0,
+    auto_start_pomodoros INTEGER DEFAULT 0,
+    sound_enabled INTEGER DEFAULT 1,
+    sound_volume REAL DEFAULT 0.8,
+    notifications_enabled INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+];
 
 let isSchemaEnsured = false;
 
 async function ensureSchema(db: D1Database): Promise<void> {
   if (isSchemaEnsured) return;
-  try {
-    await db.exec(SCHEMA_SQL);
-    isSchemaEnsured = true;
-  } catch (err) {
-    console.error('Error ensuring schema:', err);
+  for (const sql of SCHEMA_STATEMENTS) {
+    try {
+      await db.prepare(sql).run();
+    } catch (err) {
+      console.error('Error ensuring schema statement:', err);
+    }
   }
+  isSchemaEnsured = true;
 }
 
 export default {
@@ -121,7 +116,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           dbStatus = 'error: D1 database binding missing';
         } else {
           await ensureSchema(env.DB);
-          await env.DB.prepare('SELECT 1').first();
+          await env.DB.prepare('SELECT count(*) FROM deleted_tags').first();
           tablesReady = true;
         }
       } catch (err) {
