@@ -13,6 +13,9 @@ export interface ISessionRepository {
   /** Saves an entire list of sessions (used for imports/merges) */
   saveAll(sessions: CompletedSession[]): Promise<void>;
 
+  /** Seeds sample sessions for preview and development environments */
+  loadSampleData(): Promise<CompletedSession[]>;
+
   /** Clears all historical records */
   clear(): Promise<void>;
 }

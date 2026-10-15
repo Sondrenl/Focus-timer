@@ -10,8 +10,13 @@ import { SettingsRepository } from '../services/repository/SettingsRepository';
 import { ProfileRepository } from '../services/repository/ProfileRepository';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
+import { isPreviewOrDev } from '../utils/environment';
 
 interface AppContextValue {
+  // Environment
+  isDemoEnvironment: boolean;
+  reloadSampleData: () => Promise<void>;
+
   // Profile
   profile: UserProfile;
   updateProfile: (newProfile: Partial<UserProfile>) => Promise<void>;
@@ -66,6 +71,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<'timer' | 'tags' | 'stats' | 'settings' | 'profile'>('timer');
+
+  const isDemo = useMemo(() => isPreviewOrDev(), []);
 
   // Load initial data
   useEffect(() => {
@@ -162,6 +169,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();
     setSessions([]);
+  };
+
+  const reloadSampleData = async (): Promise<void> => {
+    const samples = await sessionRepository.loadSampleData();
+    setSessions(samples);
   };
 
   // Settings Operations
@@ -268,6 +280,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider
       value={{
+        isDemoEnvironment: isDemo,
+        reloadSampleData,
         profile,
         updateProfile,
         tags,

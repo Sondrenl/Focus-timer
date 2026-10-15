@@ -23,6 +23,8 @@ import { formatDurationHoursMins } from '../../utils/formatters';
 
 export const ProfileView: React.FC = () => {
   const {
+    isDemoEnvironment,
+    reloadSampleData,
     profile,
     updateProfile,
     sessions,
@@ -174,6 +176,31 @@ export const ProfileView: React.FC = () => {
         </p>
       </div>
 
+      {/* Preview Environment Banner */}
+      {isDemoEnvironment && (
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-amber-900 dark:text-amber-200">
+            <Sparkles className="w-4 h-4 shrink-0 text-amber-600" />
+            <span>
+              <strong>Preview Mode Active</strong>: Sample focus sessions are loaded so you can test stats and goals. Production stays 100% clean.
+            </span>
+          </div>
+          <Button
+            variant="tonal"
+            size="sm"
+            className="text-xs shrink-0 self-end sm:self-auto bg-amber-500/15 text-amber-900 dark:text-amber-100 hover:bg-amber-500/25"
+            onClick={async () => {
+              await reloadSampleData();
+              setImportSuccessMessage('Sample focus data reloaded successfully!');
+              setTimeout(() => setImportSuccessMessage(null), 3000);
+            }}
+          >
+            <RotateCcw className="w-3.5 h-3.5 mr-1" />
+            Reload Demo Data
+          </Button>
+        </div>
+      )}
+
       {/* Profile Header Card */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
         <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 text-center sm:text-left">
@@ -204,9 +231,15 @@ export const ProfileView: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-xl font-bold text-md-on-surface">{profile.displayName}</h3>
-                <span className="inline-flex items-center gap-1 text-xs font-medium text-md-primary mt-0.5">
-                  <Sparkles className="w-3 h-3" /> Local Focus Account
-                </span>
+                {isDemoEnvironment ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-500/15 px-2 py-0.5 rounded-full mt-0.5">
+                    <Sparkles className="w-3 h-3" /> Preview Test Account
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium text-md-primary mt-0.5">
+                    <Sparkles className="w-3 h-3" /> Local Focus Account
+                  </span>
+                )}
               </div>
 
               <Button
