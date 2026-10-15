@@ -90,13 +90,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
 
     try {
-      // 1. Gather current local state
       const currentTags = await tagRepository.getAll();
       const currentSessions = await sessionRepository.getAll();
       const currentSettings = await settingsRepository.get();
       const currentProfile = await profileRepository.get();
+      const deletedTagIds = authService.getDeletedTagIds();
 
-      // 2. Push local state to Cloudflare Worker
+      // 1. Push local state to Cloudflare Worker with deletedTagIds
       await authService.pushCloudData({
         profile: {
           displayName: currentProfile.displayName,
@@ -104,29 +104,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           dailyGoalMinutes: currentProfile.dailyGoalMinutes,
         },
         tags: currentTags,
+        deletedTagIds: Array.from(deletedTagIds),
         sessions: currentSessions,
         settings: currentSettings,
       });
 
-      // 3. Fetch latest combined state from Cloudflare
+      // 2. Fetch latest combined state from Cloudflare
       const cloudData = await authService.fetchCloudData();
 
       if (cloudData) {
-        // Merge cloud tags
-        if (cloudData.tags && cloudData.tags.length > 0) {
-          const mergedTagMap = new Map<string, Tag>();
-          currentTags.forEach((t) => mergedTagMap.set(t.id, t));
-          cloudData.tags.forEach((t) => mergedTagMap.set(t.id, t));
-          const finalTags = Array.from(mergedTagMap.values());
-          await tagRepository.saveAll(finalTags);
-          setTags(finalTags);
+        if (Array.isArray(cloudData.deletedTagIds)) {
+          cloudData.deletedTagIds.forEach((id) => authService.addDeletedTagId(id));
         }
+        const effectiveDeletedTagIds = authService.getDeletedTagIds();
+
+        // Merge cloud tags EXCLUDING any locally or remotely deleted tag IDs
+        const validLocalTags = currentTags.filter((t) => !effectiveDeletedTagIds.has(t.id));
+        const mergedTagMap = new Map<string, Tag>();
+        validLocalTags.forEach((t) => mergedTagMap.set(t.id, t));
+        (cloudData.tags || []).forEach((t) => {
+          if (!effectiveDeletedTagIds.has(t.id)) {
+            mergedTagMap.set(t.id, t);
+          }
+        });
+        const finalTags = Array.from(mergedTagMap.values());
+        await tagRepository.saveAll(finalTags);
+        setTags(finalTags);
 
         // Merge cloud sessions
-        if (cloudData.sessions && cloudData.sessions.length > 0) {
+        if (cloudData.sessions) {
           const sessionMap = new Map<string, CompletedSession>();
           currentSessions.forEach((s) => sessionMap.set(s.id, s));
-          cloudData.sessions.forEach((s) => sessionMap.set(s.id, s));
+          cloudData.sessions.forEach((s) => {
+            const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
+            sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
+          });
           const finalSessions = Array.from(sessionMap.values()).sort(
             (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
           );
@@ -215,7 +227,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lastSyncedAt: null,
       syncError: null,
     });
-    // Remove cloud-specific fields from local profile
     const cleanedProfile: UserProfile = {
       ...profile,
       id: undefined,
@@ -256,7 +267,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             user: verifiedUser,
             token: authService.getStoredToken(),
           }));
-          // Run background sync
           syncWithCloud();
         } else {
           setAuth({
@@ -337,16 +347,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTag = async (id: string): Promise<boolean> => {
+    // 1. Record in deleted tags tracking set
+    authService.addDeletedTagId(id);
+
+    // 2. Delete locally from repository
     const success = await tagRepository.delete(id);
-    if (success) {
-      const updated = await tagRepository.getAll();
-      setTags(updated);
-      if (activeTagId === id) {
-        setActiveTagId(null);
-      }
-      if (auth.isAuthenticated) {
-        syncWithCloud();
-      }
+
+    // 3. Unassign sessions that had this tag
+    const currentSessions = await sessionRepository.getAll();
+    const updatedSessions = currentSessions.map((s) => (s.tagId === id ? { ...s, tagId: null } : s));
+    await sessionRepository.saveAll(updatedSessions);
+    setSessions(updatedSessions);
+
+    // 4. Update tags in state
+    const updatedTags = await tagRepository.getAll();
+    setTags(updatedTags);
+    if (activeTagId === id) {
+      const nextActive = updatedTags.find((t) => !t.isArchived);
+      setActiveTagId(nextActive?.id ?? null);
+    }
+
+    // 5. If authenticated, explicitly delete on server and push
+    if (auth.isAuthenticated) {
+      await authService.deleteTag(id);
+      syncWithCloud();
     }
     return success;
   };
@@ -365,7 +389,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await sessionRepository.clear();
     setSessions([]);
     if (auth.isAuthenticated) {
-      syncWithCloud();
+      setAuth((prev) => ({ ...prev, isSyncing: true }));
+      try {
+        await authService.pushCloudData({
+          clearSessions: true,
+          sessions: [],
+        });
+        const nowIso = new Date().toISOString();
+        setAuth((prev) => ({ ...prev, isSyncing: false, lastSyncedAt: nowIso }));
+      } catch (err) {
+        console.error('Error clearing sessions in cloud:', err);
+        setAuth((prev) => ({ ...prev, isSyncing: false, syncError: (err as Error).message }));
+      }
     }
   };
 
@@ -409,22 +444,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let tagsAdded = 0;
 
     if (mode === 'replace') {
-      finalTags = incomingTags.length > 0 ? incomingTags : tags;
+      // Clear deleted tags tracking so imported tags are never blocked
+      authService.clearDeletedTagIds();
+
+      finalTags = incomingTags;
       finalSessions = incomingSessions;
       sessionsAdded = incomingSessions.length;
       tagsAdded = incomingTags.length;
 
+      let finalProfile = profile;
       if (data.profile) {
-        const mergedProf = { ...DEFAULT_PROFILE, ...data.profile };
-        await profileRepository.save(mergedProf);
-        setProfile(mergedProf);
+        finalProfile = { ...DEFAULT_PROFILE, ...data.profile };
+        await profileRepository.save(finalProfile);
+        setProfile(finalProfile);
       }
+
+      let finalSettings = settings;
       if (data.settings) {
-        const mergedSett = { ...DEFAULT_SETTINGS, ...data.settings };
-        await settingsRepository.save(mergedSett);
-        setSettings(mergedSett);
+        finalSettings = { ...DEFAULT_SETTINGS, ...data.settings };
+        await settingsRepository.save(finalSettings);
+        setSettings(finalSettings);
+      }
+
+      // Save locally
+      await tagRepository.saveAll(finalTags);
+      await sessionRepository.saveAll(finalSessions);
+      setTags(finalTags);
+      setSessions(finalSessions);
+
+      const firstActive = finalTags.find((t) => !t.isArchived);
+      setActiveTagId(firstActive?.id ?? null);
+
+      // Overwrite cloud state completely without pulling/merging old cloud records!
+      if (auth.isAuthenticated) {
+        setAuth((prev) => ({ ...prev, isSyncing: true }));
+        try {
+          await authService.pushCloudData({
+            mode: 'replace',
+            profile: finalProfile,
+            settings: finalSettings,
+            tags: finalTags,
+            sessions: finalSessions,
+          });
+          const nowIso = new Date().toISOString();
+          setAuth((prev) => ({ ...prev, isSyncing: false, lastSyncedAt: nowIso }));
+        } catch (err) {
+          console.error('Error overwriting cloud data on replace:', err);
+          setAuth((prev) => ({ ...prev, isSyncing: false, syncError: (err as Error).message }));
+        }
       }
     } else {
+      // Merge mode
       const existingTagIds = new Set(tags.map((t) => t.id));
       const existingTagNames = new Set(tags.map((t) => t.name.toLowerCase().trim()));
       const newTagsToKeep: Tag[] = [];
@@ -448,16 +518,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
       finalSessions = [...sessions, ...newSessionsToKeep];
-    }
 
-    await tagRepository.saveAll(finalTags);
-    await sessionRepository.saveAll(finalSessions);
+      await tagRepository.saveAll(finalTags);
+      await sessionRepository.saveAll(finalSessions);
 
-    setTags(finalTags);
-    setSessions(finalSessions);
+      setTags(finalTags);
+      setSessions(finalSessions);
 
-    if (auth.isAuthenticated) {
-      syncWithCloud();
+      if (auth.isAuthenticated) {
+        syncWithCloud();
+      }
     }
 
     return { sessionsAdded, tagsAdded };
@@ -465,9 +535,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const resetAllData = async (scope: 'sessions-only' | 'factory-reset'): Promise<void> => {
     if (scope === 'sessions-only') {
-      await sessionRepository.clear();
-      setSessions([]);
+      await clearSessions();
     } else {
+      authService.clearDeletedTagIds();
       await sessionRepository.clear();
       const defTags = await tagRepository.resetToDefaults();
       const defSettings = await settingsRepository.resetToDefaults();
@@ -478,10 +548,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSettings(defSettings);
       setProfile(defProfile);
       setActiveTagId(defTags[0]?.id ?? null);
-    }
 
-    if (auth.isAuthenticated) {
-      syncWithCloud();
+      if (auth.isAuthenticated) {
+        await authService.pushCloudData({
+          mode: 'replace',
+          profile: defProfile,
+          settings: defSettings,
+          tags: defTags,
+          sessions: [],
+        });
+      }
     }
   };
 

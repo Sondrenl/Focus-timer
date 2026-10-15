@@ -58,13 +58,13 @@ export class TagRepository implements ITagRepository {
 
   private seedDefaultTagsIfEmpty(): void {
     const existing = this.storage.getItem<Tag[] | null>(TAGS_STORAGE_KEY, null);
-    if (!existing || existing.length === 0) {
+    if (existing === null) {
       this.storage.setItem(TAGS_STORAGE_KEY, DEFAULT_TAGS);
     }
   }
 
   async getAll(): Promise<Tag[]> {
-    return this.storage.getItem<Tag[]>(TAGS_STORAGE_KEY, DEFAULT_TAGS);
+    return this.storage.getItem<Tag[]>(TAGS_STORAGE_KEY, []);
   }
 
   async getActive(): Promise<Tag[]> {

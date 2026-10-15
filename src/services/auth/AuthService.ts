@@ -6,10 +6,12 @@ import { UserSettings } from '../../types/settings';
 const TOKEN_KEY = 'focus_timer_auth_token';
 const USER_KEY = 'focus_timer_cloud_user';
 const LAST_SYNC_KEY = 'focus_timer_last_synced_at';
+const DELETED_TAGS_KEY = 'focus_timer_deleted_tag_ids';
 
 export interface CloudDataResponse {
   profile: UserProfile | null;
   tags: Tag[];
+  deletedTagIds?: string[];
   sessions: CompletedSession[];
   settings: UserSettings | null;
   syncedAt: string;
@@ -49,6 +51,33 @@ export class AuthService {
       return localStorage.getItem(LAST_SYNC_KEY);
     } catch {
       return null;
+    }
+  }
+
+  public getDeletedTagIds(): Set<string> {
+    try {
+      const raw = localStorage.getItem(DELETED_TAGS_KEY);
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  }
+
+  public addDeletedTagId(id: string): void {
+    try {
+      const set = this.getDeletedTagIds();
+      set.add(id);
+      localStorage.setItem(DELETED_TAGS_KEY, JSON.stringify(Array.from(set)));
+    } catch (e) {
+      console.warn('Error recording deleted tag ID', e);
+    }
+  }
+
+  public clearDeletedTagIds(): void {
+    try {
+      localStorage.removeItem(DELETED_TAGS_KEY);
+    } catch (e) {
+      console.warn('Error clearing deleted tags', e);
     }
   }
 
@@ -116,8 +145,24 @@ export class AuthService {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem(LAST_SYNC_KEY);
+      localStorage.removeItem(DELETED_TAGS_KEY);
     } catch (e) {
       console.warn('Error clearing auth state', e);
+    }
+  }
+
+  public async deleteTag(tagId: string): Promise<void> {
+    this.addDeletedTagId(tagId);
+    const token = this.getStoredToken();
+    if (!token) return;
+
+    try {
+      await fetch(`/api/tags/${encodeURIComponent(tagId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (e) {
+      console.warn('Failed to delete tag on remote server', e);
     }
   }
 
@@ -141,8 +186,11 @@ export class AuthService {
   }
 
   public async pushCloudData(payload: {
+    mode?: 'merge' | 'replace';
     profile?: Partial<UserProfile>;
     tags?: Tag[];
+    deletedTagIds?: string[];
+    clearSessions?: boolean;
     sessions?: CompletedSession[];
     settings?: UserSettings;
   }): Promise<{ success: boolean; syncedAt: string }> {

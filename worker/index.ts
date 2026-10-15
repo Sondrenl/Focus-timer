@@ -35,6 +35,15 @@ CREATE TABLE IF NOT EXISTS tags (
 
 CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id);
 
+CREATE TABLE IF NOT EXISTS deleted_tags (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  tag_id TEXT NOT NULL,
+  deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -276,13 +285,33 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       );
     }
 
+    // DELETE /api/tags/:id — Hard delete a tag and unassign related sessions
+    if (url.pathname.startsWith('/api/tags/') && request.method === 'DELETE') {
+      if (!currentUserId) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
+      }
+
+      const tagId = decodeURIComponent(url.pathname.replace('/api/tags/', ''));
+      if (!tagId) {
+        return new Response(JSON.stringify({ error: 'Missing tag ID' }), { status: 400, headers: corsHeaders });
+      }
+
+      await env.DB.batch([
+        env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
+        env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
+        env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId),
+      ]);
+
+      return new Response(JSON.stringify({ success: true, deletedTagId: tagId }), { headers: corsHeaders });
+    }
+
     // GET /api/sync — Fetch all cloud user data
     if (url.pathname === '/api/sync' && request.method === 'GET') {
       if (!currentUserId) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
       }
 
-      const [userRow, tagRows, sessionRows, settingsRow] = await Promise.all([
+      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows] = await Promise.all([
         env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
           id: string;
           email: string;
@@ -316,6 +345,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           sound_enabled: number;
           sound_volume: number;
           notifications_enabled: number;
+        }>(),
+        env.DB.prepare('SELECT tag_id FROM deleted_tags WHERE user_id = ?').bind(currentUserId).all<{
+          tag_id: string;
         }>(),
       ]);
 
@@ -361,12 +393,15 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           }
         : null;
 
+      const deletedTagIds = (deletedTagRows.results || []).map((r) => r.tag_id);
+
       return new Response(
         JSON.stringify({
           profile,
           tags,
           sessions,
           settings,
+          deletedTagIds,
           syncedAt: new Date().toISOString(),
         }),
         { headers: corsHeaders }
@@ -380,6 +415,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       }
 
       const body = (await request.json().catch(() => ({}))) as {
+        mode?: 'merge' | 'replace';
+        clearSessions?: boolean;
         profile?: {
           displayName?: string;
           avatarEmoji?: string;
@@ -392,6 +429,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           isArchived?: boolean;
           createdAt?: string;
         }>;
+        deletedTagIds?: string[];
         sessions?: Array<{
           id: string;
           tagId: string | null;
@@ -412,9 +450,32 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         };
       };
 
+      // 0. Handle Replace or Clear Sessions mode
+      if (body.mode === 'replace') {
+        // Full override: delete existing sessions, tags, and deleted tag records for this user
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM tags WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ?').bind(currentUserId),
+        ]);
+      } else if (body.clearSessions) {
+        await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId).run();
+      }
+
       const statements: D1PreparedStatement[] = [];
 
-      // 1. Update Profile if provided
+      // 1. Process Deleted Tags (if not replacing)
+      if (body.mode !== 'replace' && Array.isArray(body.deletedTagIds) && body.deletedTagIds.length > 0) {
+        for (const tagId of body.deletedTagIds) {
+          statements.push(
+            env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
+            env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
+            env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId)
+          );
+        }
+      }
+
+      // 2. Update Profile if provided
       if (body.profile) {
         const { displayName, avatarEmoji, dailyGoalMinutes } = body.profile;
         statements.push(
@@ -434,9 +495,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         );
       }
 
-      // 2. Upsert Tags
+      // 3. Upsert Tags (excluding any that were deleted)
+      const deletedSet = body.mode === 'replace' ? new Set<string>() : new Set(body.deletedTagIds || []);
       if (Array.isArray(body.tags) && body.tags.length > 0) {
         for (const tag of body.tags) {
+          if (deletedSet.has(tag.id)) continue;
           statements.push(
             env.DB.prepare(
               `INSERT INTO tags (id, user_id, name, color, is_archived, created_at, updated_at)
@@ -458,9 +521,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         }
       }
 
-      // 3. Upsert Sessions
+      // 4. Upsert Sessions
       if (Array.isArray(body.sessions) && body.sessions.length > 0) {
         for (const session of body.sessions) {
+          const effectiveTagId = session.tagId && deletedSet.has(session.tagId) ? null : session.tagId;
           statements.push(
             env.DB.prepare(
               `INSERT INTO sessions (id, user_id, tag_id, session_type, duration_seconds, completed_at)
@@ -473,7 +537,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             ).bind(
               session.id,
               currentUserId,
-              session.tagId,
+              effectiveTagId,
               session.sessionType,
               session.durationSeconds,
               session.completedAt
@@ -482,7 +546,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         }
       }
 
-      // 4. Upsert Settings
+      // 5. Upsert Settings
       if (body.settings) {
         const s = body.settings;
         statements.push(
@@ -532,6 +596,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           processedRecords: {
             tags: body.tags?.length || 0,
             sessions: body.sessions?.length || 0,
+            deletedTags: body.deletedTagIds?.length || 0,
+            mode: body.mode || 'merge',
           },
         }),
         { headers: corsHeaders }

@@ -149,6 +149,14 @@ export const TagManager: React.FC = () => {
                       >
                         <Archive className="w-4 h-4" />
                       </button>
+
+                      <button
+                        onClick={() => setDeleteConfirmId(tag.id)}
+                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
+                        title="Delete Tag"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </>
                   ) : (
                     <>
