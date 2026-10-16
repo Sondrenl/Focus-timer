@@ -204,22 +204,24 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
           />
         </svg>
 
-        {/* Central Display Stack */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center z-10 pointer-events-none">
-          {/* Status Badge */}
-          <div
-            className="px-3.5 py-1 rounded-full text-xs font-semibold mb-2 shadow-xs transition-colors tracking-wide pointer-events-auto"
-            style={{
-              backgroundColor: sessionMeta.bgRing,
-              color: sessionMeta.color,
-            }}
-          >
-            {sessionMeta.label}
-          </div>
+        {/* Central Display Stack: Timer digits centered precisely in the middle of the ring */}
+        <div className="absolute inset-0 flex items-center justify-center text-center z-10 pointer-events-none">
+          <div className="relative flex flex-col items-center justify-center">
+            {/* Status Badge floating above the timer without displacing its center */}
+            <div
+              className="absolute bottom-full mb-2.5 px-3.5 py-1 rounded-full text-xs font-semibold shadow-xs transition-colors tracking-wide pointer-events-auto whitespace-nowrap"
+              style={{
+                backgroundColor: sessionMeta.bgRing,
+                color: sessionMeta.color,
+              }}
+            >
+              {sessionMeta.label}
+            </div>
 
-          {/* Large Monospace/Digital Timer Digits */}
-          <div className="text-5xl md:text-6xl font-extrabold text-md-on-surface tracking-tighter tabular-nums font-mono drop-shadow-xs">
-            {formatTime(remainingSeconds)}
+            {/* Large Monospace/Digital Timer Digits: dead center in the ring */}
+            <div className="text-5xl md:text-6xl font-extrabold text-md-on-surface tracking-tighter tabular-nums font-mono drop-shadow-xs leading-none">
+              {formatTime(remainingSeconds)}
+            </div>
           </div>
         </div>
       </div>
