@@ -69,6 +69,18 @@ const SCHEMA_STATEMENTS = [
     notifications_enabled INTEGER DEFAULT 0,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`,
+  `CREATE TABLE IF NOT EXISTS active_timers (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    session_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    remaining_seconds INTEGER NOT NULL,
+    total_seconds INTEGER NOT NULL,
+    target_end_time INTEGER,
+    current_cycle INTEGER NOT NULL,
+    tag_id TEXT,
+    timer_run_id TEXT,
+    updated_at_ms INTEGER NOT NULL
+  )`,
 ];
 
 let isSchemaEnsured = false;
@@ -343,7 +355,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           }
         : null;
 
-      return new Response(JSON.stringify({ timer }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ timer, serverTime: Date.now() }), { headers: corsHeaders });
     }
 
     // POST /api/timer — Update active timer state
@@ -352,6 +364,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
       }
 
+      const serverNow = Date.now();
       const body = (await request.json().catch(() => ({}))) as {
         sessionType?: string;
         status?: string;
@@ -364,9 +377,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         updatedAtMs?: number;
       };
 
-      if (!body.sessionType || !body.status || typeof body.updatedAtMs !== "number") {
+      if (!body.sessionType || !body.status) {
         return new Response(JSON.stringify({ error: "Invalid timer payload" }), { status: 400, headers: corsHeaders });
       }
+
+      const updatedAtMs = typeof body.updatedAtMs === "number" ? body.updatedAtMs : serverNow;
 
       await env.DB.prepare(
         `INSERT INTO active_timers (
@@ -394,10 +409,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         body.currentCycle ?? 1,
         body.activeTagId ?? null,
         body.timerRunId ?? null,
-        body.updatedAtMs
+        updatedAtMs
       ).run();
 
-      return new Response(JSON.stringify({ success: true, updatedAtMs: body.updatedAtMs }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ success: true, updatedAtMs, serverTime: serverNow }), { headers: corsHeaders });
     }
 
     // GET /api/sync — Fetch all cloud user data
@@ -511,6 +526,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           deletedTagIds,
           coffeeCups,
           syncedAt: new Date().toISOString(),
+          serverTime: Date.now(),
         }),
         { headers: corsHeaders }
       );
@@ -733,6 +749,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           success: true,
           coffeeCups,
           syncedAt: new Date().toISOString(),
+          serverTime: Date.now(),
           processedRecords: {
             tags: body.tags?.length || 0,
             sessions: body.sessions?.length || 0,

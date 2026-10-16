@@ -85,7 +85,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tags, setTags] = useState<Tag[]>([]);
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
-  const [activeTagId, setActiveTagId] = useState<string | null>(null);
+  const [activeTagId, setActiveTagIdState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('active_tag_id_v1') || null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setActiveTagId = useCallback((id: string | null) => {
+    setActiveTagIdState(id);
+    try {
+      if (id) {
+        localStorage.setItem('active_tag_id_v1', id);
+      } else {
+        localStorage.removeItem('active_tag_id_v1');
+      }
+    } catch {
+      // Storage errors ignored
+    }
+  }, []);
   const [coffeeCups, setCoffeeCups] = useState<CoffeeCup[]>([]);
   const [currentView, setCurrentView] = useState<'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile'>('timer');
   const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState());
@@ -324,13 +343,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
 
   useEffect(() => {
-    if (activeTagId !== null && activeTags.length > 0) {
-      const exists = activeTags.some((t) => t.id === activeTagId);
+    if (activeTagId !== null && tags.length > 0) {
+      const exists = tags.some((t) => t.id === activeTagId && !t.isArchived);
       if (!exists) {
-        setActiveTagId(null);
+        if (auth.isAuthenticated && !auth.isSyncing) {
+          syncWithCloud().then(() => {
+            tagRepository.getAll().then((currentTags) => {
+              if (!currentTags.some((t) => t.id === activeTagId && !t.isArchived)) {
+                setActiveTagId(null);
+              }
+            });
+          });
+        } else if (!auth.isAuthenticated) {
+          setActiveTagId(null);
+        }
       }
     }
-  }, [activeTags, activeTagId]);
+  }, [tags, activeTagId, auth.isAuthenticated, auth.isSyncing, syncWithCloud, setActiveTagId]);
 
   // Profile Operations
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {

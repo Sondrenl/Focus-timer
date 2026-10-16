@@ -20,6 +20,7 @@ const TOKEN_KEY = 'focus_timer_auth_token';
 const USER_KEY = 'focus_timer_cloud_user';
 const LAST_SYNC_KEY = 'focus_timer_last_synced_at';
 const DELETED_TAGS_KEY = 'focus_timer_deleted_tag_ids';
+const CLOCK_OFFSET_KEY = 'focus_timer_clock_offset';
 
 export interface CloudDataResponse {
   profile: UserProfile | null;
@@ -29,10 +30,19 @@ export interface CloudDataResponse {
   settings: UserSettings | null;
   coffeeCups?: CoffeeCup[];
   syncedAt: string;
+  serverTime?: number;
 }
 
 export class AuthService {
   private static instance: AuthService;
+  private clockOffset: number = (() => {
+    try {
+      const stored = localStorage.getItem(CLOCK_OFFSET_KEY);
+      return stored ? parseInt(stored, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  })();
 
   private constructor() {}
 
@@ -41,6 +51,46 @@ export class AuthService {
       AuthService.instance = new AuthService();
     }
     return AuthService.instance;
+  }
+
+  /**
+   * Return clock offset between local client Date.now() and server time in ms.
+   * serverNow = Date.now() + clockOffset
+   */
+  public getClockOffset(): number {
+    return this.clockOffset;
+  }
+
+  /**
+   * Return high-precision calibrated server time.
+   */
+  public getServerNow(): number {
+    return Date.now() + this.clockOffset;
+  }
+
+  /**
+   * Update clock offset from server-reported timestamp using NTP-style round-trip midpoint estimation.
+   */
+  public updateClockOffset(serverTime: number, requestStartTime: number, requestEndTime: number): void {
+    const roundTrip = Math.max(0, requestEndTime - requestStartTime);
+    // Ignore updates with abnormal network lag (> 6000ms) to avoid skew distortion
+    if (roundTrip > 6000) return;
+
+    const clientMidpoint = requestStartTime + roundTrip / 2;
+    const measuredOffset = Math.round(serverTime - clientMidpoint);
+
+    if (this.clockOffset === 0) {
+      this.clockOffset = measuredOffset;
+    } else {
+      // Exponential moving average (70% previous, 30% new) to smooth out network jitter
+      this.clockOffset = Math.round(this.clockOffset * 0.7 + measuredOffset * 0.3);
+    }
+
+    try {
+      localStorage.setItem(CLOCK_OFFSET_KEY, this.clockOffset.toString());
+    } catch {
+      // Storage errors ignored
+    }
   }
 
   public getStoredToken(): string | null {
@@ -120,7 +170,7 @@ export class AuthService {
       throw new Error((err as any).error || 'Failed to authenticate with Google');
     }
 
-    const data = (await res.json()) as { token: string; user: UserProfile };
+    const data = (await res.json()) as { token: string; user: UserProfile; serverTime?: number };
 
     try {
       localStorage.setItem(TOKEN_KEY, data.token);
@@ -184,15 +234,20 @@ export class AuthService {
     const token = this.getStoredToken();
     if (!token) return null;
 
+    const t0 = Date.now();
     const res = await fetch('/api/sync', {
       headers: { Authorization: `Bearer ${token}` },
     });
+    const t1 = Date.now();
 
     if (!res.ok) {
       throw new Error('Failed to fetch cloud data');
     }
 
     const data = (await res.json()) as CloudDataResponse;
+    if (typeof data.serverTime === 'number') {
+      this.updateClockOffset(data.serverTime, t0, t1);
+    }
     if (data.syncedAt) {
       localStorage.setItem(LAST_SYNC_KEY, data.syncedAt);
     }
@@ -208,10 +263,11 @@ export class AuthService {
     sessions?: CompletedSession[];
     coffeeCups?: CoffeeCup[];
     settings?: UserSettings;
-  }): Promise<{ success: boolean; syncedAt: string }> {
+  }): Promise<{ success: boolean; syncedAt: string; serverTime?: number }> {
     const token = this.getStoredToken();
     if (!token) throw new Error('Not authenticated');
 
+    const t0 = Date.now();
     const res = await fetch('/api/sync', {
       method: 'POST',
       headers: {
@@ -220,13 +276,17 @@ export class AuthService {
       },
       body: JSON.stringify(payload),
     });
+    const t1 = Date.now();
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error((err as any).error || 'Failed to sync with cloud');
     }
 
-    const data = (await res.json()) as { success: boolean; syncedAt: string };
+    const data = (await res.json()) as { success: boolean; syncedAt: string; serverTime?: number };
+    if (typeof data.serverTime === 'number') {
+      this.updateClockOffset(data.serverTime, t0, t1);
+    }
     if (data.syncedAt) {
       localStorage.setItem(LAST_SYNC_KEY, data.syncedAt);
     }
@@ -238,23 +298,29 @@ export class AuthService {
     if (!token) return null;
 
     try {
+      const t0 = Date.now();
       const res = await fetch("/api/timer", {
         headers: { Authorization: `Bearer ${token}` },
       });
+      const t1 = Date.now();
       if (!res.ok) return null;
-      const data = (await res.json()) as { timer: RemoteTimerState | null };
+      const data = (await res.json()) as { timer: RemoteTimerState | null; serverTime?: number };
+      if (typeof data.serverTime === 'number') {
+        this.updateClockOffset(data.serverTime, t0, t1);
+      }
       return data.timer;
     } catch {
       return null;
     }
   }
 
-  public async pushRemoteTimer(timer: RemoteTimerState): Promise<void> {
+  public async pushRemoteTimer(timer: RemoteTimerState): Promise<{ success: boolean; updatedAtMs?: number } | null> {
     const token = this.getStoredToken();
-    if (!token) return;
+    if (!token) return null;
 
     try {
-      await fetch("/api/timer", {
+      const t0 = Date.now();
+      const res = await fetch("/api/timer", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -262,8 +328,16 @@ export class AuthService {
         },
         body: JSON.stringify(timer),
       });
+      const t1 = Date.now();
+      if (!res.ok) return null;
+      const data = (await res.json()) as { success: boolean; updatedAtMs?: number; serverTime?: number };
+      if (typeof data.serverTime === 'number') {
+        this.updateClockOffset(data.serverTime, t0, t1);
+      }
+      return data;
     } catch (e) {
       console.warn("Failed to push remote timer", e);
+      return null;
     }
   }
 }

@@ -1,3 +1,4 @@
+import { AuthService } from '../../services/auth/AuthService';
 import React, { useEffect, useRef, useMemo } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
@@ -137,7 +138,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
       // Continuous sub-second progress calculation down to the millisecond
       let currentFraction = 0;
       if (status === 'RUNNING' && targetEndTimeRef.current !== null && totalSecondsRef.current > 0) {
-        const remainingMs = Math.max(0, targetEndTimeRef.current - Date.now());
+        const remainingMs = Math.max(0, targetEndTimeRef.current - AuthService.getInstance().getServerNow());
         currentFraction = remainingMs / (totalSecondsRef.current * 1000);
       } else if (totalSecondsRef.current > 0) {
         currentFraction = remainingSecondsRef.current / totalSecondsRef.current;
