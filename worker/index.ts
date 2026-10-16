@@ -307,23 +307,21 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         let updatedAtMs = timerRow.updated_at_ms;
 
         if (status === "RUNNING") {
-          if (isRunningHeartbeat) {
-            // Active device is reporting in: refresh heartbeat
+          const lastHb = timerRow.last_heartbeat_ms || timerRow.updated_at_ms;
+          if (now - lastHb > 8500) {
+            // All active devices have been silent (> 8.5s without heartbeat = phone turned off / lid closed / offline)
+            status = "PAUSED";
+            remainingSeconds = targetEndTime ? Math.max(0, Math.ceil((targetEndTime - lastHb) / 1000)) : remainingSeconds;
+            targetEndTime = null;
+            updatedAtMs = lastHb;
+            await env.DB.prepare(
+              "UPDATE active_timers SET status = 'PAUSED', remaining_seconds = ?, target_end_time = NULL, updated_at_ms = ?, last_heartbeat_ms = ? WHERE user_id = ?"
+            ).bind(remainingSeconds, updatedAtMs, lastHb, currentUserId).run();
+          } else if (isRunningHeartbeat) {
+            // Active device is reporting in live: refresh heartbeat
             await env.DB.prepare(
               "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
             ).bind(now, currentUserId).run();
-          } else {
-            // Check if active device has been silent (> 8.5s without heartbeat = lid closed / slept / offline)
-            const lastHb = timerRow.last_heartbeat_ms || timerRow.updated_at_ms;
-            if (now - lastHb > 8500) {
-              status = "PAUSED";
-              remainingSeconds = targetEndTime ? Math.max(0, Math.ceil((targetEndTime - lastHb) / 1000)) : remainingSeconds;
-              targetEndTime = null;
-              updatedAtMs = lastHb;
-              await env.DB.prepare(
-                "UPDATE active_timers SET status = 'PAUSED', remaining_seconds = ?, target_end_time = NULL, updated_at_ms = ? WHERE user_id = ?"
-              ).bind(remainingSeconds, updatedAtMs, currentUserId).run();
-            }
           }
         }
 

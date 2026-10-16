@@ -150,9 +150,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Sleep detection: track last recorded wall-clock tick timestamp
   const lastTickTimeRef = useRef<number>(Date.now());
 
-  // Screen Wake Lock on mobile & desktop when keepAwake is enabled
+  // Automatically keep screen awake whenever a timer is running (mobile & desktop)
   useEffect(() => {
-    if (settings.keepAwake && status === 'RUNNING') {
+    if (status === 'RUNNING') {
       wakeLockService.acquire();
     } else {
       wakeLockService.release();
@@ -160,7 +160,16 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       wakeLockService.release();
     };
-  }, [settings.keepAwake, status]);
+  }, [status]);
+
+  // Release wake lock immediately if page is hidden / navigated away
+  useEffect(() => {
+    const handlePageHide = () => {
+      wakeLockService.release();
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, []);
 
   // Persist state to localStorage on updates
   useEffect(() => {

@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
 import { Switch } from '../ui/Switch';
 import { Button } from '../ui/Button';
-import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target, Smartphone } from 'lucide-react';
+import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 
 export const SettingsView: React.FC = () => {
@@ -230,14 +230,14 @@ export const SettingsView: React.FC = () => {
         </div>
       </Card>
 
-      {/* 4. Audio, Notifications & Display */}
+      {/* 4. Audio & Alerts */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center">
             <Volume2 className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-md-on-surface">Audio, Alerts & Display</h3>
+            <h3 className="text-base font-bold text-md-on-surface">Audio & Alerts</h3>
           </div>
         </div>
 
@@ -268,24 +268,6 @@ export const SettingsView: React.FC = () => {
             <Switch
               checked={settings.notificationsEnabled}
               onChange={handleToggleNotifications}
-            />
-          </div>
-
-          {/* Prevent Screen Sleeping (Mobile & Desktop) */}
-          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
-            <div className="flex items-center gap-2">
-              <Smartphone className="w-4 h-4 text-md-on-surface-variant" />
-              <div>
-                <div className="text-sm font-semibold text-md-on-surface">Keep Screen Awake</div>
-                <div className="text-xs text-md-on-surface-variant">Prevent display from sleeping while timer is running (ideal for mobile stands)</div>
-              </div>
-            </div>
-            <Switch
-              checked={Boolean(settings.keepAwake)}
-              onChange={(val) => {
-                updateSettings({ keepAwake: val });
-                showSaved();
-              }}
             />
           </div>
         </div>
