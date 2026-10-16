@@ -15,30 +15,34 @@ interface TimerDisplayProps {
 /**
  * Generate circular ring path with dynamic morphing factor:
  * - morphFactor = 0: Mathematically perfect circle (when paused / idle)
- * - morphFactor = 1: Fully alive, organic undulating wave (when running)
- * Seamlessly transitions between 0 and 1 for a smooth, natural bloom and settle.
+ * - morphFactor = 1: Organic undulating wave with odd harmonics (when running)
+ * 
+ * Uses odd harmonic frequencies (3-wave and 5-wave) instead of 4-wave to completely prevent
+ * 4-corner squaring, ensuring the donut maintains its round circular form while feeling
+ * fluid, living, and gently alive.
  */
 function getWavyPath(
   center: number,
   radius: number,
   phase: number,
   morphFactor: number = 0,
-  samples = 140
+  samples = 160
 ) {
   let path = '';
   let length = 0;
   let prevX = 0;
   let prevY = 0;
 
-  // Scale organic wave amplitudes by morphFactor
-  const breath = morphFactor * 0.7 * Math.sin(phase * 0.7);
-  const amp1 = morphFactor * 2.2;
-  const amp2 = morphFactor * 1.1;
+  // Gentle, uniform radial breathing that preserves circular integrity
+  const breath = morphFactor * 0.9 * Math.sin(phase * 0.6);
+  // Odd harmonic undulations (3-lobe and 5-lobe): prevents 4-corner squaring
+  const amp1 = morphFactor * 1.5; // Primary gentle 3-point liquid undulation
+  const amp2 = morphFactor * 0.7; // Secondary 5-point micro-ripple for organic life
 
   for (let i = 0; i <= samples; i++) {
     const alpha = (i / samples) * 2 * Math.PI; // 0 to 2pi clockwise starting at 12 o'clock
-    // At morphFactor = 0, r is strictly radius (perfect circle)
-    const r = radius + breath + amp1 * Math.sin(4 * alpha - phase) + amp2 * Math.cos(2 * alpha + phase * 0.7);
+    // Using odd frequencies (3 * alpha and 5 * alpha) guarantees no 90-degree corner flattening
+    const r = radius + breath + amp1 * Math.sin(3 * alpha - phase) + amp2 * Math.sin(5 * alpha + phase * 1.2);
     const x = center + r * Math.sin(alpha);
     const y = center - r * Math.cos(alpha);
 
@@ -120,7 +124,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
       lastTime = currentTime;
 
       const targetMorph = status === 'RUNNING' ? 1 : 0;
-      // Gentle, slightly slower exponential easing between 0 (circle) and 1 (wave) in ~1.2s
+      // Gentle exponential easing between 0 (circle) and 1 (wave) in ~1.2s
       morphRef.current += (targetMorph - morphRef.current) * Math.min(1, 2.2 * delta);
 
       // Advance wave phase while active or transitioning
