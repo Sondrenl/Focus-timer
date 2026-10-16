@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { SessionType, TimerStatus, TimerState } from '../types/timer';
 import { useApp } from './AppContext';
 import { triggerCompletionConfetti } from '../utils/confetti';
-import { formatTime } from '../utils/formatters';
 import { AuthService, RemoteTimerState } from '../services/auth/AuthService';
 import { broadcastTimerState, subscribeTimerState } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
@@ -874,17 +873,25 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [auth.isAuthenticated, status, checkRemoteTimer]);
 
-  // Tab Title & Favicon updates
+  // Tab Title updates
   useEffect(() => {
-    const timeFormatted = formatTime(remainingSeconds);
-    const modeLabel = sessionType === 'WORK' ? 'Focus' : 'Break';
+    const safeSec = Math.max(0, Math.floor(remainingSeconds));
+    const mins = Math.floor(safeSec / 60);
+    const secs = safeSec % 60;
+    const timeFormatted = `${mins}:${secs.toString().padStart(2, '0')}`;
+    const badgeLabel =
+      sessionType === 'WORK'
+        ? 'Focus'
+        : sessionType === 'SHORT_BREAK'
+        ? 'Short break'
+        : 'Long break';
 
     if (status === 'RUNNING') {
-      document.title = `(${timeFormatted}) ${modeLabel} - Focus Timer`;
+      document.title = `${timeFormatted} - ${badgeLabel}`;
     } else if (status === 'PAUSED') {
-      document.title = `[Paused] ${timeFormatted} - Focus Timer`;
+      document.title = `Paused - ${badgeLabel}`;
     } else {
-      document.title = 'Focus Timer - Flow State Productivity';
+      document.title = 'Pomodor - Focus timer';
     }
   }, [remainingSeconds, status, sessionType]);
 
