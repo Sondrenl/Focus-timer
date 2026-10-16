@@ -8,7 +8,6 @@ export const CoffeeWorkspace: React.FC = () => {
   const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags } = useApp();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [viewDate, setViewDate] = useState<Date>(() => new Date());
-  const [feedbackToast, setFeedbackToast] = useState<{ text: string; color: string } | null>(null);
 
   const viewDateKey = toDateKey(viewDate);
   const isToday = viewDateKey === toDateKey(new Date());
@@ -50,42 +49,23 @@ export const CoffeeWorkspace: React.FC = () => {
     return list.sort((a, b) => b.count - a.count);
   }, [cupsForDate, activeTags]);
 
-  const showFeedback = (text: string, color: string) => {
-    setFeedbackToast({ text, color });
-    setTimeout(() => {
-      setFeedbackToast((prev) => (prev?.text === text ? null : prev));
-    }, 2200);
-  };
-
   const handleAdd = async () => {
     await addCoffeeCup(selectedTagId, viewDateKey);
-    showFeedback(`+1 Cup added (${currentTagName})`, currentTagColor);
   };
 
   const handleRemove = async () => {
     if (totalCount <= 0) return;
 
-    // If selectedTagId has cups logged on this date, remove that specific tag cup
+    // Prioritize removing cup of the selected tag if one exists on this date
     const cupsOfSelectedTag = cupsForDate.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
-    let tagToRemove = selectedTagId;
+    const targetCup =
+      cupsOfSelectedTag.length > 0
+        ? cupsOfSelectedTag[cupsOfSelectedTag.length - 1]
+        : cupsForDate[cupsForDate.length - 1];
 
-    if (cupsOfSelectedTag.length === 0) {
-      // Fallback: remove the latest cup of any tag
-      const latestCup = cupsForDate[cupsForDate.length - 1];
-      tagToRemove = latestCup ? latestCup.tagId : null;
-    }
+    if (!targetCup) return;
 
-    const removedTagName = tagToRemove
-      ? activeTags.find((t) => t.id === tagToRemove)?.name || 'Tagged'
-      : 'No Tag';
-    const removedColor = tagToRemove
-      ? activeTags.find((t) => t.id === tagToRemove)?.color || '#8D6E63'
-      : '#8D6E63';
-
-    const success = await removeCoffeeCup(viewDateKey, tagToRemove);
-    if (success) {
-      showFeedback(`-1 Cup removed (${removedTagName})`, removedColor);
-    }
+    await removeCoffeeCup(viewDateKey, targetCup.tagId, targetCup.id);
   };
 
   const goToPrevDay = () => {
@@ -173,17 +153,6 @@ export const CoffeeWorkspace: React.FC = () => {
             </div>
           </div>
         </div>
-
-        {/* Floating feedback toast */}
-        {feedbackToast && (
-          <div className="absolute -top-3 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-md-surface-container-highest border border-md-outline-variant/40 shadow-elevation-2 text-xs font-bold animate-in fade-in zoom-in-95 duration-150">
-            <span
-              className="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs"
-              style={{ backgroundColor: feedbackToast.color }}
-            />
-            <span className="text-md-on-surface">{feedbackToast.text}</span>
-          </div>
-        )}
       </div>
 
       {/* 4. Tag Breakdown Chips for Today */}

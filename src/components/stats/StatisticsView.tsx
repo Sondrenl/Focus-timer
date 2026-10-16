@@ -31,6 +31,9 @@ export const StatisticsView: React.FC = () => {
     totalFocusSeconds,
     totalWorkCount,
     totalCoffeeCups,
+    coffeeDailyAverage,
+    coffeeElapsedDays,
+    coffeePeakMetric,
     tagDistribution,
     activityBars,
     productiveMetric,
@@ -157,73 +160,135 @@ export const StatisticsView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Top Summary Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Focus Duration */}
-        <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
-          <div className="w-12 h-12 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center shrink-0">
-            <Clock className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-2xl font-extrabold text-md-on-surface tracking-tight">
-              {formatDurationHoursMins(totalFocusSeconds)}
-            </div>
-            <div className="text-xs font-medium text-md-on-surface-variant">
-              Focus Duration
-            </div>
-          </div>
-        </Card>
+      {/* 2. Focus Statistics Overview */}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <Clock className="w-4 h-4 text-md-primary" />
+          <h3 className="text-sm font-bold text-md-on-surface tracking-wide uppercase">
+            Focus Overview
+          </h3>
+        </div>
 
-        {/* Total Sessions */}
-        <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
-          <div className="w-12 h-12 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center shrink-0">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-2xl font-extrabold text-md-on-surface tracking-tight">
-              {totalWorkCount}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Total Focus Duration */}
+          <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-md-primary/10 text-md-primary flex items-center justify-center shrink-0">
+              <Clock className="w-6 h-6" />
             </div>
-            <div className="text-xs font-medium text-md-on-surface-variant">
-              Completed Pomodoros
+            <div className="min-w-0">
+              <div className="text-2xl font-extrabold text-md-on-surface tracking-tight truncate">
+                {formatDurationHoursMins(totalFocusSeconds)}
+              </div>
+              <div className="text-xs font-medium text-md-on-surface-variant">
+                Focus Duration
+              </div>
             </div>
-          </div>
-        </Card>
+          </Card>
 
-        {/* Total Coffee Cups */}
-        <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
-          <div className="w-12 h-12 rounded-2xl bg-amber-700/10 text-amber-700 flex items-center justify-center shrink-0">
-            <Coffee className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-2xl font-extrabold text-md-on-surface tracking-tight">
-              {totalCoffeeCups}
+          {/* Completed Pomodoros */}
+          <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-6 h-6" />
             </div>
-            <div className="text-xs font-medium text-md-on-surface-variant">
-              Coffee {totalCoffeeCups === 1 ? 'Cup' : 'Cups'}
+            <div className="min-w-0">
+              <div className="text-2xl font-extrabold text-md-on-surface tracking-tight truncate">
+                {totalWorkCount}
+              </div>
+              <div className="text-xs font-medium text-md-on-surface-variant">
+                Completed Pomodoros
+              </div>
             </div>
-          </div>
-        </Card>
+          </Card>
 
-        {/* Productivity Insight */}
-        <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
-            <Award className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-xl font-bold text-md-on-surface tracking-tight truncate">
-              {productiveMetric.value}
+          {/* Productivity Insight */}
+          <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
+              <Award className="w-6 h-6" />
             </div>
-            <div className="text-xs font-medium text-md-on-surface-variant">
-              {productiveMetric.title}
+            <div className="min-w-0">
+              <div className="text-xl font-bold text-md-on-surface tracking-tight truncate">
+                {productiveMetric.value}
+              </div>
+              <div className="text-xs font-medium text-md-on-surface-variant">
+                {productiveMetric.title}
+              </div>
+              <div className="text-[11px] text-md-outline mt-0.5 truncate">
+                {productiveMetric.subtext}
+              </div>
             </div>
-            <div className="text-[11px] text-md-outline mt-0.5 truncate">
-              {productiveMetric.subtext}
-            </div>
-          </div>
-        </Card>
+          </Card>
+        </div>
       </div>
 
-      {/* 3. Tag Distribution Donut Diagram */}
+      {/* 3. Coffee Statistics Overview */}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <Coffee className="w-4 h-4 text-amber-700" />
+          <h3 className="text-sm font-bold text-md-on-surface tracking-wide uppercase">
+            Coffee Overview
+          </h3>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Total Coffee Cups */}
+          <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-amber-700/10 text-amber-700 flex items-center justify-center shrink-0">
+              <Coffee className="w-6 h-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-2xl font-extrabold text-md-on-surface tracking-tight truncate">
+                {totalCoffeeCups}
+              </div>
+              <div className="text-xs font-medium text-md-on-surface-variant">
+                {totalCoffeeCups === 1 ? 'Total Cup' : 'Total Cups'}
+              </div>
+              <div className="text-[11px] text-md-outline mt-0.5 truncate">
+                {totalCoffeeCups === 1 ? '1 cup logged' : `${totalCoffeeCups} cups logged`}
+              </div>
+            </div>
+          </Card>
+
+          {/* Average Cups Per Day */}
+          <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-amber-800/10 text-amber-800 flex items-center justify-center shrink-0">
+              <Calendar className="w-6 h-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-2xl font-extrabold text-md-on-surface tracking-tight truncate">
+                {periodType === 'day' ? totalCoffeeCups : coffeeDailyAverage.toFixed(1)}
+              </div>
+              <div className="text-xs font-medium text-md-on-surface-variant">
+                {periodType === 'day' ? 'Cups Logged' : 'Average Cups / Day'}
+              </div>
+              <div className="text-[11px] text-md-outline mt-0.5 truncate">
+                {periodType === 'day'
+                  ? 'Single day view'
+                  : `Across ${coffeeElapsedDays} ${coffeeElapsedDays === 1 ? 'day' : 'days'}`}
+              </div>
+            </div>
+          </Card>
+
+          {/* Peak Coffee Insight (For all-time: day with highest average cups) */}
+          <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-amber-600/10 text-amber-600 flex items-center justify-center shrink-0">
+              <Award className="w-6 h-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xl font-bold text-md-on-surface tracking-tight truncate">
+                {coffeePeakMetric.value}
+              </div>
+              <div className="text-xs font-medium text-md-on-surface-variant">
+                {coffeePeakMetric.title}
+              </div>
+              <div className="text-[11px] text-md-outline mt-0.5 truncate">
+                {coffeePeakMetric.subtext}
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {/* 4. Tag Distribution Donut Diagram */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
@@ -247,7 +312,7 @@ export const StatisticsView: React.FC = () => {
         )}
       </Card>
 
-      {/* 4. Activity Bar Chart */}
+      {/* 5. Activity Bar Chart */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2.5">

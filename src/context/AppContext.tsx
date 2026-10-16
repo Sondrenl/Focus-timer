@@ -62,7 +62,7 @@ interface AppContextValue {
   // Coffee Cups
   coffeeCups: CoffeeCup[];
   addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
-  removeCoffeeCup: (date?: string, tagId?: string | null) => Promise<boolean>;
+  removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
 
   // View Navigation
   currentView: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile';
@@ -269,11 +269,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Load initial local data and verify cloud auth on mount
   useEffect(() => {
     async function init() {
-      const [loadedProfile, loadedTags, loadedSessions, loadedSettings] = await Promise.all([
+      const [loadedProfile, loadedTags, loadedSessions, loadedSettings, loadedCoffee] = await Promise.all([
         profileRepository.get(),
         tagRepository.getAll(),
         sessionRepository.getAll(),
         settingsRepository.get(),
+        coffeeRepository.getAll(),
       ]);
 
       const cleanSessions = isProduction()
@@ -283,6 +284,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setTags(loadedTags);
       setSessions(cleanSessions);
       setSettings(loadedSettings);
+      setCoffeeCups(loadedCoffee);
+
       if (isProduction() && cleanSessions.length !== loadedSessions.length) {
         await sessionRepository.saveAll(cleanSessions);
       }
@@ -414,16 +417,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addCoffeeCup = async (tagId: string | null, dateStr?: string): Promise<CoffeeCup> => {
     const today = dateStr || new Date().toISOString().slice(0, 10);
     const created = await coffeeRepository.addCup(today, tagId);
-    setCoffeeCups((prev) => [...prev, created]);
+    const updated = await coffeeRepository.getAll();
+    setCoffeeCups(updated);
     if (auth.isAuthenticated) {
       syncWithCloud();
     }
     return created;
   };
 
-  const removeCoffeeCup = async (dateStr?: string, tagId?: string | null): Promise<boolean> => {
+  const removeCoffeeCup = async (dateStr?: string, tagId?: string | null, cupId?: string): Promise<boolean> => {
     const today = dateStr || new Date().toISOString().slice(0, 10);
-    const success = await coffeeRepository.removeCup(today, tagId);
+    const success = await coffeeRepository.removeCup(today, tagId, cupId);
     if (success) {
       const updated = await coffeeRepository.getAll();
       setCoffeeCups(updated);
@@ -533,6 +537,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSettings(finalSettings);
       }
 
+      if (Array.isArray(data.coffeeCups)) {
+        await coffeeRepository.saveAll(data.coffeeCups);
+        setCoffeeCups(data.coffeeCups);
+      }
+
       // Save locally
       await tagRepository.saveAll(finalTags);
       await sessionRepository.saveAll(finalSessions);
@@ -552,6 +561,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             settings: finalSettings,
             tags: finalTags,
             sessions: finalSessions,
+            coffeeCups: Array.isArray(data.coffeeCups) ? data.coffeeCups : [],
           });
           const nowIso = new Date().toISOString();
           setAuth((prev) => ({ ...prev, isSyncing: false, lastSyncedAt: nowIso }));
@@ -586,6 +596,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       finalSessions = [...sessions, ...newSessionsToKeep];
 
+      if (Array.isArray(data.coffeeCups)) {
+        const existingCupIds = new Set(coffeeCups.map((c) => c.id));
+        const newCups = data.coffeeCups.filter((c) => !existingCupIds.has(c.id));
+        const combinedCups = [...coffeeCups, ...newCups];
+        await coffeeRepository.saveAll(combinedCups);
+        setCoffeeCups(combinedCups);
+      }
+
       await tagRepository.saveAll(finalTags);
       await sessionRepository.saveAll(finalSessions);
 
@@ -606,11 +624,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       authService.clearDeletedTagIds();
       await sessionRepository.clear();
+      await coffeeRepository.clear();
       const defTags = await tagRepository.resetToDefaults();
       const defSettings = await settingsRepository.resetToDefaults();
       const defProfile = await profileRepository.resetToDefaults();
 
       setSessions([]);
+      setCoffeeCups([]);
       setTags(defTags);
       setSettings(defSettings);
       setProfile(defProfile);
@@ -623,6 +643,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           settings: defSettings,
           tags: defTags,
           sessions: [],
+          coffeeCups: [],
         });
       }
     }

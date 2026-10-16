@@ -43,6 +43,13 @@ export interface ProductiveMetric {
   hasData: boolean;
 }
 
+export interface CoffeePeakMetric {
+  title: string;
+  value: string;
+  subtext: string;
+  hasData: boolean;
+}
+
 export function useStatistics() {
   const { sessions, tags, coffeeCups } = useApp();
 
@@ -185,7 +192,6 @@ export function useStatistics() {
       if (filteredSessions.length === 0) {
         activityBars = [];
       } else {
-        // Leftmost column: hour when first session was completed. Rightmost: latest hour.
         const sessionHours = filteredSessions.map((s) => new Date(s.completedAt).getHours());
         const minHour = Math.min(...sessionHours);
         const maxHour = Math.max(...sessionHours);
@@ -306,7 +312,6 @@ export function useStatistics() {
         ).sort();
 
         if (sessionYears.length <= 1) {
-          // Within a single year: breakdown by all 12 months with the year specified
           const yr = sessionYears[0] || new Date().getFullYear();
           const months = Array.from({ length: 12 }, (_, i) => ({
             monthIdx: i,
@@ -331,7 +336,6 @@ export function useStatistics() {
             sessionCount: item.count,
           }));
         } else {
-          // Multi-year history: breakdown by each year
           const minYear = Math.min(...sessionYears);
           const maxYear = Math.max(...sessionYears);
           const yearStats: { year: number; seconds: number; count: number }[] = [];
@@ -517,7 +521,7 @@ export function useStatistics() {
       };
     }
 
-    // Filter coffee cups within period
+    // 5. Coffee Calculations
     const startKey = toDateKey(startDate);
     const endKey = toDateKey(endDate);
     const filteredCoffee = coffeeCups.filter((cup) => {
@@ -525,12 +529,248 @@ export function useStatistics() {
     });
     const totalCoffeeCups = filteredCoffee.length;
 
+    // Elapsed days for calculating daily average across time ranges
+    const now = new Date();
+    const todayKey = toDateKey(now);
+    let coffeeElapsedDays = 1;
+
+    if (periodType === 'day') {
+      coffeeElapsedDays = 1;
+    } else if (periodType === 'week') {
+      if (startKey <= todayKey && todayKey <= endKey) {
+        const diff = Math.floor((now.getTime() - startDate.getTime()) / 86400000) + 1;
+        coffeeElapsedDays = Math.max(1, Math.min(7, diff));
+      } else {
+        coffeeElapsedDays = 7;
+      }
+    } else if (periodType === 'month') {
+      const daysInMonth = new Date(ref.getFullYear(), ref.getMonth() + 1, 0).getDate();
+      if (ref.getFullYear() === now.getFullYear() && ref.getMonth() === now.getMonth()) {
+        coffeeElapsedDays = Math.max(1, Math.min(daysInMonth, now.getDate()));
+      } else {
+        coffeeElapsedDays = daysInMonth;
+      }
+    } else if (periodType === 'year') {
+      const isCurrentYear = ref.getFullYear() === now.getFullYear();
+      if (isCurrentYear) {
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000) + 1;
+        coffeeElapsedDays = Math.max(1, dayOfYear);
+      } else {
+        const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+        coffeeElapsedDays = isLeap(ref.getFullYear()) ? 366 : 365;
+      }
+    } else if (periodType === 'custom') {
+      const sDate = new Date(`${customRange.start}T00:00:00.000`);
+      const eDate = new Date(`${customRange.end}T23:59:59.999`);
+      const effectiveEnd = eDate.getTime() > now.getTime() ? now : eDate;
+      coffeeElapsedDays = Math.max(1, Math.floor((effectiveEnd.getTime() - sDate.getTime()) / 86400000) + 1);
+    } else {
+      // 'all' time: days from earliest coffee cup to today
+      if (filteredCoffee.length > 0) {
+        const sortedDates = filteredCoffee.map((c) => c.date).sort();
+        const firstDateStr = sortedDates[0];
+        const firstDate = new Date(`${firstDateStr}T00:00:00.000`);
+        coffeeElapsedDays = Math.max(1, Math.floor((now.getTime() - firstDate.getTime()) / 86400000) + 1);
+      } else {
+        coffeeElapsedDays = 1;
+      }
+    }
+
+    const coffeeDailyAverage = Number((totalCoffeeCups / coffeeElapsedDays).toFixed(1));
+
+    // Peak coffee metric calculation
+    let coffeePeakMetric: CoffeePeakMetric;
+
+    // Group cups by date within period
+    const dayCupCounts = new Map<string, number>();
+    filteredCoffee.forEach((c) => {
+      dayCupCounts.set(c.date, (dayCupCounts.get(c.date) || 0) + 1);
+    });
+
+    let maxCups = 0;
+    let maxDayKey = '';
+    dayCupCounts.forEach((cnt, key) => {
+      if (cnt > maxCups) {
+        maxCups = cnt;
+        maxDayKey = key;
+      }
+    });
+
+    if (periodType === 'all') {
+      // All Time View: "the day you in average have the most cups"
+      if (filteredCoffee.length === 0) {
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: 'N/A',
+          subtext: 'No coffee logged yet',
+          hasData: false,
+        };
+      } else {
+        const sortedDates = Array.from(dayCupCounts.keys()).sort();
+        const earliestDate = new Date(`${sortedDates[0]}T00:00:00.000`);
+        const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        const weekdayOccurrences = new Array(7).fill(0);
+        const weekdayTotalCups = new Array(7).fill(0);
+
+        const cur = new Date(earliestDate.getTime());
+        while (cur <= todayDate) {
+          weekdayOccurrences[cur.getDay()] += 1;
+          cur.setDate(cur.getDate() + 1);
+        }
+
+        dayCupCounts.forEach((count, dKey) => {
+          const d = new Date(`${dKey}T00:00:00.000`);
+          weekdayTotalCups[d.getDay()] += count;
+        });
+
+        let bestWeekday = 1;
+        let highestAvgCups = -1;
+        for (let i = 0; i < 7; i++) {
+          const occ = weekdayOccurrences[i];
+          if (occ > 0) {
+            const avg = weekdayTotalCups[i] / occ;
+            if (avg > highestAvgCups) {
+              highestAvgCups = avg;
+              bestWeekday = i;
+            }
+          }
+        }
+
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: highestAvgCups > 0 ? `${WEEKDAY_NAMES[bestWeekday]}s` : 'N/A',
+          subtext: highestAvgCups > 0
+            ? `${highestAvgCups.toFixed(1)} cups avg per ${WEEKDAY_NAMES[bestWeekday].slice(0, 3)}`
+            : 'No coffee logged yet',
+          hasData: highestAvgCups > 0,
+        };
+      }
+    } else if (periodType === 'week') {
+      if (maxCups > 0) {
+        const d = new Date(`${maxDayKey}T00:00:00.000`);
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: WEEKDAY_NAMES[d.getDay()],
+          subtext: `${maxCups} ${maxCups === 1 ? 'cup' : 'cups'} logged`,
+          hasData: true,
+        };
+      } else {
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: 'N/A',
+          subtext: 'No coffee logged this week',
+          hasData: false,
+        };
+      }
+    } else if (periodType === 'month') {
+      if (maxCups > 0) {
+        const d = new Date(`${maxDayKey}T00:00:00.000`);
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
+          subtext: `${maxCups} ${maxCups === 1 ? 'cup' : 'cups'} logged`,
+          hasData: true,
+        };
+      } else {
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: 'N/A',
+          subtext: 'No coffee logged this month',
+          hasData: false,
+        };
+      }
+    } else if (periodType === 'year') {
+      const monthCupCounts = new Array(12).fill(0);
+      filteredCoffee.forEach((c) => {
+        const m = new Date(`${c.date}T00:00:00.000`).getMonth();
+        monthCupCounts[m] += 1;
+      });
+      let maxMonthIdx = 0;
+      let maxMonthCups = 0;
+      monthCupCounts.forEach((cnt, idx) => {
+        if (cnt > maxMonthCups) {
+          maxMonthCups = cnt;
+          maxMonthIdx = idx;
+        }
+      });
+
+      if (maxMonthCups > 0) {
+        coffeePeakMetric = {
+          title: 'Peak Coffee Month',
+          value: MONTH_NAMES[maxMonthIdx],
+          subtext: `${maxMonthCups} ${maxMonthCups === 1 ? 'cup' : 'cups'} logged`,
+          hasData: true,
+        };
+      } else {
+        coffeePeakMetric = {
+          title: 'Peak Coffee Month',
+          value: 'N/A',
+          subtext: 'No coffee logged this year',
+          hasData: false,
+        };
+      }
+    } else if (periodType === 'day') {
+      const tagCounts = new Map<string | null, number>();
+      filteredCoffee.forEach((c) => {
+        tagCounts.set(c.tagId || null, (tagCounts.get(c.tagId || null) || 0) + 1);
+      });
+      let topTagId: string | null = null;
+      let topTagCount = 0;
+      tagCounts.forEach((cnt, tid) => {
+        if (cnt > topTagCount) {
+          topTagCount = cnt;
+          topTagId = tid;
+        }
+      });
+
+      if (topTagCount > 0) {
+        const found = tags.find((t) => t.id === topTagId);
+        const tagName = topTagId ? (found ? found.name : 'Unknown') : 'No Tag';
+        coffeePeakMetric = {
+          title: 'Top Tag Today',
+          value: tagName,
+          subtext: `${topTagCount} ${topTagCount === 1 ? 'cup' : 'cups'} logged`,
+          hasData: true,
+        };
+      } else {
+        coffeePeakMetric = {
+          title: 'Top Tag Today',
+          value: 'N/A',
+          subtext: 'No coffee logged today',
+          hasData: false,
+        };
+      }
+    } else {
+      // custom
+      if (maxCups > 0) {
+        const d = new Date(`${maxDayKey}T00:00:00.000`);
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
+          subtext: `${maxCups} ${maxCups === 1 ? 'cup' : 'cups'} logged`,
+          hasData: true,
+        };
+      } else {
+        coffeePeakMetric = {
+          title: 'Peak Coffee Day',
+          value: 'N/A',
+          subtext: 'No coffee logged in range',
+          hasData: false,
+        };
+      }
+    }
+
     return {
       periodLabel,
       totalFocusSeconds,
       totalFocusHours,
       totalWorkCount,
       totalCoffeeCups,
+      coffeeDailyAverage,
+      coffeeElapsedDays,
+      coffeePeakMetric,
       tagDistribution,
       activityBars,
       productiveMetric,
@@ -550,6 +790,9 @@ export function useStatistics() {
     totalFocusHours: stats.totalFocusHours,
     totalWorkCount: stats.totalWorkCount,
     totalCoffeeCups: stats.totalCoffeeCups,
+    coffeeDailyAverage: stats.coffeeDailyAverage,
+    coffeeElapsedDays: stats.coffeeElapsedDays,
+    coffeePeakMetric: stats.coffeePeakMetric,
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,

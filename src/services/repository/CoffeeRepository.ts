@@ -33,15 +33,23 @@ export class CoffeeRepository implements ICoffeeRepository {
     return newCup;
   }
 
-  async removeCup(date: string, tagId?: string | null): Promise<boolean> {
+  async removeCup(date: string, tagId?: string | null, cupId?: string): Promise<boolean> {
     const all = await this.getAll();
-    // Find the latest cup matching date (and optionally tagId)
     let removeIndex = -1;
-    for (let i = all.length - 1; i >= 0; i--) {
-      if (all[i].date === date) {
-        if (tagId === undefined || all[i].tagId === tagId) {
-          removeIndex = i;
-          break;
+
+    // 1. If explicit cupId provided, remove that specific cup
+    if (cupId) {
+      removeIndex = all.findIndex((c) => c.id === cupId);
+    }
+
+    // 2. Otherwise find the latest cup on the specified date matching tagId
+    if (removeIndex < 0) {
+      for (let i = all.length - 1; i >= 0; i--) {
+        if (all[i].date === date) {
+          if (tagId === undefined || (all[i].tagId || null) === (tagId || null)) {
+            removeIndex = i;
+            break;
+          }
         }
       }
     }
