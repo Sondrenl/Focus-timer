@@ -11,76 +11,19 @@ const DEFAULT_AUTH_SECRET = 'pomodor-focus-timer-secret-jwt-key-2025';
 const DEFAULT_CLIENT_ID = '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
 
 const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    google_id TEXT UNIQUE NOT NULL,
-    email TEXT NOT NULL,
-    display_name TEXT,
-    avatar_url TEXT,
-    avatar_emoji TEXT DEFAULT '',
-    daily_goal_minutes INTEGER DEFAULT 120,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
-  `CREATE TABLE IF NOT EXISTS tags (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    color TEXT NOT NULL,
-    is_archived INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
+  `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS deleted_tags (
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tag_id TEXT NOT NULL,
-    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, tag_id)
-  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_tags (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, tag_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tag_id TEXT,
-    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),
-    duration_seconds INTEGER NOT NULL,
-    completed_at TEXT NOT NULL
-  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),\n    duration_seconds INTEGER NOT NULL,\n    completed_at TEXT NOT NULL\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at)`,
-  `CREATE TABLE IF NOT EXISTS coffee_cups (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tag_id TEXT,
-    date TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
+  `CREATE TABLE IF NOT EXISTS coffee_cups (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    date TEXT NOT NULL,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_date ON coffee_cups(user_id, date)`,
-  `CREATE TABLE IF NOT EXISTS user_settings (
-    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    work_duration_minutes INTEGER DEFAULT 25,
-    short_break_duration_minutes INTEGER DEFAULT 5,
-    long_break_duration_minutes INTEGER DEFAULT 25,
-    long_break_interval INTEGER DEFAULT 4,
-    auto_start_breaks INTEGER DEFAULT 0,
-    auto_start_pomodoros INTEGER DEFAULT 0,
-    sound_enabled INTEGER DEFAULT 1,
-    sound_volume REAL DEFAULT 0.8,
-    notifications_enabled INTEGER DEFAULT 0,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
-  `CREATE TABLE IF NOT EXISTS active_timers (
-    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    session_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    remaining_seconds INTEGER NOT NULL,
-    total_seconds INTEGER NOT NULL,
-    target_end_time INTEGER,
-    current_cycle INTEGER NOT NULL,
-    tag_id TEXT,
-    timer_run_id TEXT,
-    updated_at_ms INTEGER NOT NULL
-  )`,
+  `CREATE TABLE IF NOT EXISTS user_settings (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    work_duration_minutes INTEGER DEFAULT 25,\n    short_break_duration_minutes INTEGER DEFAULT 5,\n    long_break_duration_minutes INTEGER DEFAULT 25,\n    long_break_interval INTEGER DEFAULT 4,\n    auto_start_breaks INTEGER DEFAULT 0,\n    auto_start_pomodoros INTEGER DEFAULT 0,\n    sound_enabled INTEGER DEFAULT 1,\n    sound_volume REAL DEFAULT 0.8,\n    notifications_enabled INTEGER DEFAULT 0,\n    keep_awake INTEGER DEFAULT 0,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS active_timers (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    session_type TEXT NOT NULL,\n    status TEXT NOT NULL,\n    remaining_seconds INTEGER NOT NULL,\n    total_seconds INTEGER NOT NULL,\n    target_end_time INTEGER,\n    current_cycle INTEGER NOT NULL,\n    tag_id TEXT,\n    timer_run_id TEXT,\n    updated_at_ms INTEGER NOT NULL,\n    last_heartbeat_ms INTEGER\n  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    cup_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, cup_id)\n  )`,
+  `CREATE INDEX IF NOT EXISTS idx_deleted_coffee_cups_user ON deleted_coffee_cups(user_id)`,
 ];
 
 let isSchemaEnsured = false;
@@ -115,7 +58,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Timer-Heartbeat',
     'Content-Type': 'application/json',
   };
 
@@ -321,41 +264,90 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return new Response(JSON.stringify({ success: true, deletedTagId: tagId }), { headers: corsHeaders });
     }
 
-    // GET /api/timer — Fetch current active timer state
+    // GET /api/timer — Fetch current active timer state, coffee cups, and handle device liveness
     if (url.pathname === "/api/timer" && request.method === "GET") {
       if (!currentUserId) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
       }
 
-      const timerRow = await env.DB.prepare(
-        "SELECT * FROM active_timers WHERE user_id = ?"
-      ).bind(currentUserId).first<{
-        session_type: string;
-        status: string;
-        remaining_seconds: number;
-        total_seconds: number;
-        target_end_time: number | null;
-        current_cycle: number;
-        tag_id: string | null;
-        timer_run_id: string | null;
-        updated_at_ms: number;
-      }>();
+      const isRunningHeartbeat = request.headers.get("X-Timer-Heartbeat") === "1";
+      const now = Date.now();
 
-      const timer = timerRow
-        ? {
-            sessionType: timerRow.session_type,
-            status: timerRow.status,
-            remainingSeconds: timerRow.remaining_seconds,
-            totalSeconds: timerRow.total_seconds,
-            targetEndTime: timerRow.target_end_time,
-            currentCycle: timerRow.current_cycle,
-            activeTagId: timerRow.tag_id,
-            timerRunId: timerRow.timer_run_id,
-            updatedAtMs: timerRow.updated_at_ms,
+      const [timerRow, coffeeRows] = await Promise.all([
+        env.DB.prepare(
+          "SELECT * FROM active_timers WHERE user_id = ?"
+        ).bind(currentUserId).first<{
+          session_type: string;
+          status: string;
+          remaining_seconds: number;
+          total_seconds: number;
+          target_end_time: number | null;
+          current_cycle: number;
+          tag_id: string | null;
+          timer_run_id: string | null;
+          updated_at_ms: number;
+          last_heartbeat_ms: number | null;
+        }>(),
+        env.DB.prepare(
+          "SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC"
+        ).bind(currentUserId).all<{
+          id: string;
+          tag_id: string | null;
+          date: string;
+          created_at: string;
+        }>(),
+      ]);
+
+      let timer = null;
+
+      if (timerRow) {
+        let status = timerRow.status;
+        let remainingSeconds = timerRow.remaining_seconds;
+        let targetEndTime = timerRow.target_end_time;
+        let updatedAtMs = timerRow.updated_at_ms;
+
+        if (status === "RUNNING") {
+          if (isRunningHeartbeat) {
+            // Active device is reporting in: refresh heartbeat
+            await env.DB.prepare(
+              "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
+            ).bind(now, currentUserId).run();
+          } else {
+            // Check if active device has been silent (> 8.5s without heartbeat = lid closed / slept / offline)
+            const lastHb = timerRow.last_heartbeat_ms || timerRow.updated_at_ms;
+            if (now - lastHb > 8500) {
+              status = "PAUSED";
+              remainingSeconds = targetEndTime ? Math.max(0, Math.ceil((targetEndTime - lastHb) / 1000)) : remainingSeconds;
+              targetEndTime = null;
+              updatedAtMs = lastHb;
+              await env.DB.prepare(
+                "UPDATE active_timers SET status = 'PAUSED', remaining_seconds = ?, target_end_time = NULL, updated_at_ms = ? WHERE user_id = ?"
+              ).bind(remainingSeconds, updatedAtMs, currentUserId).run();
+            }
           }
-        : null;
+        }
 
-      return new Response(JSON.stringify({ timer, serverTime: Date.now() }), { headers: corsHeaders });
+        timer = {
+          sessionType: timerRow.session_type,
+          status,
+          remainingSeconds,
+          totalSeconds: timerRow.total_seconds,
+          targetEndTime,
+          currentCycle: timerRow.current_cycle,
+          activeTagId: timerRow.tag_id,
+          timerRunId: timerRow.timer_run_id,
+          updatedAtMs,
+        };
+      }
+
+      const coffeeCups = (coffeeRows.results || []).map((c) => ({
+        id: c.id,
+        tagId: c.tag_id,
+        date: c.date,
+        createdAt: c.created_at,
+      }));
+
+      return new Response(JSON.stringify({ timer, coffeeCups, serverTime: now }), { headers: corsHeaders });
     }
 
     // POST /api/timer — Update active timer state
@@ -386,8 +378,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       await env.DB.prepare(
         `INSERT INTO active_timers (
            user_id, session_type, status, remaining_seconds, total_seconds,
-           target_end_time, current_cycle, tag_id, timer_run_id, updated_at_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           target_end_time, current_cycle, tag_id, timer_run_id, updated_at_ms, last_heartbeat_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(user_id) DO UPDATE SET
            session_type = excluded.session_type,
            status = excluded.status,
@@ -397,7 +389,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
            current_cycle = excluded.current_cycle,
            tag_id = excluded.tag_id,
            timer_run_id = excluded.timer_run_id,
-           updated_at_ms = excluded.updated_at_ms
+           updated_at_ms = excluded.updated_at_ms,
+           last_heartbeat_ms = excluded.last_heartbeat_ms
          WHERE excluded.updated_at_ms >= active_timers.updated_at_ms`
       ).bind(
         currentUserId,
@@ -409,10 +402,58 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         body.currentCycle ?? 1,
         body.activeTagId ?? null,
         body.timerRunId ?? null,
-        updatedAtMs
+        updatedAtMs,
+        serverNow
       ).run();
 
       return new Response(JSON.stringify({ success: true, updatedAtMs, serverTime: serverNow }), { headers: corsHeaders });
+    }
+
+    // POST /api/coffee — Add or remove a coffee cup directly with instant D1 sync
+    if (url.pathname === "/api/coffee" && request.method === "POST") {
+      if (!currentUserId) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        action?: 'ADD' | 'REMOVE';
+        cup?: { id: string; tagId: string | null; date: string; createdAt?: string };
+        cupId?: string;
+      };
+
+      if (body.action === 'ADD' && body.cup) {
+        await env.DB.prepare(
+          `INSERT INTO coffee_cups (id, user_id, tag_id, date, created_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             tag_id = excluded.tag_id,
+             date = excluded.date`
+        ).bind(
+          body.cup.id,
+          currentUserId,
+          body.cup.tagId ?? null,
+          body.cup.date,
+          body.cup.createdAt || new Date().toISOString()
+        ).run();
+      } else if (body.action === 'REMOVE' && body.cupId) {
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ? AND id = ?').bind(currentUserId, body.cupId),
+          env.DB.prepare('INSERT OR REPLACE INTO deleted_coffee_cups (user_id, cup_id) VALUES (?, ?)').bind(currentUserId, body.cupId),
+        ]);
+      }
+
+      const coffeeRows = await env.DB.prepare(
+        "SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC"
+      ).bind(currentUserId).all<{ id: string; tag_id: string | null; date: string; created_at: string }>();
+
+      const coffeeCups = (coffeeRows.results || []).map((c) => ({
+        id: c.id,
+        tagId: c.tag_id,
+        date: c.date,
+        createdAt: c.created_at,
+      }));
+
+      return new Response(JSON.stringify({ success: true, coffeeCups, serverTime: Date.now() }), { headers: corsHeaders });
     }
 
     // GET /api/sync — Fetch all cloud user data
@@ -421,13 +462,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
       }
 
-      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows] = await Promise.all([
-        env.DB.prepare("SELECT * FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC").bind(currentUserId).all<{
-          id: string;
-          tag_id: string | null;
-          date: string;
-          created_at: string;
-        }>(),
+      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows, deletedCoffeeRows] = await Promise.all([
         env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
           id: string;
           email: string;
@@ -444,7 +479,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           is_archived: number;
           created_at: string;
         }>(),
-        env.DB.prepare('SELECT * FROM sessions WHERE user_id = ? AND id NOT LIKE \x27sample-session-%\x27 AND id NOT LIKE \x27seed-session-%\x27 ORDER BY completed_at DESC').bind(currentUserId).all<{
+        env.DB.prepare("SELECT * FROM sessions WHERE user_id = ? AND id NOT LIKE 'sample-session-%' AND id NOT LIKE 'seed-session-%' ORDER BY completed_at DESC").bind(currentUserId).all<{
           id: string;
           tag_id: string | null;
           session_type: string;
@@ -461,9 +496,19 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           sound_enabled: number;
           sound_volume: number;
           notifications_enabled: number;
+          keep_awake: number;
         }>(),
         env.DB.prepare('SELECT tag_id FROM deleted_tags WHERE user_id = ?').bind(currentUserId).all<{
           tag_id: string;
+        }>(),
+        env.DB.prepare("SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC").bind(currentUserId).all<{
+          id: string;
+          tag_id: string | null;
+          date: string;
+          created_at: string;
+        }>(),
+        env.DB.prepare("SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?").bind(currentUserId).all<{
+          cup_id: string;
         }>(),
       ]);
 
@@ -506,10 +551,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             soundEnabled: Boolean(settingsRow.sound_enabled),
             soundVolume: settingsRow.sound_volume,
             notificationsEnabled: Boolean(settingsRow.notifications_enabled),
+            keepAwake: Boolean(settingsRow.keep_awake),
           }
         : null;
 
       const deletedTagIds = (deletedTagRows.results || []).map((r) => r.tag_id);
+      const deletedCoffeeCupIds = (deletedCoffeeRows.results || []).map((r) => r.cup_id);
       const coffeeCups = (coffeeRows.results || []).map((c) => ({
         id: c.id,
         tagId: c.tag_id,
@@ -524,6 +571,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           sessions,
           settings,
           deletedTagIds,
+          deletedCoffeeCupIds,
           coffeeCups,
           syncedAt: new Date().toISOString(),
           serverTime: Date.now(),
@@ -554,6 +602,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           createdAt?: string;
         }>;
         deletedTagIds?: string[];
+        deletedCoffeeCupIds?: string[];
         sessions?: Array<{
           id: string;
           tagId: string | null;
@@ -577,18 +626,20 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           soundEnabled?: boolean;
           soundVolume?: number;
           notificationsEnabled?: boolean;
+          keepAwake?: boolean;
         };
       };
 
       // 0. Handle Replace or Clear Sessions mode
       if (body.mode === 'replace') {
-        // Full override: delete existing sessions, tags, and deleted tag records for this user
+        // Full override: delete existing sessions, tags, coffee cups, and deleted records for this user
         await env.DB.batch([
           env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM tags WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM active_timers WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ?').bind(currentUserId),
         ]);
       } else if (body.clearSessions) {
         await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId).run();
@@ -603,6 +654,16 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
             env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
             env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId)
+          );
+        }
+      }
+
+      // 1.5 Process Deleted Coffee Cups (if not replacing)
+      if (body.mode !== 'replace' && Array.isArray(body.deletedCoffeeCupIds) && body.deletedCoffeeCupIds.length > 0) {
+        for (const cupId of body.deletedCoffeeCupIds) {
+          statements.push(
+            env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ? AND id = ?').bind(currentUserId, cupId),
+            env.DB.prepare('INSERT OR REPLACE INTO deleted_coffee_cups (user_id, cup_id) VALUES (?, ?)').bind(currentUserId, cupId)
           );
         }
       }
@@ -680,8 +741,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       }
 
       // 4.5 Upsert Coffee Cups
+      const deletedCoffeeSet = body.mode === 'replace' ? new Set<string>() : new Set(body.deletedCoffeeCupIds || []);
       if (Array.isArray(body.coffeeCups) && body.coffeeCups.length > 0) {
         for (const cup of body.coffeeCups) {
+          if (deletedCoffeeSet.has(cup.id)) continue;
           const effectiveTagId = cup.tagId && deletedSet.has(cup.tagId) ? null : cup.tagId;
           statements.push(
             env.DB.prepare(
@@ -709,8 +772,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             `INSERT INTO user_settings (
                user_id, work_duration_minutes, short_break_duration_minutes, long_break_duration_minutes,
                long_break_interval, auto_start_breaks, auto_start_pomodoros, sound_enabled, sound_volume,
-               notifications_enabled, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               notifications_enabled, keep_awake, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
              ON CONFLICT(user_id) DO UPDATE SET
                work_duration_minutes = COALESCE(excluded.work_duration_minutes, user_settings.work_duration_minutes),
                short_break_duration_minutes = COALESCE(excluded.short_break_duration_minutes, user_settings.short_break_duration_minutes),
@@ -721,6 +784,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
                sound_enabled = COALESCE(excluded.sound_enabled, user_settings.sound_enabled),
                sound_volume = COALESCE(excluded.sound_volume, user_settings.sound_volume),
                notifications_enabled = COALESCE(excluded.notifications_enabled, user_settings.notifications_enabled),
+               keep_awake = COALESCE(excluded.keep_awake, user_settings.keep_awake),
                updated_at = CURRENT_TIMESTAMP`
           ).bind(
             currentUserId,
@@ -732,7 +796,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             s.autoStartPomodoros ? 1 : 0,
             s.soundEnabled !== false ? 1 : 0,
             s.soundVolume ?? 0.8,
-            s.notificationsEnabled ? 1 : 0
+            s.notificationsEnabled ? 1 : 0,
+            s.keepAwake ? 1 : 0
           )
         );
       }
@@ -747,13 +812,14 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return new Response(
         JSON.stringify({
           success: true,
-          coffeeCups,
           syncedAt: new Date().toISOString(),
           serverTime: Date.now(),
           processedRecords: {
             tags: body.tags?.length || 0,
             sessions: body.sessions?.length || 0,
+            coffeeCups: body.coffeeCups?.length || 0,
             deletedTags: body.deletedTagIds?.length || 0,
+            deletedCoffeeCups: body.deletedCoffeeCupIds?.length || 0,
             mode: body.mode || 'merge',
           },
         }),

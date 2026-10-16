@@ -10,6 +10,12 @@ export interface RemoteTimerState {
   updatedAtMs: number;
 }
 
+export interface RemoteTimerResult {
+  timer: RemoteTimerState | null;
+  coffeeCups?: CoffeeCup[];
+  serverTime?: number;
+}
+
 import { UserProfile, AuthState } from '../../types/user';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
@@ -20,12 +26,14 @@ const TOKEN_KEY = 'focus_timer_auth_token';
 const USER_KEY = 'focus_timer_cloud_user';
 const LAST_SYNC_KEY = 'focus_timer_last_synced_at';
 const DELETED_TAGS_KEY = 'focus_timer_deleted_tag_ids';
+const DELETED_COFFEE_CUPS_KEY = 'focus_timer_deleted_coffee_cup_ids';
 const CLOCK_OFFSET_KEY = 'focus_timer_clock_offset';
 
 export interface CloudDataResponse {
   profile: UserProfile | null;
   tags: Tag[];
   deletedTagIds?: string[];
+  deletedCoffeeCupIds?: string[];
   sessions: CompletedSession[];
   settings: UserSettings | null;
   coffeeCups?: CoffeeCup[];
@@ -145,6 +153,33 @@ export class AuthService {
     }
   }
 
+  public getDeletedCoffeeCupIds(): Set<string> {
+    try {
+      const raw = localStorage.getItem(DELETED_COFFEE_CUPS_KEY);
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  }
+
+  public addDeletedCoffeeCupId(id: string): void {
+    try {
+      const set = this.getDeletedCoffeeCupIds();
+      set.add(id);
+      localStorage.setItem(DELETED_COFFEE_CUPS_KEY, JSON.stringify(Array.from(set)));
+    } catch (e) {
+      console.warn('Error recording deleted coffee cup ID', e);
+    }
+  }
+
+  public clearDeletedCoffeeCupIds(): void {
+    try {
+      localStorage.removeItem(DELETED_COFFEE_CUPS_KEY);
+    } catch (e) {
+      console.warn('Error clearing deleted coffee cups', e);
+    }
+  }
+
   public getInitialAuthState(): AuthState {
     const token = this.getStoredToken();
     const user = this.getStoredUser();
@@ -210,6 +245,7 @@ export class AuthService {
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem(LAST_SYNC_KEY);
       localStorage.removeItem(DELETED_TAGS_KEY);
+      localStorage.removeItem(DELETED_COFFEE_CUPS_KEY);
     } catch (e) {
       console.warn('Error clearing auth state', e);
     }
@@ -259,6 +295,7 @@ export class AuthService {
     profile?: Partial<UserProfile>;
     tags?: Tag[];
     deletedTagIds?: string[];
+    deletedCoffeeCupIds?: string[];
     clearSessions?: boolean;
     sessions?: CompletedSession[];
     coffeeCups?: CoffeeCup[];
@@ -293,22 +330,28 @@ export class AuthService {
     return data;
   }
 
-  public async fetchRemoteTimer(): Promise<RemoteTimerState | null> {
+  public async fetchRemoteTimer(isRunning: boolean = false): Promise<RemoteTimerResult | null> {
     const token = this.getStoredToken();
     if (!token) return null;
 
     try {
       const t0 = Date.now();
-      const res = await fetch("/api/timer", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      if (isRunning) {
+        headers['X-Timer-Heartbeat'] = '1';
+      }
+      const res = await fetch('/api/timer', { headers });
       const t1 = Date.now();
       if (!res.ok) return null;
-      const data = (await res.json()) as { timer: RemoteTimerState | null; serverTime?: number };
+      const data = (await res.json()) as {
+        timer: RemoteTimerState | null;
+        coffeeCups?: CoffeeCup[];
+        serverTime?: number;
+      };
       if (typeof data.serverTime === 'number') {
         this.updateClockOffset(data.serverTime, t0, t1);
       }
-      return data.timer;
+      return data;
     } catch {
       return null;
     }
@@ -337,6 +380,51 @@ export class AuthService {
       return data;
     } catch (e) {
       console.warn("Failed to push remote timer", e);
+      return null;
+    }
+  }
+
+  public async addCoffeeCupRemote(cup: CoffeeCup): Promise<CoffeeCup[] | null> {
+    const token = this.getStoredToken();
+    if (!token) return null;
+
+    try {
+      const res = await fetch('/api/coffee', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'ADD', cup }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { success: boolean; coffeeCups: CoffeeCup[] };
+      return data.coffeeCups;
+    } catch (e) {
+      console.warn('Failed to add coffee cup to remote server', e);
+      return null;
+    }
+  }
+
+  public async removeCoffeeCupRemote(cupId: string): Promise<CoffeeCup[] | null> {
+    this.addDeletedCoffeeCupId(cupId);
+    const token = this.getStoredToken();
+    if (!token) return null;
+
+    try {
+      const res = await fetch('/api/coffee', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'REMOVE', cupId }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { success: boolean; coffeeCups: CoffeeCup[] };
+      return data.coffeeCups;
+    } catch (e) {
+      console.warn('Failed to remove coffee cup from remote server', e);
       return null;
     }
   }

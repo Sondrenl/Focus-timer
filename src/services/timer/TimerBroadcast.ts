@@ -1,8 +1,11 @@
 import { RemoteTimerState } from '../auth/AuthService';
+import { CoffeeCup } from '../../types/coffee';
 
 export interface TimerBroadcastEvent {
   senderId: string;
-  timer: RemoteTimerState;
+  type?: 'TIMER' | 'COFFEE';
+  timer?: RemoteTimerState;
+  coffeeCups?: CoffeeCup[];
 }
 
 const CHANNEL_NAME = 'focus_timer_sync_v1';
@@ -24,6 +27,7 @@ export const broadcastTimerState = (timer: RemoteTimerState): void => {
     if (channel) {
       channel.postMessage({
         senderId: TAB_ID,
+        type: 'TIMER',
         timer,
       } as TimerBroadcastEvent);
     }
@@ -38,6 +42,35 @@ export const subscribeTimerState = (callback: (timer: RemoteTimerState) => void)
   const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
     if (event.data && event.data.senderId !== TAB_ID && event.data.timer) {
       callback(event.data.timer);
+    }
+  };
+
+  channel.addEventListener('message', handler);
+  return () => {
+    channel?.removeEventListener('message', handler);
+  };
+};
+
+export const broadcastCoffeeCups = (coffeeCups: CoffeeCup[]): void => {
+  try {
+    if (channel) {
+      channel.postMessage({
+        senderId: TAB_ID,
+        type: 'COFFEE',
+        coffeeCups,
+      } as TimerBroadcastEvent);
+    }
+  } catch (e) {
+    console.warn('Coffee BroadcastChannel error:', e);
+  }
+};
+
+export const subscribeCoffeeCups = (callback: (cups: CoffeeCup[]) => void): (() => void) => {
+  if (!channel) return () => {};
+
+  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
+    if (event.data && event.data.senderId !== TAB_ID && event.data.coffeeCups) {
+      callback(event.data.coffeeCups);
     }
   };
 

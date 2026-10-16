@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
 import { Switch } from '../ui/Switch';
 import { Button } from '../ui/Button';
-import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target } from 'lucide-react';
+import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target, Smartphone } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 
 export const SettingsView: React.FC = () => {
@@ -34,12 +34,18 @@ export const SettingsView: React.FC = () => {
     sound.playChime(settings.soundVolume);
   };
 
-  const handleRequestNotifications = async () => {
+  const handleToggleNotifications = async (enable: boolean) => {
+    if (!enable) {
+      updateSettings({ notificationsEnabled: false });
+      showSaved();
+      return;
+    }
     const granted = await notifications.requestPermission();
     updateSettings({ notificationsEnabled: granted });
     if (granted) {
-      notifications.notify('Notifications Enabled', 'Pomodor will alert you when intervals complete!');
+      notifications.notify('Notifications Enabled', 'Focus Timer will alert you when intervals complete!');
     }
+    showSaved();
   };
 
   const handleResetDefaults = () => {
@@ -224,20 +230,24 @@ export const SettingsView: React.FC = () => {
         </div>
       </Card>
 
-      {/* 4. Audio & Alerts */}
+      {/* 4. Audio, Notifications & Display */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center">
             <Volume2 className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-md-on-surface">Audio & Alerts</h3>
+            <h3 className="text-base font-bold text-md-on-surface">Audio, Alerts & Display</h3>
           </div>
         </div>
 
         <div className="flex flex-col gap-4">
+          {/* Audio Chime */}
           <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold text-md-on-surface">Chime</div>
+            <div>
+              <div className="text-sm font-semibold text-md-on-surface">Chime Alert</div>
+              <div className="text-xs text-md-on-surface-variant">Play gentle acoustic sound on completion</div>
+            </div>
             <button
               onClick={handleTestSound}
               className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors"
@@ -246,16 +256,37 @@ export const SettingsView: React.FC = () => {
             </button>
           </div>
 
+          {/* Desktop Notifications Toggle */}
           <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
-            <div className="text-sm font-semibold text-md-on-surface">Desktop Notifications</div>
-            <Button
-              variant={settings.notificationsEnabled ? 'tonal' : 'outlined'}
-              size="sm"
-              onClick={handleRequestNotifications}
-            >
-              <Bell className="w-3.5 h-3.5 mr-1.5" />
-              <span>{settings.notificationsEnabled ? 'Enabled' : 'Enable'}</span>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-md-on-surface-variant" />
+              <div>
+                <div className="text-sm font-semibold text-md-on-surface">Desktop Notifications</div>
+                <div className="text-xs text-md-on-surface-variant">Push notifications when intervals complete</div>
+              </div>
+            </div>
+            <Switch
+              checked={settings.notificationsEnabled}
+              onChange={handleToggleNotifications}
+            />
+          </div>
+
+          {/* Prevent Screen Sleeping (Mobile & Desktop) */}
+          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-md-on-surface-variant" />
+              <div>
+                <div className="text-sm font-semibold text-md-on-surface">Keep Screen Awake</div>
+                <div className="text-xs text-md-on-surface-variant">Prevent display from sleeping while timer is running (ideal for mobile stands)</div>
+              </div>
+            </div>
+            <Switch
+              checked={Boolean(settings.keepAwake)}
+              onChange={(val) => {
+                updateSettings({ keepAwake: val });
+                showSaved();
+              }}
+            />
           </div>
         </div>
       </Card>

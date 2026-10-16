@@ -7,19 +7,33 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies and Build Output
 node_modules
 dist
 dist-ssr
 *.local
 *.tsbuildinfo
 
-# Editor directories and files
+# Cloudflare Wrangler
+.wrangler/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Editor directories and system files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Agent and temporary files
+.agents/
+.gemini/

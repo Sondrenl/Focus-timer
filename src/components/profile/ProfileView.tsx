@@ -1,47 +1,47 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import {
-  Download,
-  Upload,
-  Check,
-  Sparkles,
-  Target,
-  AlertTriangle,
-  RotateCcw,
-  Trash2,
-  Edit2,
-  User,
-  Cloud,
-  RefreshCw,
-  LogOut,
-  CheckCircle2,
-  ShieldCheck,
-} from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
 import { Modal } from '../ui/Modal';
-import { AVATAR_EMOJI_OPTIONS, BackupData } from '../../types/user';
-import { toDateKey } from '../../utils/dates';
+import { Input } from '../ui/Input';
+import {
+  User,
+  Download,
+  Upload,
+  RotateCcw,
+  AlertTriangle,
+  Check,
+  Edit2,
+  Trash2,
+  Sparkles,
+  Cloud,
+  LogOut,
+  RefreshCw,
+  CheckCircle2,
+  Target,
+} from 'lucide-react';
+import { BackupData } from '../../types/user';
 import { formatDurationHoursMins } from '../../utils/formatters';
 
-const GOOGLE_CLIENT_ID =
-  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-  '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
+const AVATAR_EMOJI_OPTIONS = [
+  '🍅', '⚡', '☕', '🚀', '🧠', '🔥', '🎯', '📚', '💻', '🧘', '🌱', '⭐',
+  '🦊', '🐱', '🦉', '🐻', '🦁', '🐨', '🐼', '🦄', '🐝', '🐙', '🦖', '🍀',
+];
 
 export const ProfileView: React.FC = () => {
   const {
-    auth,
-    loginWithGoogle,
-    logout,
-    syncWithCloud,
     profile,
     updateProfile,
     sessions,
     tags,
+    coffeeCups,
     exportBackup,
     importBackup,
     resetAllData,
+    auth,
+    loginWithGoogle,
+    logout,
+    syncWithCloud,
   } = useApp();
 
   // Export state
@@ -75,64 +75,68 @@ export const ProfileView: React.FC = () => {
       if (window.google?.accounts?.id && googleButtonContainerRef.current) {
         try {
           window.google.accounts.id.initialize({
-            client_id: GOOGLE_CLIENT_ID,
-            callback: async (response) => {
+            client_id: '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com',
+            callback: async (response: any) => {
               if (response.credential) {
                 try {
                   setAuthError(null);
                   await loginWithGoogle(response.credential);
-                } catch (err) {
-                  setAuthError((err as Error).message || 'Google authentication failed');
+                } catch (err: any) {
+                  setAuthError(err.message || 'Google sign-in failed');
                 }
               }
             },
           });
 
           window.google.accounts.id.renderButton(googleButtonContainerRef.current, {
+            type: 'standard',
             theme: 'outline',
             size: 'large',
             text: 'continue_with',
             shape: 'pill',
-            width: 260,
+            logo_alignment: 'left',
           });
         } catch (e) {
-          console.warn('Google Identity initialization error', e);
+          console.warn('Google Identity button initialization failed', e);
         }
       }
     };
 
     renderGoogleBtn();
-    const timer = setTimeout(renderGoogleBtn, 800);
-    return () => clearTimeout(timer);
+    const interval = setInterval(() => {
+      if (window.google?.accounts?.id && googleButtonContainerRef.current) {
+        renderGoogleBtn();
+        clearInterval(interval);
+      }
+    }, 300);
+
+    return () => clearInterval(interval);
   }, [auth.isAuthenticated, loginWithGoogle]);
 
-  // Calculate today's focus minutes
-  const todayKey = toDateKey(new Date());
-  const todayFocusSeconds = useMemo(() => {
-    return sessions
-      .filter((s) => s.sessionType === 'WORK' && toDateKey(s.completedAt) === todayKey)
-      .reduce((acc, s) => acc + s.durationSeconds, 0);
-  }, [sessions, todayKey]);
+  // Total Focus Time in seconds (Work sessions only)
+  const totalFocusSeconds = sessions
+    .filter((s) => s.sessionType === 'WORK')
+    .reduce((acc, curr) => acc + curr.durationSeconds, 0);
 
+  // Today's Focus Time in minutes
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayFocusSeconds = sessions
+    .filter((s) => s.sessionType === 'WORK' && s.completedAt.startsWith(todayStr))
+    .reduce((acc, curr) => acc + curr.durationSeconds, 0);
   const todayFocusMinutes = Math.round(todayFocusSeconds / 60);
-  const goalMinutes = Math.max(1, profile.dailyGoalMinutes || 120);
-  const goalProgressPercent = Math.min(100, Math.round((todayFocusMinutes / goalMinutes) * 100));
+  const goalProgressPercent = Math.min(100, Math.round((todayFocusMinutes / (profile.dailyGoalMinutes || 120)) * 100));
 
-  // Lifetime focus stats
-  const totalFocusSeconds = useMemo(() => {
-    return sessions
-      .filter((s) => s.sessionType === 'WORK')
-      .reduce((acc, s) => acc + s.durationSeconds, 0);
-  }, [sessions]);
-
-  // Handle Export
-  const handleExport = () => {
+  // Trigger JSON file download
+  const handleExportData = () => {
     const backup = exportBackup();
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const jsonStr = JSON.stringify(backup, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
+    const dateStr = new Date().toISOString().slice(0, 10);
+
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pomodor-backup-${toDateKey(new Date())}.json`;
+    a.download = `focus-timer-backup-${dateStr}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -162,16 +166,17 @@ export const ProfileView: React.FC = () => {
         const hasSessions = Array.isArray(parsed.sessions);
 
         if (!hasTags && !hasSessions) {
-          throw new Error('File does not appear to be a valid Pomodor backup.');
+          throw new Error('File does not appear to be a valid Focus Timer backup.');
         }
 
         setPendingBackup({
-          version: parsed.version || '2.0.1',
+          version: parsed.version || '2.1.0',
           exportedAt: parsed.exportedAt || new Date().toISOString(),
           profile: parsed.profile,
           settings: parsed.settings,
           tags: parsed.tags || [],
           sessions: parsed.sessions || [],
+          coffeeCups: parsed.coffeeCups || [],
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to parse JSON backup file';
@@ -379,74 +384,75 @@ export const ProfileView: React.FC = () => {
         {auth.isAuthenticated ? (
           <div className="flex flex-col gap-3 pt-2 border-t border-md-outline-variant/15">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-semibold text-md-on-surface">Sync Active</span>
+              <div>
+                <p className="text-xs text-md-on-surface-variant font-medium">Logged in as</p>
+                <p className="text-sm font-bold text-md-on-surface">{auth.user?.email}</p>
+                {auth.lastSyncedAt && (
+                  <p className="text-[11px] text-md-outline mt-0.5">
+                    Last synced: {new Date(auth.lastSyncedAt).toLocaleTimeString()}
+                  </p>
+                )}
               </div>
-              <Button
-                variant="text"
-                size="sm"
-                onClick={logout}
-                className="text-md-error hover:bg-md-error/10"
-              >
+              <Button variant="outlined" size="sm" onClick={logout} className="text-md-error hover:bg-md-error/10">
                 <LogOut className="w-3.5 h-3.5 mr-1.5" />
-                <span>Sign Out</span>
+                Sign Out
               </Button>
             </div>
+            {auth.syncError && (
+              <div className="p-2.5 rounded-xl bg-md-error/10 text-md-error text-xs">
+                Sync Error: {auth.syncError}
+              </div>
+            )}
           </div>
         ) : (
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-md-outline-variant/15">
-            <div className="text-xs text-md-on-surface-variant">
-              Sign in with your Google account to automatically synchronize sessions and tags across all devices.
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-2 border-t border-md-outline-variant/15">
+            <div>
+              <p className="text-sm font-semibold text-md-on-surface">Back up and sync across devices</p>
+              <p className="text-xs text-md-on-surface-variant mt-0.5">
+                Sign in with Google to synchronize your active timer, completed sessions, and custom tags.
+              </p>
+              {authError && <p className="text-xs text-md-error mt-1">{authError}</p>}
             </div>
-            <div ref={googleButtonContainerRef} className="shrink-0 min-h-[40px]" />
-          </div>
-        )}
-
-        {authError && (
-          <div className="text-xs text-md-error bg-md-error/10 p-2.5 rounded-xl border border-md-error/20">
-            {authError}
+            <div ref={googleButtonContainerRef} className="shrink-0" />
           </div>
         )}
       </Card>
 
-      {/* Data Backup & Portability */}
+      {/* Export / Import Card */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-md-secondary/10 text-md-secondary flex items-center justify-center">
-            <Download className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-md-on-surface">Data Backup & Portability</h3>
-          </div>
+        <div>
+          <h3 className="text-base font-bold text-md-on-surface">Data Management</h3>
+          <p className="text-xs text-md-on-surface-variant mt-1">
+            Export or restore your full history, tags, coffee counts, and preferences as JSON.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-md-outline-variant/15">
+        <div className="flex flex-col sm:flex-row gap-3 pt-2 border-t border-md-outline-variant/15">
           <Button
             variant="tonal"
-            className="w-full justify-center"
-            onClick={handleExport}
+            className="flex-1 justify-center"
+            onClick={handleExportData}
           >
             {exportedSuccess ? (
               <>
                 <Check className="w-4 h-4 mr-2 text-emerald-600" />
-                <span>Downloaded Backup!</span>
+                <span>Backup Downloaded!</span>
               </>
             ) : (
               <>
                 <Download className="w-4 h-4 mr-2" />
-                <span>Export Backup (JSON)</span>
+                <span>Export JSON Backup</span>
               </>
             )}
           </Button>
 
           <Button
             variant="outlined"
-            className="w-full justify-center"
+            className="flex-1 justify-center"
             onClick={() => fileInputRef.current?.click()}
           >
             <Upload className="w-4 h-4 mr-2" />
-            <span>Import Backup...</span>
+            <span>Restore from Backup</span>
           </Button>
           <input
             ref={fileInputRef}
@@ -473,34 +479,61 @@ export const ProfileView: React.FC = () => {
       </Card>
 
       {/* Danger Zone */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-error/20 flex flex-col gap-4">
+      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-error/25 flex flex-col gap-5">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center">
             <AlertTriangle className="w-5 h-5" />
           </div>
           <div>
             <h3 className="text-base font-bold text-md-error">Danger Zone</h3>
+            <p className="text-xs text-md-on-surface-variant">Irreversible actions for resetting your data</p>
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3 pt-2 border-t border-md-outline-variant/15">
-          <Button
-            variant="text"
-            className="text-md-error hover:bg-md-error/10 justify-center flex-1"
-            onClick={() => setResetModalScope('sessions-only')}
-          >
-            <Trash2 className="w-4 h-4 mr-2" />
-            <span>Clear History Only</span>
-          </Button>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-md-outline-variant/15">
+          {/* Card 1: Clear History Only */}
+          <div className="p-4 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/20 flex flex-col justify-between gap-3">
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-md-error" />
+                <span className="text-sm font-bold text-md-on-surface">Clear Focus & Coffee History</span>
+              </div>
+              <p className="text-xs text-md-on-surface-variant leading-relaxed">
+                Permanently wipes all completed sessions and logged coffee cups. Custom tags, daily goals, and timer preferences are completely preserved.
+              </p>
+            </div>
+            <Button
+              variant="outlined"
+              size="sm"
+              className="border-md-error/40 text-md-error hover:bg-md-error/10 justify-center w-full mt-2 font-semibold"
+              onClick={() => setResetModalScope('sessions-only')}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+              <span>Clear History Only</span>
+            </Button>
+          </div>
 
-          <Button
-            variant="filled"
-            className="bg-md-error hover:bg-red-700 text-white justify-center flex-1"
-            onClick={() => setResetModalScope('factory-reset')}
-          >
-            <RotateCcw className="w-4 h-4 mr-2" />
-            <span>Full Reset (Erase All)</span>
-          </Button>
+          {/* Card 2: Full Factory Reset */}
+          <div className="p-4 rounded-2xl bg-md-error/5 border border-md-error/25 flex flex-col justify-between gap-3">
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-md-error" />
+                <span className="text-sm font-bold text-md-error">Factory Reset Everything</span>
+              </div>
+              <p className="text-xs text-md-on-surface-variant leading-relaxed">
+                Completely erases all sessions, coffee cups, custom tags, and resets all configurations and profile data to default. Clears cloud records if signed in.
+              </p>
+            </div>
+            <Button
+              variant="filled"
+              size="sm"
+              className="bg-md-error hover:bg-red-700 text-white justify-center w-full mt-2 font-semibold"
+              onClick={() => setResetModalScope('factory-reset')}
+            >
+              <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+              <span>Erase All Data</span>
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -592,6 +625,7 @@ export const ProfileView: React.FC = () => {
             <div className="p-3 rounded-2xl bg-md-surface-container text-xs text-md-on-surface-variant flex flex-col gap-1">
               <span>• Sessions to import: {pendingBackup.sessions.length}</span>
               <span>• Tags to import: {pendingBackup.tags.length}</span>
+              <span>• Coffee cups to import: {pendingBackup.coffeeCups?.length || 0}</span>
               <span>• Exported on: {new Date(pendingBackup.exportedAt).toLocaleDateString()}</span>
             </div>
 
@@ -612,7 +646,7 @@ export const ProfileView: React.FC = () => {
                   <div>
                     <span className="font-bold block text-md-on-surface">Merge with Existing</span>
                     <span className="text-md-on-surface-variant text-[11px]">
-                      Preserves your current sessions and tags, adding missing ones.
+                      Preserves your current sessions, tags and coffee, adding missing ones.
                     </span>
                   </div>
                 </label>
@@ -629,7 +663,7 @@ export const ProfileView: React.FC = () => {
                   <div>
                     <span className="font-bold block text-md-error">Replace (Override)</span>
                     <span className="text-md-on-surface-variant text-[11px]">
-                      Replaces all existing sessions and tags with the backup contents.
+                      Replaces all existing sessions, tags and coffee logs with the backup contents.
                     </span>
                   </div>
                 </label>
@@ -648,34 +682,64 @@ export const ProfileView: React.FC = () => {
         </div>
       )}
 
-      {/* Reset Confirmation Modal */}
+      {/* Danger Zone Confirmation Modal */}
       {resetModalScope && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-sm w-full border border-md-outline-variant/30 shadow-elevation-3 flex flex-col gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center">
-              <AlertTriangle className="w-6 h-6" />
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-md w-full border border-md-outline-variant/30 shadow-elevation-4 flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-md-on-surface">
+                  {resetModalScope === 'sessions-only' ? 'Clear Focus & Coffee History?' : 'Factory Reset All Data?'}
+                </h3>
+                <p className="text-xs text-md-error font-medium">This action cannot be undone.</p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-base font-bold text-md-on-surface">
-                {resetModalScope === 'sessions-only' ? 'Clear Focus History?' : 'Reset Everything?'}
-              </h3>
-              <p className="text-xs text-md-on-surface-variant mt-1 leading-relaxed">
-                {resetModalScope === 'sessions-only'
-                  ? 'This will delete all completed focus sessions. Your custom tags and preferences will remain intact.'
-                  : 'This will erase all sessions, custom tags, and reset all settings back to default.'}
-              </p>
-            </div>
-            <div className="flex items-center justify-end gap-2 pt-2">
+
+            {resetModalScope === 'sessions-only' ? (
+              <div className="flex flex-col gap-2.5 text-xs">
+                <div className="p-3 rounded-2xl bg-md-error/10 border border-md-error/20 flex flex-col gap-1 text-md-error">
+                  <span className="font-bold">Items that will be deleted:</span>
+                  <span>• {sessions.length} completed focus & break sessions</span>
+                  <span>• {coffeeCups.length} logged coffee cups</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-md-surface-container border border-md-outline-variant/15 flex flex-col gap-1 text-md-on-surface-variant">
+                  <span className="font-bold text-md-on-surface">Items that are preserved:</span>
+                  <span>• All {tags.length} custom tags & colors</span>
+                  <span>• Daily focus goal ({profile.dailyGoalMinutes} min)</span>
+                  <span>• Timer intervals & sound settings</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5 text-xs">
+                <div className="p-3 rounded-2xl bg-md-error/10 border border-md-error/20 flex flex-col gap-1 text-md-error">
+                  <span className="font-bold">Everything below will be permanently wiped:</span>
+                  <span>• All {sessions.length} completed sessions</span>
+                  <span>• All {coffeeCups.length} coffee cups</span>
+                  <span>• All {tags.length} custom tags</span>
+                  <span>• All timer preferences (reset to defaults)</span>
+                  <span>• Profile target and display settings</span>
+                  {auth.isAuthenticated && <span>• All remote cloud records for your account</span>}
+                </div>
+                <p className="text-[11px] text-md-on-surface-variant italic">
+                  Tip: Use the "Export JSON Backup" button first if you may want to restore your data later.
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-md-outline-variant/20">
               <Button variant="text" size="sm" onClick={() => setResetModalScope(null)}>
                 Cancel
               </Button>
               <Button
                 variant="filled"
                 size="sm"
-                className="bg-md-error text-white hover:bg-red-700"
+                className="bg-md-error text-white hover:bg-red-700 font-semibold"
                 onClick={handleConfirmReset}
               >
-                Confirm Delete
+                {resetModalScope === 'sessions-only' ? 'Yes, Delete History' : 'Yes, Wipe Everything'}
               </Button>
             </div>
           </div>

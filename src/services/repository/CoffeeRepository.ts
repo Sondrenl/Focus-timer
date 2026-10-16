@@ -33,7 +33,7 @@ export class CoffeeRepository implements ICoffeeRepository {
     return newCup;
   }
 
-  async removeCup(date: string, tagId?: string | null, cupId?: string): Promise<boolean> {
+  async removeCup(date: string, tagId?: string | null, cupId?: string): Promise<CoffeeCup | null> {
     const all = await this.getAll();
     let removeIndex = -1;
 
@@ -55,11 +55,11 @@ export class CoffeeRepository implements ICoffeeRepository {
     }
 
     if (removeIndex >= 0) {
-      all.splice(removeIndex, 1);
+      const removed = all.splice(removeIndex, 1)[0];
       this.storage.setItem(COFFEE_STORAGE_KEY, all);
-      return true;
+      return removed;
     }
-    return false;
+    return null;
   }
 
   async saveAll(cups: CoffeeCup[]): Promise<void> {

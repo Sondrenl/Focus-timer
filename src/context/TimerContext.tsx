@@ -5,6 +5,7 @@ import { triggerCompletionConfetti } from '../utils/confetti';
 import { formatTime } from '../utils/formatters';
 import { AuthService, RemoteTimerState } from '../services/auth/AuthService';
 import { broadcastTimerState, subscribeTimerState } from '../services/timer/TimerBroadcast';
+import { wakeLockService } from '../services/screen/WakeLockService';
 
 const WORKER_SCRIPT = `
   let timerId = null;
@@ -56,7 +57,7 @@ export interface TimerContextValue {
 const TimerContext = createContext<TimerContextValue | null>(null);
 
 export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications } = useApp();
+  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications, syncRemoteCoffeeCups } = useApp();
   const authService = AuthService.getInstance();
 
   // Helper to determine target duration in seconds for given session type
@@ -146,52 +147,56 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const workerRef = useRef<Worker | null>(null);
 
+  // Sleep detection: track last recorded wall-clock tick timestamp
+  const lastTickTimeRef = useRef<number>(Date.now());
+
+  // Screen Wake Lock on mobile & desktop when keepAwake is enabled
+  useEffect(() => {
+    if (settings.keepAwake && status === 'RUNNING') {
+      wakeLockService.acquire();
+    } else {
+      wakeLockService.release();
+    }
+    return () => {
+      wakeLockService.release();
+    };
+  }, [settings.keepAwake, status]);
+
   // Persist state to localStorage on updates
   useEffect(() => {
+    const stateToSave: SavedTimerState = {
+      sessionType,
+      status,
+      currentCycle,
+      remainingSeconds,
+      totalSeconds,
+      targetEndTime,
+      timerRunId: timerRunIdRef.current,
+      updatedAtMs: localUpdatedAtRef.current,
+      activeTagId,
+    };
     try {
-      const stateToSave: SavedTimerState = {
-        sessionType,
-        status,
-        currentCycle,
-        remainingSeconds,
-        totalSeconds,
-        targetEndTime: targetEndTimeRef.current,
-        timerRunId: timerRunIdRef.current,
-        updatedAtMs: localUpdatedAtRef.current,
-        activeTagId,
-      };
       localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
     } catch {
       // Storage errors ignored
     }
-  }, [sessionType, status, currentCycle, remainingSeconds, totalSeconds, activeTagId]);
+  }, [sessionType, status, currentCycle, remainingSeconds, totalSeconds, targetEndTime, activeTagId]);
 
-  // Sync document title with active timer status: "23:30 Pomodor"
+  // Handle duration settings changes when timer is IDLE
   useEffect(() => {
-    if (status === 'RUNNING') {
-      document.title = `${formatTime(remainingSeconds)} Pomodor`;
-    } else if (status === 'PAUSED') {
-      document.title = `${formatTime(remainingSeconds)} (Paused) Pomodor`;
-    } else {
-      document.title = 'Pomodor — Focus Timer';
+    if (status === 'IDLE') {
+      const newDuration = getDurationForType(sessionType);
+      setTotalSeconds(newDuration);
+      setRemainingSeconds(newDuration);
     }
-  }, [status, remainingSeconds]);
+  }, [sessionType, settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes, status, getDurationForType]);
 
-  // Update total & remaining if user changes settings while timer is IDLE
+  // Handle activeTagId changes: sync tag selection across tabs and cloud
   useEffect(() => {
-    if (status === 'IDLE' && !isApplyingRemoteRef.current) {
-      const dur = getDurationForType(sessionType);
-      setTotalSeconds(dur);
-      setRemainingSeconds(dur);
-    }
-  }, [sessionType, status, getDurationForType]);
-
-  // Handle activeTagId changes from user interaction and sync to cloud + local tabs
-  useEffect(() => {
-    if (prevActiveTagIdRef.current === activeTagId) return;
-    prevActiveTagIdRef.current = activeTagId;
-
     if (isApplyingRemoteRef.current) return;
+    if (prevActiveTagIdRef.current === activeTagId) return;
+
+    prevActiveTagIdRef.current = activeTagId;
 
     const now = authService.getServerNow();
     localUpdatedAtRef.current = now;
@@ -229,6 +234,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       timerRunIdRef.current = runId;
       targetEndTimeRef.current = target;
+      lastTickTimeRef.current = Date.now();
       setTargetEndTime(target);
       setStatus('RUNNING');
       localUpdatedAtRef.current = now;
@@ -463,6 +469,132 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     authService,
   ]);
 
+  // Core function to safely apply incoming remote/broadcast timer state
+  const applyRemoteState = useCallback(
+    (remote: RemoteTimerState) => {
+      // Apply if remote update is newer than local interaction, OR if local timer is IDLE and remote is active
+      const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
+      const isAdoptingActiveRemote = status === 'IDLE' && (remote.status === 'RUNNING' || remote.status === 'PAUSED');
+
+      if (!isNewer && !isAdoptingActiveRemote) {
+        return;
+      }
+
+      isApplyingRemoteRef.current = true;
+      localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
+
+      setSessionType(remote.sessionType);
+      setCurrentCycle(remote.currentCycle || 1);
+      setTotalSeconds(remote.totalSeconds);
+      timerRunIdRef.current = remote.timerRunId || null;
+
+      if (remote.activeTagId !== undefined && setActiveTagId) {
+        prevActiveTagIdRef.current = remote.activeTagId;
+        setActiveTagId(remote.activeTagId);
+      }
+
+      if (remote.status === 'RUNNING' && remote.targetEndTime) {
+        const now = authService.getServerNow();
+        const diffMs = remote.targetEndTime - now;
+        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+
+        if (diffSec > 0) {
+          targetEndTimeRef.current = remote.targetEndTime;
+          setTargetEndTime(remote.targetEndTime);
+          setRemainingSeconds(diffSec);
+          setStatus('RUNNING');
+          lastTickTimeRef.current = Date.now();
+          if (workerRef.current) {
+            workerRef.current.postMessage('START');
+          }
+        } else {
+          // Target time has already elapsed
+          targetEndTimeRef.current = null;
+          setTargetEndTime(null);
+          setRemainingSeconds(0);
+          setStatus('IDLE');
+          if (workerRef.current) {
+            workerRef.current.postMessage('STOP');
+          }
+        }
+      } else if (remote.status === 'PAUSED') {
+        if (workerRef.current) {
+          workerRef.current.postMessage('STOP');
+        }
+        targetEndTimeRef.current = null;
+        setTargetEndTime(null);
+        setRemainingSeconds(remote.remainingSeconds);
+        setStatus('PAUSED');
+      } else {
+        // IDLE / COMPLETED
+        if (workerRef.current) {
+          workerRef.current.postMessage('STOP');
+        }
+        targetEndTimeRef.current = null;
+        setTargetEndTime(null);
+        setRemainingSeconds(remote.remainingSeconds);
+        setStatus(remote.status);
+      }
+
+      setTimeout(() => {
+        isApplyingRemoteRef.current = false;
+      }, 150);
+    },
+    [authService, setActiveTagId, status]
+  );
+
+  // Sleep / Lid-close handler: pause timer at moment device went to sleep unless another active device kept running
+  const handleSleepWake = useCallback(
+    async (sleepTimestamp: number) => {
+      if (status !== 'RUNNING' || targetEndTimeRef.current === null) return;
+
+      // 1. If authenticated, query cloud to verify if another device took over and is actively running
+      if (auth.isAuthenticated) {
+        try {
+          const res = await authService.fetchRemoteTimer(false);
+          if (res && res.timer) {
+            // Another device took over or kept running after our sleep started
+            if (res.timer.status === 'RUNNING' && res.timer.updatedAtMs > sleepTimestamp) {
+              applyRemoteState(res.timer);
+              return;
+            }
+          }
+        } catch {
+          // Network check failed, proceed to local sleep pause
+        }
+      }
+
+      // 2. No other active device: pause timer at the moment sleep occurred
+      if (workerRef.current) {
+        workerRef.current.postMessage('STOP');
+      }
+      const pausedRemaining = Math.max(0, Math.ceil((targetEndTimeRef.current - sleepTimestamp) / 1000));
+      targetEndTimeRef.current = null;
+      setTargetEndTime(null);
+      setRemainingSeconds(pausedRemaining);
+      setStatus('PAUSED');
+      localUpdatedAtRef.current = sleepTimestamp;
+
+      const payload: RemoteTimerState = {
+        sessionType,
+        status: 'PAUSED',
+        remainingSeconds: pausedRemaining,
+        totalSeconds,
+        targetEndTime: null,
+        currentCycle,
+        activeTagId,
+        timerRunId: timerRunIdRef.current,
+        updatedAtMs: sleepTimestamp,
+      };
+
+      broadcastTimerState(payload);
+      if (auth.isAuthenticated) {
+        authService.pushRemoteTimer(payload);
+      }
+    },
+    [status, auth.isAuthenticated, authService, applyRemoteState, sessionType, totalSeconds, currentCycle, activeTagId]
+  );
+
   // Background Web Worker initialization
   useEffect(() => {
     let blobUrl: string | null = null;
@@ -474,6 +606,17 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       worker.onmessage = (e) => {
         if (e.data === 'TICK' && targetEndTimeRef.current !== null) {
+          const wallNow = Date.now();
+          const gap = wallNow - lastTickTimeRef.current;
+          const sleepTime = lastTickTimeRef.current;
+          lastTickTimeRef.current = wallNow;
+
+          // If gap > 3500ms, the laptop lid was closed or device went to sleep
+          if (gap > 3500 && status === 'RUNNING') {
+            handleSleepWake(sleepTime);
+            return;
+          }
+
           const now = authService.getServerNow();
           const diffMs = targetEndTimeRef.current - now;
           const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
@@ -487,6 +630,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
 
       if (status === 'RUNNING' && targetEndTimeRef.current !== null) {
+        lastTickTimeRef.current = Date.now();
         worker.postMessage('START');
       }
     } catch (err) {
@@ -503,12 +647,37 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         URL.revokeObjectURL(blobUrl);
       }
     };
-  }, [handleComplete, status, authService]);
+  }, [handleComplete, status, authService, handleSleepWake]);
 
-  // Visibility sync listener for local tick accuracy
+  // Periodic heartbeat / sleep detector interval when running
+  useEffect(() => {
+    if (status !== 'RUNNING') return;
+    const interval = setInterval(() => {
+      const wallNow = Date.now();
+      const gap = wallNow - lastTickTimeRef.current;
+      const sleepTime = lastTickTimeRef.current;
+      lastTickTimeRef.current = wallNow;
+      if (gap > 3500) {
+        handleSleepWake(sleepTime);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [status, handleSleepWake]);
+
+  // Visibility and focus sync listeners for sleep and tick accuracy
   useEffect(() => {
     const handleVisibility = () => {
       if (status === 'RUNNING' && targetEndTimeRef.current !== null) {
+        const wallNow = Date.now();
+        const gap = wallNow - lastTickTimeRef.current;
+        const sleepTime = lastTickTimeRef.current;
+        lastTickTimeRef.current = wallNow;
+
+        if (gap > 3500) {
+          handleSleepWake(sleepTime);
+          return;
+        }
+
         const now = authService.getServerNow();
         const diffMs = targetEndTimeRef.current - now;
         const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
@@ -520,8 +689,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [status, handleComplete, authService]);
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [status, handleComplete, authService, handleSleepWake]);
 
   // Skip interval helper
   const skipInterval = useCallback(() => {
@@ -628,91 +801,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Core function to safely apply incoming remote/broadcast timer state
-  const applyRemoteState = useCallback(
-    (remote: RemoteTimerState) => {
-      // Apply if remote update is newer than local interaction, OR if local timer is IDLE and remote is active
-      const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
-      const isAdoptingActiveRemote = status === 'IDLE' && (remote.status === 'RUNNING' || remote.status === 'PAUSED');
-
-      if (!isNewer && !isAdoptingActiveRemote) {
-        return;
-      }
-
-      isApplyingRemoteRef.current = true;
-      localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
-
-      setSessionType(remote.sessionType);
-      setCurrentCycle(remote.currentCycle || 1);
-      setTotalSeconds(remote.totalSeconds);
-      timerRunIdRef.current = remote.timerRunId || null;
-
-      if (remote.activeTagId !== undefined && setActiveTagId) {
-        prevActiveTagIdRef.current = remote.activeTagId;
-        setActiveTagId(remote.activeTagId);
-      }
-
-      if (remote.status === 'RUNNING' && remote.targetEndTime) {
-        const now = authService.getServerNow();
-        const diffMs = remote.targetEndTime - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-        if (diffSec > 0) {
-          targetEndTimeRef.current = remote.targetEndTime;
-          setTargetEndTime(remote.targetEndTime);
-          setRemainingSeconds(diffSec);
-          setStatus('RUNNING');
-          if (workerRef.current) {
-            workerRef.current.postMessage('START');
-          }
-        } else {
-          // Target time has already elapsed
-          targetEndTimeRef.current = null;
-          setTargetEndTime(null);
-          setRemainingSeconds(0);
-          setStatus('IDLE');
-          if (workerRef.current) {
-            workerRef.current.postMessage('STOP');
-          }
-        }
-      } else if (remote.status === 'PAUSED') {
-        if (workerRef.current) {
-          workerRef.current.postMessage('STOP');
-        }
-        targetEndTimeRef.current = null;
-        setTargetEndTime(null);
-        setRemainingSeconds(remote.remainingSeconds);
-        setStatus('PAUSED');
-      } else {
-        // IDLE / COMPLETED
-        if (workerRef.current) {
-          workerRef.current.postMessage('STOP');
-        }
-        targetEndTimeRef.current = null;
-        setTargetEndTime(null);
-        setRemainingSeconds(remote.remainingSeconds);
-        setStatus(remote.status);
-      }
-
-      setTimeout(() => {
-        isApplyingRemoteRef.current = false;
-      }, 150);
-    },
-    [authService, setActiveTagId, status]
-  );
-
-  // Cross-device timer sync engine: fetches from Cloudflare D1
+  // Cross-device timer sync engine: fetches from Cloudflare D1 with active heartbeat header
   const checkRemoteTimer = useCallback(async () => {
     if (!auth.isAuthenticated || isApplyingRemoteRef.current) return;
 
     try {
-      const remote = await authService.fetchRemoteTimer();
-      if (!remote) return;
-      applyRemoteState(remote);
+      const isRunning = status === 'RUNNING';
+      const result = await authService.fetchRemoteTimer(isRunning);
+      if (!result) return;
+      if (result.timer) {
+        applyRemoteState(result.timer);
+      }
+      if (result.coffeeCups && syncRemoteCoffeeCups) {
+        syncRemoteCoffeeCups(result.coffeeCups);
+      }
     } catch (err) {
       console.warn('Error checking remote timer', err);
     }
-  }, [auth.isAuthenticated, authService, applyRemoteState]);
+  }, [auth.isAuthenticated, authService, applyRemoteState, status, syncRemoteCoffeeCups]);
 
   // Subscribe to BroadcastChannel for zero-latency multi-tab sync on same machine
   useEffect(() => {
@@ -729,7 +835,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Check immediately on auth change or mount
     checkRemoteTimer();
 
-    // Responsive polling: 1500ms when RUNNING, 2500ms when IDLE/PAUSED
+    // Responsive polling: 1500ms when RUNNING (sends heartbeats), 2500ms when IDLE/PAUSED
     const intervalMs = status === 'RUNNING' ? 1500 : 2500;
     const intervalId = setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -759,48 +865,52 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [auth.isAuthenticated, status, checkRemoteTimer]);
 
-  const state: TimerState = {
+  // Tab Title & Favicon updates
+  useEffect(() => {
+    const timeFormatted = formatTime(remainingSeconds);
+    const modeLabel = sessionType === 'WORK' ? 'Focus' : 'Break';
+
+    if (status === 'RUNNING') {
+      document.title = `(${timeFormatted}) ${modeLabel} - Focus Timer`;
+    } else if (status === 'PAUSED') {
+      document.title = `[Paused] ${timeFormatted} - Focus Timer`;
+    } else {
+      document.title = 'Focus Timer - Flow State Productivity';
+    }
+  }, [remainingSeconds, status, sessionType]);
+
+  const value: TimerContextValue = {
+    state: {
+      sessionType,
+      status,
+      remainingSeconds,
+      totalSeconds,
+      currentCycle,
+      maxCycles: settings.longBreakInterval,
+      activeTagId,
+    },
     sessionType,
     status,
     remainingSeconds,
     totalSeconds,
+    targetEndTime,
     currentCycle,
     maxCycles: settings.longBreakInterval,
-    activeTagId,
+    toggleStartPause,
+    resetTimer,
+    skipInterval,
+    setSessionTypeManually,
   };
 
-  return (
-    <TimerContext.Provider
-      value={{
-        state,
-        sessionType,
-        status,
-        remainingSeconds,
-        totalSeconds,
-        targetEndTime,
-        currentCycle,
-        maxCycles: settings.longBreakInterval,
-        toggleStartPause,
-        resetTimer,
-        skipInterval,
-        setSessionTypeManually,
-      }}
-    >
-      {children}
-    </TimerContext.Provider>
-  );
+  return <TimerContext.Provider value={value}>{children}</TimerContext.Provider>;
 };
 
-export const useTimerContext = (): TimerContextValue => {
-  const ctx = useContext(TimerContext);
-  if (!ctx) throw new Error("useTimer must be used within a TimerProvider");
-  return ctx;
-};
-
-export function useTimer(): TimerContextValue {
-  const ctx = useContext(TimerContext);
-  if (!ctx) {
+export const useTimer = (): TimerContextValue => {
+  const context = useContext(TimerContext);
+  if (!context) {
     throw new Error('useTimer must be used within a TimerProvider');
   }
-  return ctx;
-}
+  return context;
+};
+
+export const useTimerContext = useTimer;

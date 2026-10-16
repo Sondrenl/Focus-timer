@@ -13,6 +13,7 @@ import { ProfileRepository } from '../services/repository/ProfileRepository';
 import { AuthService } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
+import { broadcastCoffeeCups, subscribeCoffeeCups } from '../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../utils/environment';
 
 interface AppContextValue {
@@ -63,6 +64,7 @@ interface AppContextValue {
   coffeeCups: CoffeeCup[];
   addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
   removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
+  syncRemoteCoffeeCups: (cups: CoffeeCup[]) => Promise<void>;
 
   // View Navigation
   currentView: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile';
@@ -111,6 +113,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
 
+  // Synchronize remote coffee cups received from real-time timer polling or background sync
+  const syncRemoteCoffeeCups = useCallback(async (remoteCups: CoffeeCup[]) => {
+    const deletedCupIds = authService.getDeletedCoffeeCupIds();
+    const localCups = await coffeeRepository.getAll();
+    const cupMap = new Map<string, CoffeeCup>();
+
+    localCups.forEach((c) => {
+      if (!deletedCupIds.has(c.id)) {
+        cupMap.set(c.id, c);
+      }
+    });
+
+    let hasChanges = false;
+    remoteCups.forEach((c) => {
+      if (!deletedCupIds.has(c.id) && !cupMap.has(c.id)) {
+        cupMap.set(c.id, c);
+        hasChanges = true;
+      }
+    });
+
+    const remoteIdSet = new Set(remoteCups.map((c) => c.id));
+    for (const [id] of cupMap.entries()) {
+      if (!remoteIdSet.has(id)) {
+        deletedCupIds.add(id);
+        authService.addDeletedCoffeeCupId(id);
+        cupMap.delete(id);
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges || localCups.length !== cupMap.size) {
+      const finalCups = Array.from(cupMap.values()).sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      await coffeeRepository.saveAll(finalCups);
+      setCoffeeCups(finalCups);
+    }
+  }, []);
+
   // Synchronize local data with Cloudflare D1
   const syncWithCloud = useCallback(async (): Promise<void> => {
     if (!authService.getStoredToken()) return;
@@ -123,8 +164,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const currentSettings = await settingsRepository.get();
       const currentProfile = await profileRepository.get();
       const deletedTagIds = authService.getDeletedTagIds();
+      const deletedCoffeeCupIds = authService.getDeletedCoffeeCupIds();
 
-      // 1. Push local state to Cloudflare Worker with deletedTagIds
+      // 1. Push local state to Cloudflare Worker with deleted tracking IDs
       await authService.pushCloudData({
         profile: {
           displayName: currentProfile.displayName,
@@ -133,6 +175,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
         tags: currentTags,
         deletedTagIds: Array.from(deletedTagIds),
+        deletedCoffeeCupIds: Array.from(deletedCoffeeCupIds),
         sessions: currentSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')),
         coffeeCups: await coffeeRepository.getAll(),
         settings: currentSettings,
@@ -145,7 +188,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (Array.isArray(cloudData.deletedTagIds)) {
           cloudData.deletedTagIds.forEach((id) => authService.addDeletedTagId(id));
         }
+        if (Array.isArray(cloudData.deletedCoffeeCupIds)) {
+          cloudData.deletedCoffeeCupIds.forEach((id) => authService.addDeletedCoffeeCupId(id));
+        }
         const effectiveDeletedTagIds = authService.getDeletedTagIds();
+        const effectiveDeletedCoffeeCupIds = authService.getDeletedCoffeeCupIds();
 
         // Merge cloud tags EXCLUDING any locally or remotely deleted tag IDs
         const validLocalTags = currentTags.filter((t) => !effectiveDeletedTagIds.has(t.id));
@@ -187,16 +234,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setSettings(mergedSettings);
         }
 
-        // Merge cloud coffee cups
+        // Merge cloud coffee cups EXCLUDING any deleted coffee cups
         if (cloudData.coffeeCups) {
           const localCoffee = await coffeeRepository.getAll();
           const cupMap = new Map<string, CoffeeCup>();
-          localCoffee.forEach((c) => cupMap.set(c.id, c));
-          cloudData.coffeeCups.forEach((c) => {
-            const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
-            cupMap.set(c.id, { ...c, tagId: effectiveTagId });
+          localCoffee.forEach((c) => {
+            if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
+              cupMap.set(c.id, c);
+            }
           });
-          const finalCoffee = Array.from(cupMap.values());
+          cloudData.coffeeCups.forEach((c) => {
+            if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
+              const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
+              cupMap.set(c.id, { ...c, tagId: effectiveTagId });
+            }
+          });
+          const finalCoffee = Array.from(cupMap.values()).sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          );
           await coffeeRepository.saveAll(finalCoffee);
           setCoffeeCups(finalCoffee);
         }
@@ -224,6 +279,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncError: (err as Error).message || 'Sync failed',
       }));
     }
+  }, []);
+
+  // Multi-tab coffee broadcast synchronization
+  useEffect(() => {
+    const unsubscribe = subscribeCoffeeCups((cups) => {
+      coffeeRepository.saveAll(cups);
+      setCoffeeCups(cups);
+    });
+    return unsubscribe;
   }, []);
 
   // Google Sign In
@@ -448,23 +512,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const created = await coffeeRepository.addCup(today, tagId);
     const updated = await coffeeRepository.getAll();
     setCoffeeCups(updated);
+    broadcastCoffeeCups(updated);
     if (auth.isAuthenticated) {
-      syncWithCloud();
+      authService.addCoffeeCupRemote(created);
     }
     return created;
   };
 
   const removeCoffeeCup = async (dateStr?: string, tagId?: string | null, cupId?: string): Promise<boolean> => {
     const today = dateStr || new Date().toISOString().slice(0, 10);
-    const success = await coffeeRepository.removeCup(today, tagId, cupId);
-    if (success) {
+    const removedCup = await coffeeRepository.removeCup(today, tagId, cupId);
+    if (removedCup) {
+      authService.addDeletedCoffeeCupId(removedCup.id);
       const updated = await coffeeRepository.getAll();
       setCoffeeCups(updated);
+      broadcastCoffeeCups(updated);
       if (auth.isAuthenticated) {
-        syncWithCloud();
+        authService.removeCoffeeCupRemote(removedCup.id);
       }
+      return true;
     }
-    return success;
+    return false;
   };
 
   // Session Operations
@@ -484,18 +552,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await sessionRepository.clear();
     setSessions([]);
     if (auth.isAuthenticated) {
-      setAuth((prev) => ({ ...prev, isSyncing: true }));
-      try {
-        await authService.pushCloudData({
-          clearSessions: true,
-          sessions: [],
-        });
-        const nowIso = new Date().toISOString();
-        setAuth((prev) => ({ ...prev, isSyncing: false, lastSyncedAt: nowIso }));
-      } catch (err) {
-        console.error('Error clearing sessions in cloud:', err);
-        setAuth((prev) => ({ ...prev, isSyncing: false, syncError: (err as Error).message }));
-      }
+      await authService.pushCloudData({
+        clearSessions: true,
+      });
+      syncWithCloud();
     }
   };
 
@@ -521,7 +581,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
       : sessions;
     return {
-      version: '2.0.1',
+      version: '2.1.0',
       exportedAt: new Date().toISOString(),
       profile,
       settings,
@@ -544,8 +604,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let tagsAdded = 0;
 
     if (mode === 'replace') {
-      // Clear deleted tags tracking so imported tags are never blocked
+      // Clear deleted tracking so imported tags and coffee cups are never blocked
       authService.clearDeletedTagIds();
+      authService.clearDeletedCoffeeCupIds();
 
       finalTags = incomingTags;
       finalSessions = incomingSessions;
@@ -652,6 +713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await clearSessions();
     } else {
       authService.clearDeletedTagIds();
+      authService.clearDeletedCoffeeCupIds();
       await sessionRepository.clear();
       await coffeeRepository.clear();
       const defTags = await tagRepository.resetToDefaults();
@@ -704,6 +766,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         coffeeCups,
         addCoffeeCup,
         removeCoffeeCup,
+        syncRemoteCoffeeCups,
         settings,
         updateSettings,
         exportBackup,
@@ -720,10 +783,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 };
 
-export function useApp(): AppContextValue {
-  const ctx = useContext(AppContext);
-  if (!ctx) {
+export const useApp = (): AppContextValue => {
+  const context = useContext(AppContext);
+  if (!context) {
     throw new Error('useApp must be used within an AppProvider');
   }
-  return ctx;
-}
+  return context;
+};

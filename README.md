@@ -1,101 +1,99 @@
-# Pomodor — Focus Timer
+# Focus Timer (Pomodor)
 
-A clean, modern Pomodoro timer web app built through **prompt-driven AI development**—designed and iterated using conversational prompts to help you stay focused, manage work and break sessions, and track your daily productivity.
+A fast, modern Pomodoro and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and Cloudflare Workers + D1. Designed for frictionless flow state, multi-device synchronization, and deep productivity insights.
 
-> 💡 **Note**: This project's codebase was generated entirely by AI based on user prompts and validated through interactive browser testing. See [AI_DECLARATION.md](AI_DECLARATION.md) for details.
-
----
-
-## ✨ Features
-
-- **Reliable Timer**: Keeps running accurately in the background without freezing or drifting, even when you switch tabs or minimize the browser.
-- **Customizable Intervals**: Set your own durations for focus sessions, short breaks, and long breaks, along with how many rounds make up a full cycle.
-- **Cycle Progress Tracker**: A simple visual timeline shows where you are in your current session and when your next break is coming.
-- **Color-Coded Tags**: Organize work sessions with custom tags (e.g., Coding, Writing, Study) and colors. The timer ring dynamically matches the active tag.
-- **Built-in Sound Alerts**: Plays a gentle, pleasant chime when a timer ends (synthesized directly in the browser—no external sound files to download).
-- **Tab Title Countdown**: Glance at your remaining time right in the browser tab title.
-- **Productivity Statistics**:
-  - Review your focus time across days, weeks, months, years, or custom date ranges.
-  - See which tags you spend the most time on with an interactive donut chart.
-- **Private & Local-First**: All your data is saved directly in your browser. No accounts, no trackers, and an easy JSON export button for backups.
-- **Keyboard Shortcuts**: Quick controls from your keyboard (`Space` to start/pause, `S` to skip, `R` to reset).
-- **Mobile Friendly & Installable (PWA)**: Fully responsive design that can be installed to your home screen or desktop.
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](package.json)
+[![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
 ---
 
-## 🛠️ Tech Stack
+## Highlights
 
-- **Framework**: React 18 + TypeScript + Vite
-- **Styling**: Tailwind CSS
-- **Icons**: Lucide React
-- **Hosting**: Ready for Cloudflare Pages / Workers or any static web host
+- **Drift-Free Background Timer**: Powered by a background Web Worker and high-precision timestamps. Never freezes or drifts when switching tabs or minimizing.
+- **Sleep & Lid-Closed Detection**: Automatically pauses when your laptop lid is closed or system sleeps. If running across multiple devices (e.g. phone + laptop), active devices keep the session going uninterrupted.
+- **Real-Time Cross-Device Sync**: Optional Google Sign-In with Cloudflare D1 database backend. Sessions, active timer state, coffee logs, and custom tags stay synchronized across all devices in real-time.
+- **Zero-Latency Multi-Tab Sync**: Instant synchronization across tabs on the same computer using the `BroadcastChannel` API.
+- **Coffee & Caffeine Tracker**: Log coffee cups with associated project tags. Real-time cloud sync with instant updates and comprehensive coffee analytics.
+- **Keep Screen Awake (Mobile & Desktop)**: Uses the Screen Wake Lock API to prevent displays from going to sleep during active work sessions.
+- **Productivity & Coffee Analytics**: Timeframe breakdowns (Day, Week, Month, Year, All-Time), peak productivity hours, daily coffee averages, and tag distribution donuts.
+- **Local-First & Privacy Conscious**: Works 100% offline with `localStorage`. Cloud sync is opt-in, and full JSON export/import backups are available at any time.
+- **Customizable Intervals & Audio Alerts**: Adjustable work/break lengths, auto-start options, synthesized Web Audio chimes (no audio asset downloads needed), and desktop notifications.
 
 ---
 
-## 🚀 Getting Started
+## Tech Stack
+
+- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide React, Canvas Confetti
+- **Backend**: Cloudflare Workers, Cloudflare D1 (Serverless SQLite), Google OAuth 2.0 Identity Services, Web Crypto JWT
+- **APIs**: Screen Wake Lock API, Web Audio API, BroadcastChannel, Notifications API, Web Workers
+
+---
+
+## Getting Started
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or newer)
+- Node.js (v18 or newer)
 - npm
 
 ### Installation
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/sondrelassen/Focus-timer.git
 
-# Navigate into the project folder
-cd focus-timer
+# Enter project directory
+cd Focus-timer
 
 # Install dependencies
 npm install
 ```
 
 ### Running Locally
-Start the development server:
 ```bash
 npm run dev
 ```
 Open `http://localhost:5173` in your browser.
 
+### Cloudflare Worker (Full-Stack Mode)
+```bash
+# Run local worker + frontend
+npx wrangler dev
+```
+
 ### Building for Production
-Create an optimized production build:
 ```bash
 npm run build
 ```
 
-To preview the production build locally:
-```bash
-npm run preview
-```
-
 ---
 
-## ⌨️ Keyboard Shortcuts
+## Keyboard Shortcuts
 
-| Shortcut | Action |
-| :--- | --- |
+| Key | Action |
+| :--- | :--- |
 | `Space` | Start / Pause timer |
-| `S` | Skip current interval |
+| `S` | Skip to next interval |
 | `R` | Reset current interval |
 
-*(Shortcuts are automatically hidden on mobile devices)*
+*(Automatically hidden on mobile viewports)*
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-src/
-├── components/     # UI views (Timer, Statistics, Tags, Settings, Profile)
-├── context/        # App and Timer state management
-├── hooks/          # Custom React hooks (timer logic, stats, tag handling)
-├── services/       # Local storage, audio chimes, and browser notifications
-├── types/          # TypeScript types and data models
-└── utils/          # Date formatting, confetti, and helpers
+├── public/                 # Static assets & SVG favicon
+├── migrations/             # Cloudflare D1 database migrations
+├── worker/                 # Cloudflare Worker API & auth router
+└── src/
+    ├── components/         # Material 3 UI views (Timer, Coffee, Stats, Tags, Settings, Profile)
+    ├── context/            # React state providers (AppContext, TimerContext)
+    ├── services/           # Services (Auth, Storage, Repositories, WakeLock, Sound, Notifications)
+    ├── types/              # TypeScript models (Timer, Session, Tag, Settings, Coffee, User)
+    └── utils/              # Math, date formatting, and confetti helpers
 ```
 
 ---
 
-## 📄 License
+## License
 
-MIT
+[MIT](LICENSE)

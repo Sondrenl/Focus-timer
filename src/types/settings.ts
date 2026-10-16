@@ -20,6 +20,8 @@ export interface UserSettings {
   soundEnabled: boolean;
   /** Browser notification permission preference */
   notificationsEnabled: boolean;
+  /** Prevent screen from sleeping while timer is active */
+  keepAwake: boolean;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
@@ -32,4 +34,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   soundVolume: 0.8,
   soundEnabled: true,
   notificationsEnabled: false,
+  keepAwake: false,
 };
