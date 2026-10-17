@@ -307,21 +307,43 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         let updatedAtMs = timerRow.updated_at_ms;
 
         if (status === "RUNNING") {
-          const lastHb = timerRow.last_heartbeat_ms || timerRow.updated_at_ms;
-          if (now - lastHb > 8500) {
-            // All active devices have been silent (> 8.5s without heartbeat = phone turned off / lid closed / offline)
-            status = "PAUSED";
-            remainingSeconds = targetEndTime ? Math.max(0, Math.ceil((targetEndTime - lastHb) / 1000)) : remainingSeconds;
+          // Check 1: Has the session expired / completed naturally?
+          if (targetEndTime !== null && now >= targetEndTime) {
+            status = "IDLE";
+            remainingSeconds = 0;
             targetEndTime = null;
-            updatedAtMs = lastHb;
+            updatedAtMs = now;
             await env.DB.prepare(
-              "UPDATE active_timers SET status = 'PAUSED', remaining_seconds = ?, target_end_time = NULL, updated_at_ms = ?, last_heartbeat_ms = ? WHERE user_id = ?"
-            ).bind(remainingSeconds, updatedAtMs, lastHb, currentUserId).run();
-          } else if (isRunningHeartbeat) {
-            // Active device is reporting in live: refresh heartbeat
-            await env.DB.prepare(
-              "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
-            ).bind(now, currentUserId).run();
+              "UPDATE active_timers SET status = 'IDLE', remaining_seconds = 0, target_end_time = NULL, updated_at_ms = ?, last_heartbeat_ms = ? WHERE user_id = ?"
+            ).bind(now, now, currentUserId).run();
+          } else {
+            const lastHb = timerRow.last_heartbeat_ms || timerRow.updated_at_ms;
+            if (now - lastHb > 8500) {
+              // All active devices have been silent (> 8.5s without heartbeat = phone turned off / lid closed / offline)
+              const remainingFromHb = targetEndTime ? Math.ceil((targetEndTime - lastHb) / 1000) : remainingSeconds;
+              if (remainingFromHb <= 0) {
+                status = "IDLE";
+                remainingSeconds = 0;
+                targetEndTime = null;
+                updatedAtMs = now;
+                await env.DB.prepare(
+                  "UPDATE active_timers SET status = 'IDLE', remaining_seconds = 0, target_end_time = NULL, updated_at_ms = ?, last_heartbeat_ms = ? WHERE user_id = ?"
+                ).bind(now, now, currentUserId).run();
+              } else {
+                status = "PAUSED";
+                remainingSeconds = remainingFromHb;
+                targetEndTime = null;
+                updatedAtMs = lastHb;
+                await env.DB.prepare(
+                  "UPDATE active_timers SET status = 'PAUSED', remaining_seconds = ?, target_end_time = NULL, updated_at_ms = ?, last_heartbeat_ms = ? WHERE user_id = ?"
+                ).bind(remainingSeconds, updatedAtMs, lastHb, currentUserId).run();
+              }
+            } else if (isRunningHeartbeat) {
+              // Active device is reporting in live: refresh heartbeat
+              await env.DB.prepare(
+                "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
+              ).bind(now, currentUserId).run();
+            }
           }
         }
 

@@ -142,6 +142,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Initialize with saved timestamp or 0 (NOT Date.now()) so any fresh remote timer/tag state is accepted on mount
   const localUpdatedAtRef = useRef<number>(initialSaved.current?.updatedAtMs ?? 0);
+  const lastCompletedAtRef = useRef<number>(0);
   const isApplyingRemoteRef = useRef<boolean>(false);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const workerRef = useRef<Worker | null>(null);
@@ -207,6 +208,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     prevActiveTagIdRef.current = activeTagId;
 
     const now = authService.getServerNow();
+    lastCompletedAtRef.current = Date.now();
     localUpdatedAtRef.current = now;
 
     const currentRemaining = targetEndTimeRef.current !== null
@@ -480,9 +482,27 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Core function to safely apply incoming remote/broadcast timer state
   const applyRemoteState = useCallback(
     (remote: RemoteTimerState) => {
-      // Apply if remote update is newer than local interaction, OR if local timer is IDLE and remote is active
+      // 1. Guard against resurrecting a completed focus session:
+      // If we just finished a session locally (within 10 seconds), reject any stale remote
+      // WORK session state (especially PAUSED or RUNNING states from the session that just ended).
+      const isRecentCompletion = Date.now() - lastCompletedAtRef.current < 10000;
+      if (isRecentCompletion) {
+        if (remote.sessionType === 'WORK' && (sessionType === 'SHORT_BREAK' || sessionType === 'LONG_BREAK')) {
+          return;
+        }
+      }
+
+      // 2. Freshness check
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
-      const isAdoptingActiveRemote = status === 'IDLE' && (remote.status === 'RUNNING' || remote.status === 'PAUSED');
+
+      // 3. Adoption check: Only adopt active remote if:
+      // - We are currently IDLE and not in the middle of a recent session completion transition
+      // - Remote state is at least as fresh as our local updated timestamp (never adopt older state!)
+      const isAdoptingActiveRemote =
+        !isRecentCompletion &&
+        status === 'IDLE' &&
+        (remote.status === 'RUNNING' || remote.status === 'PAUSED') &&
+        remote.updatedAtMs >= localUpdatedAtRef.current;
 
       if (!isNewer && !isAdoptingActiveRemote) {
         return;
@@ -556,6 +576,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     async (sleepTimestamp: number) => {
       if (status !== 'RUNNING' || targetEndTimeRef.current === null) return;
 
+      const now = authService.getServerNow();
+      // If timer already reached or passed targetEndTime, it naturally completed!
+      if (now >= targetEndTimeRef.current || (targetEndTimeRef.current - sleepTimestamp) <= 0) {
+        handleComplete();
+        return;
+      }
+
       // 1. If authenticated, query cloud to verify if another device took over and is actively running
       if (auth.isAuthenticated) {
         try {
@@ -577,6 +604,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         workerRef.current.postMessage('STOP');
       }
       const pausedRemaining = Math.max(0, Math.ceil((targetEndTimeRef.current - sleepTimestamp) / 1000));
+      if (pausedRemaining <= 0) {
+        handleComplete();
+        return;
+      }
+
       targetEndTimeRef.current = null;
       setTargetEndTime(null);
       setRemainingSeconds(pausedRemaining);
@@ -600,7 +632,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         authService.pushRemoteTimer(payload);
       }
     },
-    [status, auth.isAuthenticated, authService, applyRemoteState, sessionType, totalSeconds, currentCycle, activeTagId]
+    [status, auth.isAuthenticated, authService, applyRemoteState, sessionType, totalSeconds, currentCycle, activeTagId, handleComplete]
   );
 
   // Background Web Worker initialization
@@ -614,26 +646,28 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       worker.onmessage = (e) => {
         if (e.data === 'TICK' && targetEndTimeRef.current !== null) {
+          const now = authService.getServerNow();
+          const diffMs = targetEndTimeRef.current - now;
+          const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+
+          // 1. Always prioritize session completion over sleep detection
+          if (diffSec <= 0) {
+            handleComplete();
+            return;
+          }
+
+          // 2. Detect sleep / lid close (device suspended for > 6s)
           const wallNow = Date.now();
           const gap = wallNow - lastTickTimeRef.current;
           const sleepTime = lastTickTimeRef.current;
           lastTickTimeRef.current = wallNow;
 
-          // If gap > 3500ms, the laptop lid was closed or device went to sleep
-          if (gap > 3500 && status === 'RUNNING') {
+          if (gap > 6000 && status === 'RUNNING') {
             handleSleepWake(sleepTime);
             return;
           }
 
-          const now = authService.getServerNow();
-          const diffMs = targetEndTimeRef.current - now;
-          const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
           setRemainingSeconds(diffSec);
-
-          if (diffSec <= 0) {
-            handleComplete();
-          }
         }
       };
 
@@ -657,42 +691,31 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [handleComplete, status, authService, handleSleepWake]);
 
-  // Periodic heartbeat / sleep detector interval when running
-  useEffect(() => {
-    if (status !== 'RUNNING') return;
-    const interval = setInterval(() => {
-      const wallNow = Date.now();
-      const gap = wallNow - lastTickTimeRef.current;
-      const sleepTime = lastTickTimeRef.current;
-      lastTickTimeRef.current = wallNow;
-      if (gap > 3500) {
-        handleSleepWake(sleepTime);
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [status, handleSleepWake]);
-
   // Visibility and focus sync listeners for sleep and tick accuracy
   useEffect(() => {
     const handleVisibility = () => {
       if (status === 'RUNNING' && targetEndTimeRef.current !== null) {
+        const now = authService.getServerNow();
+        const diffMs = targetEndTimeRef.current - now;
+        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+
+        // 1. Always prioritize session completion over sleep detection
+        if (diffSec <= 0) {
+          handleComplete();
+          return;
+        }
+
         const wallNow = Date.now();
         const gap = wallNow - lastTickTimeRef.current;
         const sleepTime = lastTickTimeRef.current;
         lastTickTimeRef.current = wallNow;
 
-        if (gap > 3500) {
+        if (gap > 6000) {
           handleSleepWake(sleepTime);
           return;
         }
 
-        const now = authService.getServerNow();
-        const diffMs = targetEndTimeRef.current - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
         setRemainingSeconds(diffSec);
-        if (diffSec <= 0) {
-          handleComplete();
-        }
       }
     };
 
@@ -869,7 +892,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       clearInterval(intervalId);
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('focus', handleVisibility);
     };
   }, [auth.isAuthenticated, status, checkRemoteTimer]);
 
