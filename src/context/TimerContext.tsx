@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { SessionType, TimerStatus, TimerState } from '../types/timer';
+import { UserSettings } from '../types/settings';
 import { useApp } from './AppContext';
 import { triggerCompletionConfetti } from '../utils/confetti';
 import { AuthService, RemoteTimerState } from '../services/auth/AuthService';
@@ -105,8 +106,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [remainingSeconds, setRemainingSeconds] = useState<number>(() => {
     if (initialSaved.current) {
       if (initialSaved.current.status === 'RUNNING' && initialSaved.current.targetEndTime) {
-        const diffSec = Math.max(0, Math.ceil((initialSaved.current.targetEndTime - authService.getServerNow()) / 1000));
-        return diffSec;
+        const diffSec = Math.ceil((initialSaved.current.targetEndTime - authService.getServerNow()) / 1000);
+        if (diffSec > 0) {
+          return diffSec;
+        }
+        return getDurationForType(initialSaved.current.sessionType);
       }
       if (initialSaved.current.remainingSeconds > 0) {
         return initialSaved.current.remainingSeconds;
@@ -144,8 +148,31 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const localUpdatedAtRef = useRef<number>(initialSaved.current?.updatedAtMs ?? 0);
   const lastCompletedAtRef = useRef<number>(0);
   const isApplyingRemoteRef = useRef<boolean>(false);
+  const isCompletingRef = useRef<boolean>(false);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const workerRef = useRef<Worker | null>(null);
+
+  // Fresh mutable refs for state to eliminate stale closures across callbacks
+  const sessionTypeRef = useRef<SessionType>(sessionType);
+  sessionTypeRef.current = sessionType;
+
+  const statusRef = useRef<TimerStatus>(status);
+  statusRef.current = status;
+
+  const currentCycleRef = useRef<number>(currentCycle);
+  currentCycleRef.current = currentCycle;
+
+  const totalSecondsRef = useRef<number>(totalSeconds);
+  totalSecondsRef.current = totalSeconds;
+
+  const remainingSecondsRef = useRef<number>(remainingSeconds);
+  remainingSecondsRef.current = remainingSeconds;
+
+  const settingsRef = useRef<UserSettings>(settings);
+  settingsRef.current = settings;
+
+  const activeTagIdRef = useRef<string | null>(activeTagId);
+  activeTagIdRef.current = activeTagId;
 
   // Sleep detection: track last recorded wall-clock tick timestamp
   const lastTickTimeRef = useRef<number>(Date.now());
@@ -208,7 +235,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     prevActiveTagIdRef.current = activeTagId;
 
     const now = authService.getServerNow();
-    lastCompletedAtRef.current = Date.now();
     localUpdatedAtRef.current = now;
 
     const currentRemaining = targetEndTimeRef.current !== null
@@ -237,7 +263,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Start timer helper
   const startTimer = useCallback(
     (overrideSec?: number) => {
-      const secToRun = overrideSec !== undefined ? overrideSec : remainingSeconds;
+      const secToRun = overrideSec !== undefined ? overrideSec : remainingSecondsRef.current;
       const now = authService.getServerNow();
       const target = now + secToRun * 1000;
       const runId = timerRunIdRef.current || `tr-${now}-${Math.random().toString(36).substring(2, 6)}`;
@@ -254,13 +280,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const payload: RemoteTimerState = {
-        sessionType,
+        sessionType: sessionTypeRef.current,
         status: 'RUNNING',
         remainingSeconds: secToRun,
-        totalSeconds,
+        totalSeconds: totalSecondsRef.current,
         targetEndTime: target,
-        currentCycle,
-        activeTagId,
+        currentCycle: currentCycleRef.current,
+        activeTagId: activeTagIdRef.current,
         timerRunId: runId,
         updatedAtMs: now,
       };
@@ -271,7 +297,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         authService.pushRemoteTimer(payload);
       }
     },
-    [remainingSeconds, sessionType, totalSeconds, currentCycle, activeTagId, auth.isAuthenticated, authService]
+    [auth.isAuthenticated, authService]
   );
 
   // Pause timer helper
@@ -346,6 +372,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Handle completion
   const handleComplete = useCallback(() => {
+    if (isCompletingRef.current) return;
+    isCompletingRef.current = true;
+    setTimeout(() => {
+      isCompletingRef.current = false;
+    }, 1500);
+
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
@@ -353,17 +385,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTargetEndTime(null);
 
     const now = authService.getServerNow();
+    lastCompletedAtRef.current = Date.now();
     localUpdatedAtRef.current = now;
 
-    if (settings.soundEnabled) {
-      if (sessionType === 'WORK') {
-        sound.playChime(settings.soundVolume);
+    const currentType = sessionTypeRef.current;
+    const cycle = currentCycleRef.current;
+    const currentSettings = settingsRef.current;
+    const currentTag = activeTagIdRef.current;
+    const currentTotalSec = totalSecondsRef.current;
+
+    if (currentSettings.soundEnabled) {
+      if (currentType === 'WORK') {
+        sound.playChime(currentSettings.soundVolume);
       } else {
-        sound.playBreakComplete(settings.soundVolume);
+        sound.playBreakComplete(currentSettings.soundVolume);
       }
     }
 
-    if (sessionType === 'WORK') {
+    if (currentType === 'WORK') {
       notifications.notify('Session Complete!', 'Great focus! Time to take a well-deserved break.');
       triggerCompletionConfetti();
 
@@ -374,77 +413,57 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       recordSession({
         id: sessionId,
-        tagId: activeTagId,
+        tagId: currentTag,
         sessionType: 'WORK',
-        durationSeconds: totalSeconds,
+        durationSeconds: currentTotalSec,
         completedAt: new Date().toISOString(),
       });
 
       timerRunIdRef.current = null;
 
-      if (currentCycle >= settings.longBreakInterval) {
-        setSessionType('LONG_BREAK');
-        const dur = settings.longBreakDurationMinutes * 60;
-        setTotalSeconds(dur);
-        setRemainingSeconds(dur);
-        if (settings.autoStartBreaks) {
-          startTimer(dur);
-        } else {
-          setStatus('IDLE');
-          const payload: RemoteTimerState = {
-            sessionType: 'LONG_BREAK',
-            status: 'IDLE',
-            remainingSeconds: dur,
-            totalSeconds: dur,
-            targetEndTime: null,
-            currentCycle,
-            activeTagId,
-            timerRunId: null,
-            updatedAtMs: now,
-          };
-          broadcastTimerState(payload);
-          if (auth.isAuthenticated) {
-            authService.pushRemoteTimer(payload);
-          }
-        }
-      } else {
-        setSessionType('SHORT_BREAK');
-        const dur = settings.shortBreakDurationMinutes * 60;
-        setTotalSeconds(dur);
-        setRemainingSeconds(dur);
-        if (settings.autoStartBreaks) {
-          startTimer(dur);
-        } else {
-          setStatus('IDLE');
-          const payload: RemoteTimerState = {
-            sessionType: 'SHORT_BREAK',
-            status: 'IDLE',
-            remainingSeconds: dur,
-            totalSeconds: dur,
-            targetEndTime: null,
-            currentCycle,
-            activeTagId,
-            timerRunId: null,
-            updatedAtMs: now,
-          };
-          broadcastTimerState(payload);
-          if (auth.isAuthenticated) {
-            authService.pushRemoteTimer(payload);
-          }
-        }
-      }
-    } else {
-      notifications.notify('Break Finished', 'Ready to dive back into deep work?');
-      setSessionType('WORK');
-      const dur = settings.workDurationMinutes * 60;
+      const isLongBreak = cycle >= currentSettings.longBreakInterval;
+      const nextType: SessionType = isLongBreak ? 'LONG_BREAK' : 'SHORT_BREAK';
+      const dur = isLongBreak
+        ? currentSettings.longBreakDurationMinutes * 60
+        : currentSettings.shortBreakDurationMinutes * 60;
+
+      setSessionType(nextType);
       setTotalSeconds(dur);
       setRemainingSeconds(dur);
 
-      const nextCycle = sessionType === 'SHORT_BREAK' ? currentCycle + 1 : 1;
+      if (currentSettings.autoStartBreaks) {
+        startTimer(dur);
+      } else {
+        setStatus('IDLE');
+        const payload: RemoteTimerState = {
+          sessionType: nextType,
+          status: 'IDLE',
+          remainingSeconds: dur,
+          totalSeconds: dur,
+          targetEndTime: null,
+          currentCycle: cycle,
+          activeTagId: currentTag,
+          timerRunId: null,
+          updatedAtMs: now,
+        };
+        broadcastTimerState(payload);
+        if (auth.isAuthenticated) {
+          authService.pushRemoteTimer(payload);
+        }
+      }
+    } else {
+      // Break session finished -> Advance to WORK session!
+      notifications.notify('Break Finished', 'Ready to dive back into deep work?');
+      const dur = currentSettings.workDurationMinutes * 60;
+      setSessionType('WORK');
+      setTotalSeconds(dur);
+      setRemainingSeconds(dur);
+
+      const nextCycle = currentType === 'SHORT_BREAK' ? cycle + 1 : 1;
       setCurrentCycle(nextCycle);
       timerRunIdRef.current = null;
 
-      if (settings.autoStartPomodoros) {
+      if (currentSettings.autoStartPomodoros) {
         startTimer(dur);
       } else {
         setStatus('IDLE');
@@ -455,7 +474,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           totalSeconds: dur,
           targetEndTime: null,
           currentCycle: nextCycle,
-          activeTagId,
+          activeTagId: currentTag,
           timerRunId: null,
           updatedAtMs: now,
         };
@@ -466,11 +485,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
   }, [
-    sessionType,
-    currentCycle,
-    settings,
-    activeTagId,
-    totalSeconds,
     recordSession,
     sound,
     notifications,
@@ -482,25 +496,34 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Core function to safely apply incoming remote/broadcast timer state
   const applyRemoteState = useCallback(
     (remote: RemoteTimerState) => {
-      // 1. Guard against resurrecting a completed focus session:
+      // 1. Guard against dead/expired idle states (never adopt an idle timer with 0 seconds remaining)
+      if (remote.status === 'IDLE' && remote.remainingSeconds <= 0) {
+        return;
+      }
+
+      // 2. Guard against resurrecting an expired session:
       // If we just finished a session locally (within 10 seconds), reject any stale remote
-      // WORK session state (especially PAUSED or RUNNING states from the session that just ended).
+      // state belonging to the session that just finished.
       const isRecentCompletion = Date.now() - lastCompletedAtRef.current < 10000;
       if (isRecentCompletion) {
-        if (remote.sessionType === 'WORK' && (sessionType === 'SHORT_BREAK' || sessionType === 'LONG_BREAK')) {
+        const curType = sessionTypeRef.current;
+        if (remote.sessionType === 'WORK' && (curType === 'SHORT_BREAK' || curType === 'LONG_BREAK')) {
+          return;
+        }
+        if ((remote.sessionType === 'SHORT_BREAK' || remote.sessionType === 'LONG_BREAK') && curType === 'WORK') {
           return;
         }
       }
 
-      // 2. Freshness check
+      // 3. Freshness check
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
 
-      // 3. Adoption check: Only adopt active remote if:
+      // 4. Adoption check: Only adopt active remote if:
       // - We are currently IDLE and not in the middle of a recent session completion transition
       // - Remote state is at least as fresh as our local updated timestamp (never adopt older state!)
       const isAdoptingActiveRemote =
         !isRecentCompletion &&
-        status === 'IDLE' &&
+        statusRef.current === 'IDLE' &&
         (remote.status === 'RUNNING' || remote.status === 'PAUSED') &&
         remote.updatedAtMs >= localUpdatedAtRef.current;
 
@@ -511,22 +534,22 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isApplyingRemoteRef.current = true;
       localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
 
-      setSessionType(remote.sessionType);
-      setCurrentCycle(remote.currentCycle || 1);
-      setTotalSeconds(remote.totalSeconds);
-      timerRunIdRef.current = remote.timerRunId || null;
-
-      if (remote.activeTagId !== undefined && setActiveTagId) {
-        prevActiveTagIdRef.current = remote.activeTagId;
-        setActiveTagId(remote.activeTagId);
-      }
-
+      // If remote is RUNNING and targetEndTime is provided
       if (remote.status === 'RUNNING' && remote.targetEndTime) {
         const now = authService.getServerNow();
         const diffMs = remote.targetEndTime - now;
         const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
         if (diffSec > 0) {
+          setSessionType(remote.sessionType);
+          setCurrentCycle(remote.currentCycle || 1);
+          setTotalSeconds(remote.totalSeconds);
+          timerRunIdRef.current = remote.timerRunId || null;
+          if (remote.activeTagId !== undefined && setActiveTagId) {
+            prevActiveTagIdRef.current = remote.activeTagId;
+            setActiveTagId(remote.activeTagId);
+          }
+
           targetEndTimeRef.current = remote.targetEndTime;
           setTargetEndTime(remote.targetEndTime);
           setRemainingSeconds(diffSec);
@@ -536,16 +559,19 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             workerRef.current.postMessage('START');
           }
         } else {
-          // Target time has already elapsed
-          targetEndTimeRef.current = null;
-          setTargetEndTime(null);
-          setRemainingSeconds(0);
-          setStatus('IDLE');
-          if (workerRef.current) {
-            workerRef.current.postMessage('STOP');
-          }
+          // Target time has already elapsed! Complete session and advance to next!
+          handleComplete();
         }
       } else if (remote.status === 'PAUSED') {
+        setSessionType(remote.sessionType);
+        setCurrentCycle(remote.currentCycle || 1);
+        setTotalSeconds(remote.totalSeconds);
+        timerRunIdRef.current = remote.timerRunId || null;
+        if (remote.activeTagId !== undefined && setActiveTagId) {
+          prevActiveTagIdRef.current = remote.activeTagId;
+          setActiveTagId(remote.activeTagId);
+        }
+
         if (workerRef.current) {
           workerRef.current.postMessage('STOP');
         }
@@ -554,7 +580,16 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setRemainingSeconds(remote.remainingSeconds);
         setStatus('PAUSED');
       } else {
-        // IDLE / COMPLETED
+        // IDLE
+        setSessionType(remote.sessionType);
+        setCurrentCycle(remote.currentCycle || 1);
+        setTotalSeconds(remote.totalSeconds);
+        timerRunIdRef.current = remote.timerRunId || null;
+        if (remote.activeTagId !== undefined && setActiveTagId) {
+          prevActiveTagIdRef.current = remote.activeTagId;
+          setActiveTagId(remote.activeTagId);
+        }
+
         if (workerRef.current) {
           workerRef.current.postMessage('STOP');
         }
@@ -568,13 +603,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isApplyingRemoteRef.current = false;
       }, 150);
     },
-    [authService, setActiveTagId, status]
+    [authService, setActiveTagId, handleComplete]
   );
 
   // Sleep / Lid-close handler: pause timer at moment device went to sleep unless another active device kept running
   const handleSleepWake = useCallback(
     async (sleepTimestamp: number) => {
-      if (status !== 'RUNNING' || targetEndTimeRef.current === null) return;
+      if (statusRef.current !== 'RUNNING' || targetEndTimeRef.current === null) return;
 
       const now = authService.getServerNow();
       // If timer already reached or passed targetEndTime, it naturally completed!
@@ -616,13 +651,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       localUpdatedAtRef.current = sleepTimestamp;
 
       const payload: RemoteTimerState = {
-        sessionType,
+        sessionType: sessionTypeRef.current,
         status: 'PAUSED',
         remainingSeconds: pausedRemaining,
-        totalSeconds,
+        totalSeconds: totalSecondsRef.current,
         targetEndTime: null,
-        currentCycle,
-        activeTagId,
+        currentCycle: currentCycleRef.current,
+        activeTagId: activeTagIdRef.current,
         timerRunId: timerRunIdRef.current,
         updatedAtMs: sleepTimestamp,
       };
@@ -632,7 +667,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         authService.pushRemoteTimer(payload);
       }
     },
-    [status, auth.isAuthenticated, authService, applyRemoteState, sessionType, totalSeconds, currentCycle, activeTagId, handleComplete]
+    [auth.isAuthenticated, authService, applyRemoteState, handleComplete]
   );
 
   // Background Web Worker initialization
@@ -726,6 +761,31 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('focus', handleVisibility);
     };
   }, [status, handleComplete, authService, handleSleepWake]);
+
+  // Backup tick interval when running (safeguards completion in case Web Worker messages are delayed)
+  useEffect(() => {
+    if (status !== 'RUNNING') return;
+    const interval = setInterval(() => {
+      if (targetEndTimeRef.current !== null) {
+        const now = authService.getServerNow();
+        if (now >= targetEndTimeRef.current) {
+          handleComplete();
+        }
+      }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [status, handleComplete, authService]);
+
+  // Handle expired saved timer on mount
+  useEffect(() => {
+    if (
+      initialSaved.current?.status === 'RUNNING' &&
+      initialSaved.current.targetEndTime &&
+      initialSaved.current.targetEndTime <= authService.getServerNow()
+    ) {
+      handleComplete();
+    }
+  }, [handleComplete, authService]);
 
   // Skip interval helper
   const skipInterval = useCallback(() => {
