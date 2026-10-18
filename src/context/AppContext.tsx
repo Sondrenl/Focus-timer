@@ -381,9 +381,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await sessionRepository.saveAll(cleanSessions);
       }
 
-      const firstActive = loadedTags.find((t) => !t.isArchived);
-      if (firstActive) {
-        setActiveTagId(firstActive.id);
+      let storedTagId: string | null = null;
+      try {
+        storedTagId = localStorage.getItem('active_tag_id_v1');
+      } catch {
+        storedTagId = null;
+      }
+
+      if (storedTagId && loadedTags.some((t) => t.id === storedTagId && !t.isArchived)) {
+        setActiveTagId(storedTagId);
+      } else {
+        const firstActive = loadedTags.find((t) => !t.isArchived);
+        if (firstActive) {
+          setActiveTagId(firstActive.id);
+        }
       }
 
       // If already logged in, verify session and trigger background sync
@@ -410,7 +421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
     init();
-  }, [syncWithCloud]);
+  }, [syncWithCloud, setActiveTagId]);
 
   const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
 
@@ -549,17 +560,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Session Operations
-  const recordSession = async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
-    const created = await sessionRepository.add(sessionData);
-    setSessions((prev) => {
-      if (prev.some((s) => s.id === created.id)) return prev;
-      return [...prev.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')), created];
-    });
-    if (auth.isAuthenticated) {
-      syncWithCloud();
-    }
-    return created;
-  };
+  const recordSession = useCallback(
+    async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
+      const created = await sessionRepository.add(sessionData);
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === created.id)) return prev;
+        return [...prev.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')), created];
+      });
+      if (auth.isAuthenticated) {
+        syncWithCloud();
+      }
+      return created;
+    },
+    [auth.isAuthenticated, syncWithCloud]
+  );
 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();

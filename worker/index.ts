@@ -304,33 +304,16 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       let timer = null;
 
       if (timerRow) {
-        let status = timerRow.status;
+        const status = timerRow.status;
         let remainingSeconds = timerRow.remaining_seconds;
-        let targetEndTime = timerRow.target_end_time;
-        let updatedAtMs = timerRow.updated_at_ms;
+        const targetEndTime = timerRow.target_end_time;
+        const updatedAtMs = timerRow.updated_at_ms;
 
         if (status === "RUNNING") {
-          const lastHb = timerRow.last_heartbeat_ms || timerRow.updated_at_ms;
-          if (targetEndTime !== null && now < targetEndTime) {
-            if (now - lastHb > 8500) {
-              // All active devices have been silent (> 8.5s without heartbeat = phone turned off / lid closed / offline)
-              const remainingFromHb = Math.ceil((targetEndTime - lastHb) / 1000);
-              if (remainingFromHb > 0) {
-                status = "PAUSED";
-                remainingSeconds = remainingFromHb;
-                targetEndTime = null;
-                updatedAtMs = lastHb;
-                await env.DB.prepare(
-                  "UPDATE active_timers SET status = 'PAUSED', remaining_seconds = ?, target_end_time = NULL, updated_at_ms = ?, last_heartbeat_ms = ? WHERE user_id = ?"
-                ).bind(remainingSeconds, updatedAtMs, lastHb, currentUserId).run();
-              }
-            } else if (isRunningHeartbeat) {
-              // Active device is reporting in live: refresh heartbeat
-              await env.DB.prepare(
-                "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
-              ).bind(now, currentUserId).run();
-            }
-          } else if (isRunningHeartbeat) {
+          if (targetEndTime !== null) {
+            remainingSeconds = Math.max(0, Math.ceil((targetEndTime - now) / 1000));
+          }
+          if (isRunningHeartbeat) {
             await env.DB.prepare(
               "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
             ).bind(now, currentUserId).run();
