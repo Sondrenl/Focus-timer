@@ -13,6 +13,7 @@ export interface RemoteTimerState {
 export interface RemoteTimerResult {
   timer: RemoteTimerState | null;
   coffeeCups?: CoffeeCup[];
+  deletedCoffeeCupIds?: string[];
   serverTime?: number;
 }
 
@@ -169,6 +170,18 @@ export class AuthService {
       localStorage.setItem(DELETED_COFFEE_CUPS_KEY, JSON.stringify(Array.from(set)));
     } catch (e) {
       console.warn('Error recording deleted coffee cup ID', e);
+    }
+  }
+
+  public removeDeletedCoffeeCupId(id: string): void {
+    try {
+      const set = this.getDeletedCoffeeCupIds();
+      if (set.has(id)) {
+        set.delete(id);
+        localStorage.setItem(DELETED_COFFEE_CUPS_KEY, JSON.stringify(Array.from(set)));
+      }
+    } catch (e) {
+      console.warn('Error removing deleted coffee cup ID', e);
     }
   }
 
@@ -346,6 +359,7 @@ export class AuthService {
       const data = (await res.json()) as {
         timer: RemoteTimerState | null;
         coffeeCups?: CoffeeCup[];
+        deletedCoffeeCupIds?: string[];
         serverTime?: number;
       };
       if (typeof data.serverTime === 'number') {

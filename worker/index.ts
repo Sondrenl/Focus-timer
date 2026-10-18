@@ -273,7 +273,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const isRunningHeartbeat = request.headers.get("X-Timer-Heartbeat") === "1";
       const now = Date.now();
 
-      const [timerRow, coffeeRows] = await Promise.all([
+      const [timerRow, coffeeRows, deletedCoffeeRows] = await Promise.all([
         env.DB.prepare(
           "SELECT * FROM active_timers WHERE user_id = ?"
         ).bind(currentUserId).first<{
@@ -296,6 +296,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           date: string;
           created_at: string;
         }>(),
+        env.DB.prepare(
+          "SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?"
+        ).bind(currentUserId).all<{ cup_id: string }>(),
       ]);
 
       let timer = null;
@@ -354,7 +357,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         createdAt: c.created_at,
       }));
 
-      return new Response(JSON.stringify({ timer, coffeeCups, serverTime: now }), { headers: corsHeaders });
+      const deletedCoffeeCupIds = (deletedCoffeeRows.results || []).map((r) => r.cup_id);
+      return new Response(JSON.stringify({ timer, coffeeCups, deletedCoffeeCupIds, serverTime: now }), { headers: corsHeaders });
     }
 
     // POST /api/timer — Update active timer state
@@ -429,19 +433,22 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       };
 
       if (body.action === 'ADD' && body.cup) {
-        await env.DB.prepare(
-          `INSERT INTO coffee_cups (id, user_id, tag_id, date, created_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             tag_id = excluded.tag_id,
-             date = excluded.date`
-        ).bind(
-          body.cup.id,
-          currentUserId,
-          body.cup.tagId ?? null,
-          body.cup.date,
-          body.cup.createdAt || new Date().toISOString()
-        ).run();
+        await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO coffee_cups (id, user_id, tag_id, date, created_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               tag_id = excluded.tag_id,
+               date = excluded.date`
+          ).bind(
+            body.cup.id,
+            currentUserId,
+            body.cup.tagId ?? null,
+            body.cup.date,
+            body.cup.createdAt || new Date().toISOString()
+          ),
+          env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ? AND cup_id = ?').bind(currentUserId, body.cup.id),
+        ]);
       } else if (body.action === 'REMOVE' && body.cupId) {
         await env.DB.batch([
           env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ? AND id = ?').bind(currentUserId, body.cupId),

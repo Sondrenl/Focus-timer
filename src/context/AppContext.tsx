@@ -64,7 +64,7 @@ interface AppContextValue {
   coffeeCups: CoffeeCup[];
   addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
   removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
-  syncRemoteCoffeeCups: (cups: CoffeeCup[]) => Promise<void>;
+  syncRemoteCoffeeCups: (cups: CoffeeCup[], deletedIds?: string[]) => Promise<void>;
 
   // View Navigation
   currentView: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile';
@@ -114,11 +114,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
 
   // Synchronize remote coffee cups received from real-time timer polling or background sync
-  const syncRemoteCoffeeCups = useCallback(async (remoteCups: CoffeeCup[]) => {
+  const syncRemoteCoffeeCups = useCallback(async (remoteCups: CoffeeCup[], remoteDeletedIds?: string[]) => {
     const deletedCupIds = authService.getDeletedCoffeeCupIds();
+    if (Array.isArray(remoteDeletedIds)) {
+      remoteDeletedIds.forEach((id) => {
+        deletedCupIds.add(id);
+        authService.addDeletedCoffeeCupId(id);
+      });
+    }
+
     const localCups = await coffeeRepository.getAll();
     const cupMap = new Map<string, CoffeeCup>();
 
+    // 1. Keep local cups that have NOT been deleted
     localCups.forEach((c) => {
       if (!deletedCupIds.has(c.id)) {
         cupMap.set(c.id, c);
@@ -126,6 +134,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     let hasChanges = false;
+
+    // 2. Add remote cups that have NOT been deleted
     remoteCups.forEach((c) => {
       if (!deletedCupIds.has(c.id) && !cupMap.has(c.id)) {
         cupMap.set(c.id, c);
@@ -133,11 +143,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    const remoteIdSet = new Set(remoteCups.map((c) => c.id));
+    // 3. Purge any cups from cupMap that were deleted
     for (const [id] of cupMap.entries()) {
-      if (!remoteIdSet.has(id)) {
-        deletedCupIds.add(id);
-        authService.addDeletedCoffeeCupId(id);
+      if (deletedCupIds.has(id)) {
         cupMap.delete(id);
         hasChanges = true;
       }
@@ -510,11 +518,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addCoffeeCup = async (tagId: string | null, dateStr?: string): Promise<CoffeeCup> => {
     const today = dateStr || new Date().toISOString().slice(0, 10);
     const created = await coffeeRepository.addCup(today, tagId);
+    authService.removeDeletedCoffeeCupId(created.id);
     const updated = await coffeeRepository.getAll();
     setCoffeeCups(updated);
     broadcastCoffeeCups(updated);
     if (auth.isAuthenticated) {
-      authService.addCoffeeCupRemote(created);
+      authService.addCoffeeCupRemote(created).then((remoteCups) => {
+        if (remoteCups) {
+          syncRemoteCoffeeCups(remoteCups);
+        }
+      });
     }
     return created;
   };
@@ -711,6 +724,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetAllData = async (scope: 'sessions-only' | 'factory-reset'): Promise<void> => {
     if (scope === 'sessions-only') {
       await clearSessions();
+      await coffeeRepository.clear();
+      setCoffeeCups([]);
+      if (auth.isAuthenticated) {
+        await authService.pushCloudData({
+          mode: 'replace',
+          profile,
+          settings,
+          tags,
+          sessions: [],
+          coffeeCups: [],
+        });
+      }
     } else {
       authService.clearDeletedTagIds();
       authService.clearDeletedCoffeeCupIds();

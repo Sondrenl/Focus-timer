@@ -904,7 +904,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         applyRemoteState(result.timer);
       }
       if (result.coffeeCups && syncRemoteCoffeeCups) {
-        syncRemoteCoffeeCups(result.coffeeCups);
+        syncRemoteCoffeeCups(result.coffeeCups, result.deletedCoffeeCupIds);
       }
     } catch (err) {
       console.warn('Error checking remote timer', err);
