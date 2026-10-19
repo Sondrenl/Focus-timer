@@ -4,6 +4,8 @@
  */
 export class SoundService {
   private audioCtx: AudioContext | null = null;
+  private keepAliveOsc: OscillatorNode | null = null;
+  private keepAliveGain: GainNode | null = null;
 
   /**
    * Initializes or resumes the AudioContext on user interaction
@@ -19,10 +21,66 @@ export class SoundService {
     }
 
     if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume();
+      this.audioCtx.resume().catch(() => {});
     }
 
     return this.audioCtx;
+  }
+
+  /**
+   * Starts an inaudible keep-alive audio node when the timer is started by a user gesture.
+   * This prevents mobile browsers (iOS Safari / Android Chrome) from suspending the background
+   * timer context when the user turns off their screen or switches to another app, and keeps
+   * the AudioContext warm so completion chimes can play reliably in the background.
+   */
+  startSilentKeepAlive(): void {
+    try {
+      const ctx = this.getAudioContext();
+      if (!ctx) return;
+
+      if (this.keepAliveOsc) {
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+        return;
+      }
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1, ctx.currentTime);
+      gain.gain.setValueAtTime(0.00001, ctx.currentTime);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+
+      this.keepAliveOsc = osc;
+      this.keepAliveGain = gain;
+    } catch {
+      // Ignore audio context restrictions if called without user gesture
+    }
+  }
+
+  /**
+   * Stops the silent background keep-alive audio node when the timer is paused, reset, or completed.
+   */
+  stopSilentKeepAlive(): void {
+    try {
+      if (this.keepAliveOsc) {
+        this.keepAliveOsc.stop();
+        this.keepAliveOsc.disconnect();
+        this.keepAliveOsc = null;
+      }
+      if (this.keepAliveGain) {
+        this.keepAliveGain.disconnect();
+        this.keepAliveGain = null;
+      }
+    } catch {
+      this.keepAliveOsc = null;
+      this.keepAliveGain = null;
+    }
   }
 
   /**

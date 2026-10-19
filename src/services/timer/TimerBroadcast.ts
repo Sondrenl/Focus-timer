@@ -4,25 +4,63 @@ import { Tag } from '../../types/tag';
 
 export interface TimerBroadcastEvent {
   senderId: string;
-  type?: 'TIMER' | 'COFFEE' | 'TAGS';
+  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'TAB_HELLO' | 'TAB_ACK' | 'TAB_GOODBYE';
   timer?: RemoteTimerState;
   coffeeCups?: CoffeeCup[];
   tags?: Tag[];
 }
 
 const CHANNEL_NAME = 'focus_timer_sync_v1';
-const TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID
+export const TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID
   ? crypto.randomUUID()
   : `tab-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+const activePeerTabs = new Set<string>();
 
 let channel: BroadcastChannel | null = null;
 try {
   if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
     channel = new BroadcastChannel(CHANNEL_NAME);
+    channel.addEventListener('message', (event: MessageEvent<TimerBroadcastEvent>) => {
+      const data = event.data;
+      if (!data || data.senderId === TAB_ID) return;
+
+      if (data.type === 'TAB_HELLO') {
+        activePeerTabs.add(data.senderId);
+        try {
+          channel?.postMessage({ senderId: TAB_ID, type: 'TAB_ACK' } as TimerBroadcastEvent);
+        } catch {
+          // Ignore broadcast error
+        }
+      } else if (data.type === 'TAB_ACK') {
+        activePeerTabs.add(data.senderId);
+      } else if (data.type === 'TAB_GOODBYE') {
+        activePeerTabs.delete(data.senderId);
+      } else {
+        activePeerTabs.add(data.senderId);
+      }
+    });
+
+    // Announce presence to any existing open tabs
+    channel.postMessage({ senderId: TAB_ID, type: 'TAB_HELLO' } as TimerBroadcastEvent);
+
+    const announceGoodbye = () => {
+      try {
+        channel?.postMessage({ senderId: TAB_ID, type: 'TAB_GOODBYE' } as TimerBroadcastEvent);
+      } catch {
+        // Ignore
+      }
+    };
+    window.addEventListener('pagehide', announceGoodbye);
+    window.addEventListener('beforeunload', announceGoodbye);
   }
 } catch {
   channel = null;
 }
+
+export const hasActivePeerTabs = (): boolean => {
+  return activePeerTabs.size > 0;
+};
 
 export const broadcastTimerState = (timer: RemoteTimerState): void => {
   try {

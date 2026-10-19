@@ -4,7 +4,7 @@ import { UserSettings } from '../types/settings';
 import { useApp } from './AppContext';
 import { triggerCompletionConfetti } from '../utils/confetti';
 import { AuthService, RemoteTimerState } from '../services/auth/AuthService';
-import { broadcastTimerState, subscribeTimerState } from '../services/timer/TimerBroadcast';
+import { broadcastTimerState, subscribeTimerState, hasActivePeerTabs, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
 
 const WORKER_SCRIPT = `
@@ -26,6 +26,26 @@ const WORKER_SCRIPT = `
 `;
 
 const TIMER_STORAGE_KEY = 'timer_state_v1';
+const DEVICE_ID_KEY = 'focus_timer_device_id_v1';
+const SESSION_ALIVE_KEY = 'focus_timer_session_alive_v1';
+
+const getOrCreateDeviceId = (): string => {
+  if (typeof window === 'undefined') return 'server';
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `dev-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return 'default-device';
+  }
+};
+
+const DEVICE_ID = getOrCreateDeviceId();
 
 interface SavedTimerState {
   sessionType: SessionType;
@@ -37,6 +57,10 @@ interface SavedTimerState {
   timerRunId?: string | null;
   updatedAtMs?: number;
   activeTagId?: string | null;
+  deviceId?: string;
+  tabId?: string;
+  lastActiveAtMs?: number;
+  wasHidden?: boolean;
 }
 
 export interface TimerContextValue {
@@ -75,14 +99,68 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes]
   );
 
-  // Restore saved state from localStorage if available
+  // Restore saved state from localStorage if available, detecting if the app/browser was killed while running
   const initialSaved = useRef<SavedTimerState | null>(null);
+  const killedTimerToPushRef = useRef<RemoteTimerState | null>(null);
+
   if (initialSaved.current === null && typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem(TIMER_STORAGE_KEY);
       if (raw) {
-        initialSaved.current = JSON.parse(raw);
+        const parsed: SavedTimerState = JSON.parse(raw);
+
+        if (parsed.status === 'RUNNING' && parsed.targetEndTime) {
+          const isOwnedByThisDevice = !parsed.deviceId || parsed.deviceId === DEVICE_ID;
+          const hasSessionAlive = sessionStorage.getItem(SESSION_ALIVE_KEY) === '1';
+          const navEntries =
+            typeof performance !== 'undefined' && performance.getEntriesByType
+              ? (performance.getEntriesByType('navigation') as PerformanceNavigationTiming[])
+              : [];
+          const isReloadNav = navEntries.length > 0 && navEntries[0].type === 'reload';
+          const timeSinceLastActive = Date.now() - (parsed.lastActiveAtMs || 0);
+
+          // A quick visible reload (e.g. pressing Cmd+R / F5 while viewing the app) keeps the timer running.
+          // Another open tab actively ticking (< 1.5s ago) also keeps it running.
+          // Otherwise, if this device owned the running timer and is now cold-starting (because the user
+          // swiped up and killed the browser / installed webapp, or closed the tab), stop the timer.
+          const isQuickVisibleReload =
+            hasSessionAlive && isReloadNav && !parsed.wasHidden && timeSinceLastActive < 4000;
+          const isAnotherLocalTabTicking =
+            Boolean(parsed.tabId && parsed.tabId !== TAB_ID && timeSinceLastActive < 1500);
+
+          if (isOwnedByThisDevice && !isQuickVisibleReload && !isAnotherLocalTabTicking) {
+            const nowServer = authService.getServerNow();
+            const stoppedRemaining =
+              parsed.remainingSeconds > 0
+                ? parsed.remainingSeconds
+                : Math.max(1, getDurationForType(parsed.sessionType));
+
+            parsed.status = 'PAUSED';
+            parsed.remainingSeconds = stoppedRemaining;
+            parsed.targetEndTime = null;
+            parsed.updatedAtMs = nowServer;
+            parsed.wasHidden = false;
+            parsed.lastActiveAtMs = Date.now();
+
+            localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(parsed));
+
+            killedTimerToPushRef.current = {
+              sessionType: parsed.sessionType,
+              status: 'PAUSED',
+              remainingSeconds: stoppedRemaining,
+              totalSeconds: parsed.totalSeconds || getDurationForType(parsed.sessionType),
+              targetEndTime: null,
+              currentCycle: parsed.currentCycle || 1,
+              activeTagId: parsed.activeTagId ?? null,
+              timerRunId: parsed.timerRunId ?? null,
+              updatedAtMs: nowServer,
+            };
+          }
+        }
+
+        initialSaved.current = parsed;
       }
+      sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
     } catch {
       initialSaved.current = null;
     }
@@ -147,7 +225,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Initialize with saved timestamp or 0 (NOT Date.now()) so any fresh remote timer/tag state is accepted on mount
   const localUpdatedAtRef = useRef<number>(initialSaved.current?.updatedAtMs ?? 0);
   const lastCompletedAtRef = useRef<number>(0);
-  const lastLocalActionWallMsRef = useRef<number>(0);
+  const lastLocalActionWallMsRef = useRef<number>(killedTimerToPushRef.current ? Date.now() : 0);
   const pendingPushCountRef = useRef<number>(0);
   const isApplyingRemoteRef = useRef<boolean>(false);
   const isCompletingRef = useRef<boolean>(false);
@@ -180,14 +258,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isAuthenticatedRef = useRef<boolean>(auth.isAuthenticated);
   isAuthenticatedRef.current = auth.isAuthenticated;
 
-  // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      isInitialMountDoneRef.current = true;
-    }, 600);
-    return () => clearTimeout(timer);
-  }, []);
-
   // Helper to broadcast and push local timer state changes safely without race conditions
   const publishLocalTimerState = useCallback(
     (payload: RemoteTimerState) => {
@@ -206,26 +276,35 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [authService]
   );
 
-  // Automatically keep screen awake whenever a timer is running (mobile & desktop)
+  // If cold boot detected that the app was killed while a timer was running, push the stopped state to the cloud immediately
+  useEffect(() => {
+    if (killedTimerToPushRef.current) {
+      const payload = killedTimerToPushRef.current;
+      killedTimerToPushRef.current = null;
+      publishLocalTimerState(payload);
+    }
+  }, [publishLocalTimerState]);
+
+  // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      isInitialMountDoneRef.current = true;
+    }, 600);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Automatically keep screen awake and maintain background audio keep-alive whenever a timer is running
   useEffect(() => {
     if (status === 'RUNNING') {
       wakeLockService.acquire();
     } else {
       wakeLockService.release();
+      sound.stopSilentKeepAlive();
     }
     return () => {
       wakeLockService.release();
     };
-  }, [status]);
-
-  // Release wake lock immediately if page is hidden / navigated away
-  useEffect(() => {
-    const handlePageHide = () => {
-      wakeLockService.release();
-    };
-    window.addEventListener('pagehide', handlePageHide);
-    return () => window.removeEventListener('pagehide', handlePageHide);
-  }, []);
+  }, [status, sound]);
 
   // Persist state to localStorage on updates
   useEffect(() => {
@@ -239,13 +318,105 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       timerRunId: timerRunIdRef.current,
       updatedAtMs: localUpdatedAtRef.current,
       activeTagId,
+      deviceId: DEVICE_ID,
+      tabId: TAB_ID,
+      lastActiveAtMs: Date.now(),
+      wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
     };
     try {
       localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
+      sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
     } catch {
       // Storage errors ignored
     }
   }, [sessionType, status, currentCycle, remainingSeconds, totalSeconds, targetEndTime, activeTagId]);
+
+  // Stop timer immediately when the browser or installed webapp is killed / closed (pagehide while hidden or tab closed with no peer tabs)
+  useEffect(() => {
+    const handlePageHide = (e: PageTransitionEvent) => {
+      wakeLockService.release();
+
+      // If entering bfcache, do not stop
+      if (e.persisted) return;
+
+      // If another tab of the app is still open in the same browser, let that tab continue running the timer
+      if (hasActivePeerTabs()) return;
+
+      if (statusRef.current === 'RUNNING') {
+        const isHiddenKill = document.visibilityState === 'hidden';
+        const now = authService.getServerNow();
+        const exactRemaining =
+          targetEndTimeRef.current !== null
+            ? Math.max(1, Math.ceil((targetEndTimeRef.current - now) / 1000))
+            : Math.max(1, remainingSecondsRef.current);
+
+        if (isHiddenKill) {
+          // App was in the background / OS App Switcher and is now being terminated
+          sound.stopSilentKeepAlive();
+          const stoppedState: SavedTimerState = {
+            sessionType: sessionTypeRef.current,
+            status: 'PAUSED',
+            currentCycle: currentCycleRef.current,
+            remainingSeconds: exactRemaining,
+            totalSeconds: totalSecondsRef.current,
+            targetEndTime: null,
+            timerRunId: timerRunIdRef.current,
+            updatedAtMs: now,
+            activeTagId: activeTagIdRef.current,
+            deviceId: DEVICE_ID,
+            tabId: TAB_ID,
+            lastActiveAtMs: Date.now(),
+            wasHidden: false,
+          };
+          try {
+            localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stoppedState));
+          } catch {
+            // Ignore
+          }
+
+          if (isAuthenticatedRef.current) {
+            authService.pushRemoteTimer({
+              sessionType: sessionTypeRef.current,
+              status: 'PAUSED',
+              remainingSeconds: exactRemaining,
+              totalSeconds: totalSecondsRef.current,
+              targetEndTime: null,
+              currentCycle: currentCycleRef.current,
+              activeTagId: activeTagIdRef.current,
+              timerRunId: timerRunIdRef.current,
+              updatedAtMs: now,
+            });
+          }
+        } else {
+          // Visible unload: could be either a page refresh (Cmd+R) or closing the tab (Cmd+W).
+          // Save the exact remaining snapshot so if it was a tab close, the next cold boot stops at this exact second.
+          const snapshotState: SavedTimerState = {
+            sessionType: sessionTypeRef.current,
+            status: 'RUNNING',
+            currentCycle: currentCycleRef.current,
+            remainingSeconds: exactRemaining,
+            totalSeconds: totalSecondsRef.current,
+            targetEndTime: targetEndTimeRef.current,
+            timerRunId: timerRunIdRef.current,
+            updatedAtMs: localUpdatedAtRef.current,
+            activeTagId: activeTagIdRef.current,
+            deviceId: DEVICE_ID,
+            tabId: TAB_ID,
+            lastActiveAtMs: Date.now(),
+            wasHidden: false,
+          };
+          try {
+            localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(snapshotState));
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    };
+
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, [authService, sound]);
 
   // Handle duration settings changes when timer is IDLE
   useEffect(() => {
@@ -299,6 +470,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const target = now + secToRun * 1000;
       const runId = timerRunIdRef.current || `tr-${now}-${Math.random().toString(36).substring(2, 6)}`;
 
+      // Start silent Web Audio keep-alive so mobile OS does not suspend the timer when screen is turned off or app is backgrounded
+      sound.startSilentKeepAlive();
+
       timerRunIdRef.current = runId;
       targetEndTimeRef.current = target;
       statusRef.current = 'RUNNING';
@@ -323,7 +497,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       publishLocalTimerState(payload);
     },
-    [authService, publishLocalTimerState]
+    [authService, publishLocalTimerState, sound]
   );
 
   // Pause timer helper
@@ -331,6 +505,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
+    sound.stopSilentKeepAlive();
+
     const now = authService.getServerNow();
     const exactRemaining = targetEndTimeRef.current !== null
       ? Math.max(0, Math.ceil((targetEndTimeRef.current - now) / 1000))
@@ -356,13 +532,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     publishLocalTimerState(payload);
-  }, [authService, publishLocalTimerState]);
+  }, [authService, publishLocalTimerState, sound]);
 
   // Reset timer helper
   const resetTimer = useCallback(() => {
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
+    sound.stopSilentKeepAlive();
+
     const now = authService.getServerNow();
     targetEndTimeRef.current = null;
     statusRef.current = 'IDLE';
@@ -389,7 +567,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     publishLocalTimerState(payload);
-  }, [getDurationForType, authService, publishLocalTimerState]);
+  }, [getDurationForType, authService, publishLocalTimerState, sound]);
 
   // Handle completion
   const handleComplete = useCallback(() => {
@@ -402,6 +580,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
+    sound.stopSilentKeepAlive();
     targetEndTimeRef.current = null;
     setTargetEndTime(null);
 
@@ -633,6 +812,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (workerRef.current) {
           workerRef.current.postMessage('STOP');
         }
+        sound.stopSilentKeepAlive();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
         setRemainingSeconds(remote.remainingSeconds);
@@ -657,6 +837,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (workerRef.current) {
           workerRef.current.postMessage('STOP');
         }
+        sound.stopSilentKeepAlive();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
         setRemainingSeconds(remote.remainingSeconds);
@@ -667,7 +848,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isApplyingRemoteRef.current = false;
       }, 150);
     },
-    [authService, setActiveTagId]
+    [authService, setActiveTagId, sound]
   );
 
   // Background Web Worker initialization (created once on mount, never torn down on state updates)
@@ -723,9 +904,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [status]);
 
-  // Visibility and focus sync listeners for instant tick accuracy when switching tabs/windows
+  // Visibility, pageshow, and focus sync listeners:
+  // Keeps the timer running seamlessly when switching apps, turning off the phone screen, or switching tabs,
+  // while recording the visibility snapshot in localStorage so an OS App-Switcher kill can be detected on next cold boot.
   useEffect(() => {
     const syncRemainingTime = () => {
+      const isHidden = document.visibilityState === 'hidden';
+
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
         const now = authService.getServerNow();
         const diffMs = targetEndTimeRef.current - now;
@@ -736,15 +921,40 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
 
+        remainingSecondsRef.current = diffSec;
         setRemainingSeconds(diffSec);
+
+        // Persist visibility and latest remaining time snapshot
+        const stateToSave: SavedTimerState = {
+          sessionType: sessionTypeRef.current,
+          status: 'RUNNING',
+          currentCycle: currentCycleRef.current,
+          remainingSeconds: diffSec,
+          totalSeconds: totalSecondsRef.current,
+          targetEndTime: targetEndTimeRef.current,
+          timerRunId: timerRunIdRef.current,
+          updatedAtMs: localUpdatedAtRef.current,
+          activeTagId: activeTagIdRef.current,
+          deviceId: DEVICE_ID,
+          tabId: TAB_ID,
+          lastActiveAtMs: Date.now(),
+          wasHidden: isHidden,
+        };
+        try {
+          localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
+        } catch {
+          // Ignore storage error
+        }
       }
     };
 
     document.addEventListener('visibilitychange', syncRemainingTime);
     window.addEventListener('focus', syncRemainingTime);
+    window.addEventListener('pageshow', syncRemainingTime);
     return () => {
       document.removeEventListener('visibilitychange', syncRemainingTime);
       window.removeEventListener('focus', syncRemainingTime);
+      window.removeEventListener('pageshow', syncRemainingTime);
     };
   }, [authService]);
 
@@ -759,6 +969,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (diffSec <= 0) {
           handleCompleteRef.current();
         } else {
+          remainingSecondsRef.current = diffSec;
           setRemainingSeconds(diffSec);
         }
       }
@@ -782,6 +993,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
+    sound.stopSilentKeepAlive();
+
     const now = authService.getServerNow();
     targetEndTimeRef.current = null;
     statusRef.current = 'IDLE';
@@ -837,7 +1050,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     publishLocalTimerState(payload);
-  }, [authService, publishLocalTimerState]);
+  }, [authService, publishLocalTimerState, sound]);
 
   // Set session type manually helper
   const setSessionTypeManually = useCallback(
@@ -845,6 +1058,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (workerRef.current) {
         workerRef.current.postMessage('STOP');
       }
+      sound.stopSilentKeepAlive();
+
       const now = authService.getServerNow();
       targetEndTimeRef.current = null;
       statusRef.current = 'IDLE';
@@ -874,7 +1089,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       publishLocalTimerState(payload);
     },
-    [getDurationForType, authService, publishLocalTimerState]
+    [getDurationForType, authService, publishLocalTimerState, sound]
   );
 
   const toggleStartPause = () => {

@@ -405,6 +405,7 @@ export class AuthService {
       const t0 = Date.now();
       const res = await fetch("/api/timer", {
         method: "POST",
+        keepalive: true,
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
