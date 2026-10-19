@@ -6,11 +6,39 @@ import { Button } from '../ui/Button';
 import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 
+/**
+ * Sanitizes a decimal string input to allow digits and at most one decimal point
+ * with up to 2 decimal places (normalizing ',' to '.').
+ */
+function sanitizeDecimalInput(raw: string): string {
+  const normalized = raw.replace(/,/g, '.');
+  let result = '';
+  let hasDot = false;
+  let decimalsCount = 0;
+
+  for (const ch of normalized) {
+    if (ch >= '0' && ch <= '9') {
+      if (hasDot) {
+        if (decimalsCount < 2) {
+          result += ch;
+          decimalsCount += 1;
+        }
+      } else {
+        result += ch;
+      }
+    } else if (ch === '.' && !hasDot) {
+      hasDot = true;
+      result += '.';
+    }
+  }
+  return result;
+}
+
 export const SettingsView: React.FC = () => {
   const { settings, updateSettings, profile, updateProfile, sound, notifications } = useApp();
   const [savedToast, setSavedToast] = useState(false);
 
-  // Local string draft states so the user can freely clear and type new numbers without snapping back mid-edit
+  // Local string draft states so the user can freely clear and type new numbers (including decimals) without snapping back mid-edit
   const [workInput, setWorkInput] = useState(() => String(settings.workDurationMinutes));
   const [shortBreakInput, setShortBreakInput] = useState(() => String(settings.shortBreakDurationMinutes));
   const [longBreakInput, setLongBreakInput] = useState(() => String(settings.longBreakDurationMinutes));
@@ -18,23 +46,54 @@ export const SettingsView: React.FC = () => {
   const [dailyGoalInput, setDailyGoalInput] = useState(() => String(profile.dailyGoalMinutes || 120));
 
   useEffect(() => {
-    setWorkInput(String(settings.workDurationMinutes));
+    setWorkInput((prev) => {
+      const parsedPrev = parseFloat(prev);
+      if (!Number.isNaN(parsedPrev) && Math.abs(parsedPrev - settings.workDurationMinutes) < 1e-6) {
+        return prev;
+      }
+      return String(settings.workDurationMinutes);
+    });
   }, [settings.workDurationMinutes]);
 
   useEffect(() => {
-    setShortBreakInput(String(settings.shortBreakDurationMinutes));
+    setShortBreakInput((prev) => {
+      const parsedPrev = parseFloat(prev);
+      if (!Number.isNaN(parsedPrev) && Math.abs(parsedPrev - settings.shortBreakDurationMinutes) < 1e-6) {
+        return prev;
+      }
+      return String(settings.shortBreakDurationMinutes);
+    });
   }, [settings.shortBreakDurationMinutes]);
 
   useEffect(() => {
-    setLongBreakInput(String(settings.longBreakDurationMinutes));
+    setLongBreakInput((prev) => {
+      const parsedPrev = parseFloat(prev);
+      if (!Number.isNaN(parsedPrev) && Math.abs(parsedPrev - settings.longBreakDurationMinutes) < 1e-6) {
+        return prev;
+      }
+      return String(settings.longBreakDurationMinutes);
+    });
   }, [settings.longBreakDurationMinutes]);
 
   useEffect(() => {
-    setIntervalInput(String(settings.longBreakInterval));
+    setIntervalInput((prev) => {
+      const parsedPrev = parseInt(prev, 10);
+      if (!Number.isNaN(parsedPrev) && parsedPrev === settings.longBreakInterval) {
+        return prev;
+      }
+      return String(settings.longBreakInterval);
+    });
   }, [settings.longBreakInterval]);
 
   useEffect(() => {
-    setDailyGoalInput(String(profile.dailyGoalMinutes || 120));
+    const goal = profile.dailyGoalMinutes || 120;
+    setDailyGoalInput((prev) => {
+      const parsedPrev = parseInt(prev, 10);
+      if (!Number.isNaN(parsedPrev) && parsedPrev === goal) {
+        return prev;
+      }
+      return String(goal);
+    });
   }, [profile.dailyGoalMinutes]);
 
   const showSaved = () => {
@@ -42,37 +101,64 @@ export const SettingsView: React.FC = () => {
     setTimeout(() => setSavedToast(false), 2000);
   };
 
-  const handleDurationInputChange = (
-    key: 'workDurationMinutes' | 'shortBreakDurationMinutes' | 'longBreakDurationMinutes' | 'longBreakInterval',
+  const handleDecimalDurationChange = (
+    key: 'workDurationMinutes' | 'shortBreakDurationMinutes' | 'longBreakDurationMinutes',
     raw: string,
     setter: React.Dispatch<React.SetStateAction<string>>,
     maxVal: number
   ) => {
-    const cleaned = raw.replace(/[^0-9]/g, '');
+    const cleaned = sanitizeDecimalInput(raw);
     setter(cleaned);
 
-    if (cleaned === '') return;
+    if (cleaned === '' || cleaned === '.' || cleaned.endsWith('.')) return;
 
-    const parsed = parseInt(cleaned, 10);
-    if (!Number.isNaN(parsed) && parsed >= 1) {
-      const clamped = Math.min(maxVal, parsed);
+    const parsed = parseFloat(cleaned);
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      const clamped = Math.round(Math.min(maxVal, Math.max(0.01, parsed)) * 100) / 100;
       updateSettings({ [key]: clamped });
       showSaved();
     }
   };
 
-  const handleDurationInputBlur = (
-    key: 'workDurationMinutes' | 'shortBreakDurationMinutes' | 'longBreakDurationMinutes' | 'longBreakInterval',
+  const handleDecimalDurationBlur = (
+    key: 'workDurationMinutes' | 'shortBreakDurationMinutes' | 'longBreakDurationMinutes',
     currentRaw: string,
     setter: React.Dispatch<React.SetStateAction<string>>,
     maxVal: number,
     fallbackVal: number
   ) => {
-    const parsed = parseInt(currentRaw, 10);
-    const validNum = Number.isNaN(parsed) || parsed < 1 ? fallbackVal : Math.min(maxVal, parsed);
+    const parsed = parseFloat(currentRaw);
+    const validNum =
+      Number.isNaN(parsed) || parsed <= 0
+        ? fallbackVal
+        : Math.round(Math.min(maxVal, Math.max(0.01, parsed)) * 100) / 100;
     setter(String(validNum));
     if (settings[key] !== validNum) {
       updateSettings({ [key]: validNum });
+      showSaved();
+    }
+  };
+
+  const handleIntervalInputChange = (raw: string) => {
+    const cleaned = raw.replace(/[^0-9]/g, '');
+    setIntervalInput(cleaned);
+
+    if (cleaned === '') return;
+
+    const parsed = parseInt(cleaned, 10);
+    if (!Number.isNaN(parsed) && parsed >= 1) {
+      const clamped = Math.min(12, parsed);
+      updateSettings({ longBreakInterval: clamped });
+      showSaved();
+    }
+  };
+
+  const handleIntervalInputBlur = () => {
+    const parsed = parseInt(intervalInput, 10);
+    const validNum = Number.isNaN(parsed) || parsed < 1 ? settings.longBreakInterval || 4 : Math.min(12, parsed);
+    setIntervalInput(String(validNum));
+    if (settings.longBreakInterval !== validNum) {
+      updateSettings({ longBreakInterval: validNum });
       showSaved();
     }
   };
@@ -120,6 +206,11 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleResetDefaults = () => {
+    setWorkInput(String(DEFAULT_SETTINGS.workDurationMinutes));
+    setShortBreakInput(String(DEFAULT_SETTINGS.shortBreakDurationMinutes));
+    setLongBreakInput(String(DEFAULT_SETTINGS.longBreakDurationMinutes));
+    setIntervalInput(String(DEFAULT_SETTINGS.longBreakInterval));
+    setDailyGoalInput('120');
     updateSettings(DEFAULT_SETTINGS);
     updateProfile({ dailyGoalMinutes: 120 });
     showSaved();
@@ -173,11 +264,10 @@ export const SettingsView: React.FC = () => {
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
+                inputMode="decimal"
                 value={workInput}
-                onChange={(e) => handleDurationInputChange('workDurationMinutes', e.target.value, setWorkInput, 120)}
-                onBlur={() => handleDurationInputBlur('workDurationMinutes', workInput, setWorkInput, 120, settings.workDurationMinutes || 25)}
+                onChange={(e) => handleDecimalDurationChange('workDurationMinutes', e.target.value, setWorkInput, 120)}
+                onBlur={() => handleDecimalDurationBlur('workDurationMinutes', workInput, setWorkInput, 120, DEFAULT_SETTINGS.workDurationMinutes)}
                 className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
               <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
@@ -192,11 +282,10 @@ export const SettingsView: React.FC = () => {
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
+                inputMode="decimal"
                 value={shortBreakInput}
-                onChange={(e) => handleDurationInputChange('shortBreakDurationMinutes', e.target.value, setShortBreakInput, 60)}
-                onBlur={() => handleDurationInputBlur('shortBreakDurationMinutes', shortBreakInput, setShortBreakInput, 60, settings.shortBreakDurationMinutes || 5)}
+                onChange={(e) => handleDecimalDurationChange('shortBreakDurationMinutes', e.target.value, setShortBreakInput, 60)}
+                onBlur={() => handleDecimalDurationBlur('shortBreakDurationMinutes', shortBreakInput, setShortBreakInput, 60, DEFAULT_SETTINGS.shortBreakDurationMinutes)}
                 className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
               <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
@@ -211,11 +300,10 @@ export const SettingsView: React.FC = () => {
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
+                inputMode="decimal"
                 value={longBreakInput}
-                onChange={(e) => handleDurationInputChange('longBreakDurationMinutes', e.target.value, setLongBreakInput, 60)}
-                onBlur={() => handleDurationInputBlur('longBreakDurationMinutes', longBreakInput, setLongBreakInput, 60, settings.longBreakDurationMinutes || 25)}
+                onChange={(e) => handleDecimalDurationChange('longBreakDurationMinutes', e.target.value, setLongBreakInput, 60)}
+                onBlur={() => handleDecimalDurationBlur('longBreakDurationMinutes', longBreakInput, setLongBreakInput, 60, DEFAULT_SETTINGS.longBreakDurationMinutes)}
                 className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
               <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
@@ -232,8 +320,8 @@ export const SettingsView: React.FC = () => {
               inputMode="numeric"
               pattern="[0-9]*"
               value={intervalInput}
-              onChange={(e) => handleDurationInputChange('longBreakInterval', e.target.value, setIntervalInput, 12)}
-              onBlur={() => handleDurationInputBlur('longBreakInterval', intervalInput, setIntervalInput, 12, settings.longBreakInterval || 4)}
+              onChange={(e) => handleIntervalInputChange(e.target.value)}
+              onBlur={handleIntervalInputBlur}
               className="w-16 px-2.5 py-1.5 text-base md:text-sm bg-md-surface-container rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
             />
             <span className="text-xs text-md-on-surface-variant">cycles</span>

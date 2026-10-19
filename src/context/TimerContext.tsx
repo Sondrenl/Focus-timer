@@ -89,11 +89,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (type: SessionType): number => {
       switch (type) {
         case 'WORK':
-          return settings.workDurationMinutes * 60;
+          return Math.max(1, Math.round(settings.workDurationMinutes * 60));
         case 'SHORT_BREAK':
-          return settings.shortBreakDurationMinutes * 60;
+          return Math.max(1, Math.round(settings.shortBreakDurationMinutes * 60));
         case 'LONG_BREAK':
-          return settings.longBreakDurationMinutes * 60;
+          return Math.max(1, Math.round(settings.longBreakDurationMinutes * 60));
       }
     },
     [settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes]
@@ -668,8 +668,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const isLongBreak = cycle >= currentSettings.longBreakInterval;
       const nextType: SessionType = isLongBreak ? 'LONG_BREAK' : 'SHORT_BREAK';
       const dur = isLongBreak
-        ? currentSettings.longBreakDurationMinutes * 60
-        : currentSettings.shortBreakDurationMinutes * 60;
+        ? Math.max(1, Math.round(currentSettings.longBreakDurationMinutes * 60))
+        : Math.max(1, Math.round(currentSettings.shortBreakDurationMinutes * 60));
 
       sessionTypeRef.current = nextType;
       totalSecondsRef.current = dur;
@@ -704,7 +704,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else {
         notifications.cancelScheduledNotification();
       }
-      const dur = currentSettings.workDurationMinutes * 60;
+      const dur = Math.max(1, Math.round(currentSettings.workDurationMinutes * 60));
       const nextCycle = currentType === 'SHORT_BREAK' ? cycle + 1 : 1;
 
       sessionTypeRef.current = 'WORK';
@@ -1065,23 +1065,23 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     let nextType: SessionType = 'WORK';
     let nextCycle = curCycle;
-    let nextDur = curSettings.workDurationMinutes * 60;
+    let nextDur = Math.max(1, Math.round(curSettings.workDurationMinutes * 60));
 
     if (curType === 'WORK') {
       if (curCycle >= curSettings.longBreakInterval) {
         nextType = 'LONG_BREAK';
-        nextDur = curSettings.longBreakDurationMinutes * 60;
+        nextDur = Math.max(1, Math.round(curSettings.longBreakDurationMinutes * 60));
       } else {
         nextType = 'SHORT_BREAK';
-        nextDur = curSettings.shortBreakDurationMinutes * 60;
+        nextDur = Math.max(1, Math.round(curSettings.shortBreakDurationMinutes * 60));
       }
     } else if (curType === 'SHORT_BREAK') {
       nextType = 'WORK';
-      nextDur = curSettings.workDurationMinutes * 60;
+      nextDur = Math.max(1, Math.round(curSettings.workDurationMinutes * 60));
       nextCycle = curCycle + 1;
     } else {
       nextType = 'WORK';
-      nextDur = curSettings.workDurationMinutes * 60;
+      nextDur = Math.max(1, Math.round(curSettings.workDurationMinutes * 60));
       nextCycle = 1;
     }
 
