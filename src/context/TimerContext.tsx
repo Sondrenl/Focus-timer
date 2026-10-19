@@ -119,7 +119,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const isReloadNav = navEntries.length > 0 && navEntries[0].type === 'reload';
           const timeSinceLastActive = Date.now() - (parsed.lastActiveAtMs || 0);
 
-          // A quick visible reload (e.g. pressing Cmd+R / F5 while viewing the app) keeps the timer running.
+          // A quick visible reload (e.g. pressing Cmd+R / F5 or mobile pull-to-refresh) keeps the timer running.
           // Another open tab actively ticking (< 1.5s ago) also keeps it running.
           // Otherwise, if this device owned the running timer and is now cold-starting (because the user
           // swiped up and killed the browser / installed webapp, or closed the tab), stop the timer.
@@ -281,9 +281,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (killedTimerToPushRef.current) {
       const payload = killedTimerToPushRef.current;
       killedTimerToPushRef.current = null;
+      notifications.cancelScheduledNotification();
       publishLocalTimerState(payload);
     }
-  }, [publishLocalTimerState]);
+  }, [publishLocalTimerState, notifications]);
 
   // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
   useEffect(() => {
@@ -299,7 +300,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       wakeLockService.acquire();
     } else {
       wakeLockService.release();
-      sound.stopSilentKeepAlive();
+      sound.stopSilentKeepAlive(false);
     }
     return () => {
       wakeLockService.release();
@@ -352,7 +353,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         if (isHiddenKill) {
           // App was in the background / OS App Switcher and is now being terminated
-          sound.stopSilentKeepAlive();
+          sound.stopSilentKeepAlive(true);
+          notifications.cancelScheduledNotification();
+
           const stoppedState: SavedTimerState = {
             sessionType: sessionTypeRef.current,
             status: 'PAUSED',
@@ -416,7 +419,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     window.addEventListener('pagehide', handlePageHide);
     return () => window.removeEventListener('pagehide', handlePageHide);
-  }, [authService, sound]);
+  }, [authService, sound, notifications]);
 
   // Handle duration settings changes when timer is IDLE
   useEffect(() => {
@@ -468,10 +471,25 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const secToRun = overrideSec !== undefined ? overrideSec : remainingSecondsRef.current;
       const now = authService.getServerNow();
       const target = now + secToRun * 1000;
+      const targetWallClockMs = Date.now() + secToRun * 1000;
       const runId = timerRunIdRef.current || `tr-${now}-${Math.random().toString(36).substring(2, 6)}`;
 
-      // Start silent Web Audio keep-alive so mobile OS does not suspend the timer when screen is turned off or app is backgrounded
+      // Start silent HTML5 <audio> & Web Audio keep-alive so mobile OS does not suspend the timer
+      // when the screen is turned off or the user switches apps, and so the chime can play while locked.
       sound.startSilentKeepAlive();
+
+      // Schedule backup lock-screen notification via Service Worker if notifications are enabled
+      if (settingsRef.current.notificationsEnabled) {
+        if (notifications.hasPermission()) {
+          notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true);
+        } else {
+          notifications.requestPermission().then((granted) => {
+            if (granted && statusRef.current === 'RUNNING') {
+              notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true);
+            }
+          });
+        }
+      }
 
       timerRunIdRef.current = runId;
       targetEndTimeRef.current = target;
@@ -497,7 +515,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       publishLocalTimerState(payload);
     },
-    [authService, publishLocalTimerState, sound]
+    [authService, publishLocalTimerState, sound, notifications]
   );
 
   // Pause timer helper
@@ -505,7 +523,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
-    sound.stopSilentKeepAlive();
+    sound.stopSilentKeepAlive(true);
+    notifications.cancelScheduledNotification();
 
     const now = authService.getServerNow();
     const exactRemaining = targetEndTimeRef.current !== null
@@ -532,14 +551,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     publishLocalTimerState(payload);
-  }, [authService, publishLocalTimerState, sound]);
+  }, [authService, publishLocalTimerState, sound, notifications]);
 
   // Reset timer helper
   const resetTimer = useCallback(() => {
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
-    sound.stopSilentKeepAlive();
+    sound.stopSilentKeepAlive(true);
+    notifications.cancelScheduledNotification();
 
     const now = authService.getServerNow();
     targetEndTimeRef.current = null;
@@ -567,7 +587,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     publishLocalTimerState(payload);
-  }, [getDurationForType, authService, publishLocalTimerState, sound]);
+  }, [getDurationForType, authService, publishLocalTimerState, sound, notifications]);
 
   // Handle completion
   const handleComplete = useCallback(() => {
@@ -580,7 +600,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
-    sound.stopSilentKeepAlive();
     targetEndTimeRef.current = null;
     setTargetEndTime(null);
 
@@ -595,6 +614,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const currentTag = activeTagIdRef.current;
     const currentTotalSec = totalSecondsRef.current;
 
+    // Play chime BEFORE stopping keep-alive so the active mobile background audio session
+    // seamlessly transitions from the silent loop into the audible completion chime.
     if (currentSettings.soundEnabled) {
       if (currentType === 'WORK') {
         sound.playChime(currentSettings.soundVolume);
@@ -604,7 +625,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (currentType === 'WORK') {
-      notifications.notify('Session Complete!', 'Great focus! Time to take a well-deserved break.');
+      if (currentSettings.notificationsEnabled) {
+        notifications.notify('Session Complete!', 'Great focus! Time to take a well-deserved break.');
+      } else {
+        notifications.cancelScheduledNotification();
+      }
       triggerCompletionConfetti();
 
       const runId = timerRunIdRef.current;
@@ -638,6 +663,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (currentSettings.autoStartBreaks) {
         startTimer(dur);
       } else {
+        sound.stopSilentKeepAlive(false);
         statusRef.current = 'IDLE';
         setStatus('IDLE');
         const payload: RemoteTimerState = {
@@ -655,7 +681,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     } else {
       // Break session finished -> Advance to WORK session!
-      notifications.notify('Break Finished', 'Ready to dive back into deep work?');
+      if (currentSettings.notificationsEnabled) {
+        notifications.notify('Break Finished', 'Ready to dive back into deep work?');
+      } else {
+        notifications.cancelScheduledNotification();
+      }
       const dur = currentSettings.workDurationMinutes * 60;
       const nextCycle = currentType === 'SHORT_BREAK' ? cycle + 1 : 1;
 
@@ -672,6 +702,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (currentSettings.autoStartPomodoros) {
         startTimer(dur);
       } else {
+        sound.stopSilentKeepAlive(false);
         statusRef.current = 'IDLE';
         setStatus('IDLE');
         const payload: RemoteTimerState = {
@@ -790,6 +821,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (workerRef.current) {
             workerRef.current.postMessage('START');
           }
+          notifications.scheduleTimerNotification(
+            Date.now() + diffSec * 1000,
+            remote.sessionType,
+            settingsRef.current.notificationsEnabled
+          );
         } else {
           // Target time has already elapsed! Complete session and advance to next!
           handleCompleteRef.current();
@@ -812,7 +848,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (workerRef.current) {
           workerRef.current.postMessage('STOP');
         }
-        sound.stopSilentKeepAlive();
+        sound.stopSilentKeepAlive(true);
+        notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
         setRemainingSeconds(remote.remainingSeconds);
@@ -837,7 +874,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (workerRef.current) {
           workerRef.current.postMessage('STOP');
         }
-        sound.stopSilentKeepAlive();
+        sound.stopSilentKeepAlive(false);
+        notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
         setRemainingSeconds(remote.remainingSeconds);
@@ -848,7 +886,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isApplyingRemoteRef.current = false;
       }, 150);
     },
-    [authService, setActiveTagId, sound]
+    [authService, setActiveTagId, sound, notifications]
   );
 
   // Background Web Worker initialization (created once on mount, never torn down on state updates)
@@ -993,7 +1031,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
-    sound.stopSilentKeepAlive();
+    sound.stopSilentKeepAlive(true);
+    notifications.cancelScheduledNotification();
 
     const now = authService.getServerNow();
     targetEndTimeRef.current = null;
@@ -1050,7 +1089,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     publishLocalTimerState(payload);
-  }, [authService, publishLocalTimerState, sound]);
+  }, [authService, publishLocalTimerState, sound, notifications]);
 
   // Set session type manually helper
   const setSessionTypeManually = useCallback(
@@ -1058,7 +1097,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (workerRef.current) {
         workerRef.current.postMessage('STOP');
       }
-      sound.stopSilentKeepAlive();
+      sound.stopSilentKeepAlive(true);
+      notifications.cancelScheduledNotification();
 
       const now = authService.getServerNow();
       targetEndTimeRef.current = null;
@@ -1089,7 +1129,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       publishLocalTimerState(payload);
     },
-    [getDurationForType, authService, publishLocalTimerState, sound]
+    [getDurationForType, authService, publishLocalTimerState, sound, notifications]
   );
 
   const toggleStartPause = () => {

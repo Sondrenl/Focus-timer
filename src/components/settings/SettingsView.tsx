@@ -232,12 +232,14 @@ export const SettingsView: React.FC = () => {
 
       {/* 4. Audio & Alerts */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center">
-            <Volume2 className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-md-on-surface">Audio & Alerts</h3>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-md-tertiary/10 text-md-tertiary flex items-center justify-center">
+              <Volume2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-md-on-surface">Audio & Alerts</h3>
+            </div>
           </div>
         </div>
 
@@ -256,7 +258,7 @@ export const SettingsView: React.FC = () => {
             </button>
           </div>
 
-          {/* Desktop Notifications Toggle */}
+          {/* Desktop / Push Notifications Toggle */}
           <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
             <div className="flex items-center gap-2">
               <Bell className="w-4 h-4 text-md-on-surface-variant" />
@@ -266,7 +268,7 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
             <Switch
-              checked={settings.notificationsEnabled}
+              checked={settings.notificationsEnabled && notifications.hasPermission()}
               onChange={handleToggleNotifications}
             />
           </div>
