@@ -233,6 +233,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const workerRef = useRef<Worker | null>(null);
   const workerGraceStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSwScheduleRefreshMsRef = useRef<number>(0);
 
   // Fresh mutable refs for state to eliminate stale closures across callbacks
   const sessionTypeRef = useRef<SessionType>(sessionType);
@@ -503,6 +504,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       sound.startSilentKeepAlive();
 
       // Schedule backup lock-screen notification via Service Worker if notifications are enabled
+      lastSwScheduleRefreshMsRef.current = Date.now();
       if (settingsRef.current.notificationsEnabled) {
         if (notifications.hasPermission()) {
           notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true);
@@ -706,7 +708,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (statusRef.current !== 'RUNNING' && workerRef.current) {
             workerRef.current.postMessage('STOP');
           }
-        }, 3000);
+        }, 3500);
         const payload: RemoteTimerState = {
           sessionType: nextType,
           status: 'IDLE',
@@ -757,7 +759,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (statusRef.current !== 'RUNNING' && workerRef.current) {
             workerRef.current.postMessage('STOP');
           }
-        }, 3000);
+        }, 3500);
         const payload: RemoteTimerState = {
           sessionType: 'WORK',
           status: 'IDLE',
@@ -1020,6 +1022,17 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         remainingSecondsRef.current = diffSec;
         setRemainingSeconds(diffSec);
 
+        // When transitioning to the phone's Home Screen or locking the screen,
+        // refresh the Service Worker's scheduled notification with an active event.waitUntil lock
+        if (isHidden && settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
+          lastSwScheduleRefreshMsRef.current = Date.now();
+          notifications.scheduleTimerNotification(
+            Date.now() + diffMs,
+            sessionTypeRef.current,
+            true
+          );
+        }
+
         // Persist visibility and latest remaining time snapshot
         const stateToSave: SavedTimerState = {
           sessionType: sessionTypeRef.current,
@@ -1052,7 +1065,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('focus', syncRemainingTime);
       window.removeEventListener('pageshow', syncRemainingTime);
     };
-  }, [authService]);
+  }, [authService, notifications]);
 
   // Backup tick interval when running (safeguards countdown & completion if Web Worker messages are delayed)
   useEffect(() => {
@@ -1067,11 +1080,25 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         } else {
           remainingSecondsRef.current = diffSec;
           setRemainingSeconds(diffSec);
+
+          // Renew Service Worker event.waitUntil lock every 10s while running
+          if (
+            settingsRef.current.notificationsEnabled &&
+            notifications.hasPermission() &&
+            Date.now() - lastSwScheduleRefreshMsRef.current >= 10000
+          ) {
+            lastSwScheduleRefreshMsRef.current = Date.now();
+            notifications.scheduleTimerNotification(
+              Date.now() + diffMs,
+              sessionTypeRef.current,
+              true
+            );
+          }
         }
       }
     }, 500);
     return () => clearInterval(interval);
-  }, [status, authService]);
+  }, [status, authService, notifications]);
 
   // Handle expired saved timer on mount
   useEffect(() => {

@@ -5,21 +5,34 @@ export type NotificationPermissionStatus = NotificationPermission | 'unsupported
 const NOTIFICATION_TAG = 'pomodor-timer-alert';
 
 /**
- * Service to handle browser & mobile lock-screen notifications via Service Worker
- * with graceful fallback and live permission status inspection.
+ * Service to handle browser & mobile Home Screen / lock-screen notifications via Service Worker
+ * with zero-await synchronous dispatch and live permission status inspection.
  */
 export class NotificationService {
   private swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
+  private cachedRegistration: ServiceWorkerRegistration | null = null;
   private lastNotifyAtMs: number = 0;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       this.swRegistrationPromise = navigator.serviceWorker
         .register('/sw.js')
+        .then((reg) => {
+          this.cachedRegistration = reg;
+          // Ensure latest sw.js is activated immediately
+          reg.update().catch(() => {});
+          return reg;
+        })
         .catch((err) => {
           console.warn('Service worker registration failed:', err);
           return null;
         });
+
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          this.cachedRegistration = reg;
+        })
+        .catch(() => {});
     }
   }
 
@@ -60,38 +73,52 @@ export class NotificationService {
   }
 
   private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
+    if (this.cachedRegistration?.active) {
+      return this.cachedRegistration;
+    }
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
       return null;
     }
     try {
       const existing = await navigator.serviceWorker.getRegistration();
-      if (existing?.active) return existing;
+      if (existing?.active) {
+        this.cachedRegistration = existing;
+        return existing;
+      }
 
       if (this.swRegistrationPromise) {
         const reg = await this.swRegistrationPromise;
-        if (reg?.active) return reg;
+        if (reg?.active) {
+          this.cachedRegistration = reg;
+          return reg;
+        }
       } else {
         const reg = await navigator.serviceWorker.register('/sw.js');
-        if (reg?.active) return reg;
+        if (reg?.active) {
+          this.cachedRegistration = reg;
+          return reg;
+        }
       }
 
       const readyReg = await Promise.race([
         navigator.serviceWorker.ready,
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
       ]);
-      return readyReg && readyReg.active ? readyReg : null;
+      if (readyReg?.active) {
+        this.cachedRegistration = readyReg;
+        return readyReg;
+      }
+      return null;
     } catch {
       return null;
     }
   }
 
   async notify(title: string, body: string, isManualTest: boolean = false): Promise<boolean> {
-    this.cancelScheduledNotification();
-
     if (!this.hasPermission()) return false;
 
     const now = Date.now();
-    if (!isManualTest && now - this.lastNotifyAtMs < 2500) {
+    if (!isManualTest && now - this.lastNotifyAtMs < 3000) {
       return true;
     }
     this.lastNotifyAtMs = now;
@@ -109,19 +136,44 @@ export class NotificationService {
       icon: '/favicon.svg',
       badge: '/favicon.svg',
       tag: NOTIFICATION_TAG,
-    };
+      renotify: true,
+    } as NotificationOptions;
 
+    // 1. Synchronous zero-await path: if the Service Worker is already active, post SHOW_NOTIFICATION
+    // immediately (which cancels any pending scheduled timer in sw.js and runs inside event.waitUntil)
+    // AND call showNotification synchronously before any promise boundary can be throttled on the Home Screen.
+    const syncWorker =
+      this.cachedRegistration?.active ||
+      (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+        ? navigator.serviceWorker.controller
+        : null);
+
+    if (syncWorker) {
+      try {
+        syncWorker.postMessage({
+          type: 'SHOW_NOTIFICATION',
+          title,
+          body,
+          isManualTest,
+        });
+      } catch {
+        // Ignore postMessage error
+      }
+    }
+
+    if (this.cachedRegistration?.active && typeof this.cachedRegistration.showNotification === 'function') {
+      try {
+        await this.cachedRegistration.showNotification(title, options);
+        return true;
+      } catch {
+        // Fall through
+      }
+    }
+
+    // 2. Async registration lookup fallback if cachedRegistration was not yet populated
     try {
       const reg = await this.getActiveRegistration();
       if (reg && reg.active && typeof reg.showNotification === 'function') {
-        try {
-          const existing = await reg.getNotifications({ tag: NOTIFICATION_TAG });
-          for (const n of existing) {
-            n.close();
-          }
-        } catch {
-          // Ignore getNotifications error
-        }
         await reg.showNotification(title, options);
         return true;
       }
@@ -140,7 +192,7 @@ export class NotificationService {
 
   /**
    * Schedules a backup notification in the Service Worker at the exact targetEndTime
-   * so the phone lock screen or Home Screen still receives the alert even if the browser throttles the page.
+   * so the phone Home Screen or lock screen receives the alert even if the browser throttles the page.
    */
   scheduleTimerNotification(targetEndTimeMs: number, sessionType: SessionType, enabled: boolean): void {
     if (!enabled || !this.hasPermission()) {
@@ -157,6 +209,26 @@ export class NotificationService {
         ? 'Your focus timer has finished. Time for a break.'
         : 'Your break timer has finished. Ready for the next focus session?';
 
+    const syncWorker =
+      this.cachedRegistration?.active ||
+      (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+        ? navigator.serviceWorker.controller
+        : null);
+
+    if (syncWorker) {
+      try {
+        syncWorker.postMessage({
+          type: 'SCHEDULE_TIMER_NOTIFICATION',
+          targetEndTime: targetEndTimeMs,
+          title,
+          body,
+        });
+        return;
+      } catch {
+        // Fall through to async lookup
+      }
+    }
+
     this.getActiveRegistration().then((reg) => {
       const worker = reg?.active || navigator.serviceWorker?.controller;
       if (worker) {
@@ -172,6 +244,22 @@ export class NotificationService {
 
   cancelScheduledNotification(): void {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    const syncWorker =
+      this.cachedRegistration?.active ||
+      navigator.serviceWorker?.controller;
+
+    if (syncWorker) {
+      try {
+        syncWorker.postMessage({
+          type: 'CANCEL_TIMER_NOTIFICATION',
+        });
+        return;
+      } catch {
+        // Fall through
+      }
+    }
+
     this.getActiveRegistration().then((reg) => {
       const worker = reg?.active || navigator.serviceWorker?.controller;
       if (worker) {
