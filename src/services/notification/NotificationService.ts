@@ -2,14 +2,16 @@ import { SessionType } from '../../types/timer';
 
 export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
 
+const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
+
 /**
  * Service to handle browser & mobile Home Screen / lock-screen notifications via Service Worker
- * with per-session tag deduplication and live permission status inspection.
+ * with automatic cleanup of prior notifications and live permission status inspection.
  */
 export class NotificationService {
   private swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
   private cachedRegistration: ServiceWorkerRegistration | null = null;
-  private lastNotifiedTag: string | null = null;
+  private lastNotifiedSessionId: string | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -111,6 +113,36 @@ export class NotificationService {
     }
   }
 
+  /**
+   * Closes any previous Pomodor notifications in the notification center so they never bunch up.
+   */
+  clearActiveNotifications(): void {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    const syncWorker =
+      this.cachedRegistration?.active ||
+      navigator.serviceWorker?.controller;
+
+    if (syncWorker) {
+      try {
+        syncWorker.postMessage({ type: 'CLEAR_NOTIFICATIONS' });
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (this.cachedRegistration && typeof this.cachedRegistration.getNotifications === 'function') {
+      this.cachedRegistration
+        .getNotifications()
+        .then((list) => {
+          for (const n of list) {
+            n.close();
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
   async notify(
     title: string,
     body: string,
@@ -119,20 +151,16 @@ export class NotificationService {
   ): Promise<boolean> {
     if (!this.hasPermission()) return false;
 
-    const effectiveTag = isManualTest
-      ? `pomodor-test-${Date.now()}`
-      : sessionRunId
-      ? `pomodor-run-${sessionRunId}`
-      : `pomodor-alert-${Date.now()}`;
-
-    if (!isManualTest && sessionRunId && this.lastNotifiedTag === effectiveTag) {
+    if (!isManualTest && sessionRunId && this.lastNotifiedSessionId === sessionRunId) {
       return true;
     }
-    this.lastNotifiedTag = effectiveTag;
+    if (sessionRunId) {
+      this.lastNotifiedSessionId = sessionRunId;
+    }
 
     try {
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate([200, 100, 200]);
+        navigator.vibrate([250, 100, 250]);
       }
     } catch {
       // Ignore vibration errors
@@ -142,8 +170,11 @@ export class NotificationService {
       body,
       icon: '/favicon.svg',
       badge: '/favicon.svg',
-      tag: effectiveTag,
+      tag: ACTIVE_NOTIFICATION_TAG,
       renotify: true,
+      silent: false,
+      requireInteraction: true,
+      vibrate: [250, 100, 250],
     } as NotificationOptions;
 
     const syncWorker =
@@ -152,45 +183,36 @@ export class NotificationService {
         ? navigator.serviceWorker.controller
         : null);
 
+    // Delegate to the active Service Worker first: sw.js closes all existing notifications
+    // and dispatches a single fresh notification inside event.waitUntil() without double-firing.
     if (syncWorker) {
       try {
         syncWorker.postMessage({
           type: 'SHOW_NOTIFICATION',
           title,
           body,
-          tag: effectiveTag,
+          sessionId: sessionRunId || null,
           isManualTest,
         });
-      } catch {
-        // Ignore postMessage error
-      }
-    }
-
-    if (this.cachedRegistration?.active && typeof this.cachedRegistration.showNotification === 'function') {
-      try {
-        // Close any leftover notification from an earlier session so the new session (e.g. Break after Focus)
-        // always triggers a fresh heads-up banner on Android & iOS.
-        this.cachedRegistration
-          .getNotifications()
-          .then((list) => {
-            for (const n of list) {
-              if (n.tag !== effectiveTag) {
-                n.close();
-              }
-            }
-          })
-          .catch(() => {});
-
-        await this.cachedRegistration.showNotification(title, options);
         return true;
       } catch {
-        // Fall through
+        // Fall through to direct registration dispatch
       }
     }
 
     try {
-      const reg = await this.getActiveRegistration();
+      const reg = this.cachedRegistration?.active
+        ? this.cachedRegistration
+        : await this.getActiveRegistration();
       if (reg && reg.active && typeof reg.showNotification === 'function') {
+        try {
+          const existing = await reg.getNotifications();
+          for (const n of existing) {
+            n.close();
+          }
+        } catch {
+          // Ignore
+        }
         await reg.showNotification(title, options);
         return true;
       }
@@ -222,17 +244,16 @@ export class NotificationService {
       return;
     }
 
+    // Use identical declarative sentence structure for Focus and Break so Chrome's on-device
+    // spam classifier never flags Break notifications.
     const title =
       sessionType === 'WORK'
         ? 'Pomodor — Focus session complete'
-        : 'Pomodor — Break complete';
+        : 'Pomodor — Break session complete';
     const body =
       sessionType === 'WORK'
         ? 'Your focus timer has finished. Time for a break.'
-        : 'Your break timer has finished. Ready for the next focus session?';
-    const effectiveTag = sessionRunId
-      ? `pomodor-run-${sessionRunId}`
-      : `pomodor-type-${sessionType.toLowerCase()}`;
+        : 'Your break timer has finished. Time for a focus session.';
 
     const syncWorker =
       this.cachedRegistration?.active ||
@@ -247,7 +268,7 @@ export class NotificationService {
           targetEndTime: targetEndTimeMs,
           title,
           body,
-          tag: effectiveTag,
+          sessionId: sessionRunId || null,
         });
         return;
       } catch {
@@ -263,7 +284,7 @@ export class NotificationService {
           targetEndTime: targetEndTimeMs,
           title,
           body,
-          tag: effectiveTag,
+          sessionId: sessionRunId || null,
         });
       }
     });

@@ -228,6 +228,7 @@ export class SoundService {
 
   /**
    * Plays a gentle, pleasant triple-tone chime (Major triad: C5 - E5 - G5)
+   * Used for both Focus and Break completions.
    * @param volume Volume scalar between 0.0 and 1.0
    */
   playChime(volume: number = 0.8): void {
@@ -275,50 +276,10 @@ export class SoundService {
   }
 
   /**
-   * Plays a deep calming gong/bell sound for break completion
+   * Plays the same triple-tone completion chime for break completion
    */
   playBreakComplete(volume: number = 0.8): void {
-    const clampedVol = Math.max(0, Math.min(1, volume));
-    if (clampedVol === 0) return;
-
-    // Reserve a 3.5s grace window so the OS never suspends the tab mid-chime or mid-notification
-    this.chimeEndTimeMs = Date.now() + 3500;
-    this.playWebAudioBreakComplete(clampedVol);
-  }
-
-  private playWebAudioBreakComplete(clampedVol: number): void {
-    const ctx = this.getAudioContext();
-    if (!ctx) return;
-
-    const scheduleNotes = () => {
-      const notes = [440.0, 554.37, 659.25];
-      const now = ctx.currentTime;
-
-      notes.forEach((freq, idx) => {
-        const noteStartTime = now + idx * 0.1;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, noteStartTime);
-
-        gain.gain.setValueAtTime(0.0001, noteStartTime);
-        gain.gain.exponentialRampToValueAtTime(0.35 * clampedVol, noteStartTime + 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.0001, noteStartTime + 1.6);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-
-        osc.start(noteStartTime);
-        osc.stop(noteStartTime + 1.7);
-      });
-    };
-
-    if (ctx.state === 'suspended') {
-      ctx.resume().then(scheduleNotes).catch(scheduleNotes);
-    } else {
-      scheduleNotes();
-    }
+    this.playChime(volume);
   }
 }
 

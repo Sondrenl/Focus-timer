@@ -505,6 +505,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // when the screen is turned off or the user switches apps, and so the chime can play while locked.
       sound.startSilentKeepAlive();
 
+      // If manually starting while the app is visible, clear any old notification from the shade
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        notifications.clearActiveNotifications();
+      }
+
       // Schedule backup lock-screen notification via Service Worker if notifications are enabled
       lastSwScheduleRefreshMsRef.current = Date.now();
       if (settingsRef.current.notificationsEnabled) {
@@ -666,8 +671,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
       } else {
         void notifications.notify(
-          'Pomodor — Break complete',
-          'Your break timer has finished. Ready for the next focus session?',
+          'Pomodor — Break session complete',
+          'Your break timer has finished. Time for a focus session.',
           false,
           completedRunId
         );
@@ -676,13 +681,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       notifications.cancelScheduledNotification();
     }
 
-    // 2. Play completion chime (reserves 3.5s background audio keep-alive grace period)
+    // 2. Play completion chime (same chime sound for both Focus and Break)
     if (currentSettings.soundEnabled) {
-      if (currentType === 'WORK') {
-        sound.playChime(currentSettings.soundVolume);
-      } else {
-        sound.playBreakComplete(currentSettings.soundVolume);
-      }
+      sound.playChime(currentSettings.soundVolume);
     }
 
     if (currentType === 'WORK') {

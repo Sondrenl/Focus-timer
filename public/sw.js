@@ -3,7 +3,8 @@
 
 let scheduledTimerId = null;
 let scheduledResolve = null;
-let lastNotifiedTag = null;
+let lastNotifiedSessionId = null;
+const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -25,41 +26,40 @@ function clearExistingSchedule() {
   }
 }
 
-async function closePreviousNotifications(exceptTag) {
+async function closeAllExistingNotifications() {
   try {
     const existing = await self.registration.getNotifications();
     for (const notif of existing) {
-      if (!exceptTag || notif.tag !== exceptTag) {
-        notif.close();
-      }
+      notif.close();
     }
   } catch {
     // Ignore getNotifications errors
   }
 }
 
-async function showTimerNotification(title, body, tag, allowImmediateRepeat = false) {
-  const effectiveTag = tag || 'pomodor-timer-alert';
-
-  // Deduplicate by session run tag so the scheduled SW timer and main thread never double-fire
-  // for the same session, while a Break session (which has a new tag) always fires immediately!
-  if (!allowImmediateRepeat && tag && lastNotifiedTag === tag) {
+async function showTimerNotification(title, body, sessionId, allowImmediateRepeat = false) {
+  // Deduplicate by sessionId so the scheduled SW timer and main thread never double-fire
+  // for the same interval, while the next interval (e.g. Break after Focus) always fires!
+  if (!allowImmediateRepeat && sessionId && lastNotifiedSessionId === sessionId) {
     return;
   }
-  lastNotifiedTag = effectiveTag;
+  if (sessionId) {
+    lastNotifiedSessionId = sessionId;
+  }
 
-  // Close any prior notification from an earlier session (e.g. close the Focus notification
-  // before showing the Break notification) so Android/iOS always pop a fresh heads-up banner.
-  await closePreviousNotifications(effectiveTag);
+  // Always remove any previous notifications in the notification center first
+  // so old notifications never bunch up and the new notification triggers a fresh alert.
+  await closeAllExistingNotifications();
 
   return self.registration.showNotification(title, {
     body,
     icon: '/favicon.svg',
     badge: '/favicon.svg',
-    tag: effectiveTag,
+    tag: ACTIVE_NOTIFICATION_TAG,
     renotify: true,
-    vibrate: [200, 100, 200],
-    requireInteraction: false,
+    silent: false,
+    requireInteraction: true,
+    vibrate: [250, 100, 250],
   });
 }
 
@@ -70,12 +70,17 @@ self.addEventListener('message', (event) => {
   if (data.type === 'SHOW_NOTIFICATION') {
     clearExistingSchedule();
     event.waitUntil(
-      showTimerNotification(data.title, data.body, data.tag, Boolean(data.isManualTest))
+      showTimerNotification(
+        data.title,
+        data.body,
+        data.sessionId || null,
+        Boolean(data.isManualTest)
+      )
     );
   } else if (data.type === 'SCHEDULE_TIMER_NOTIFICATION') {
     clearExistingSchedule();
     const delayMs = Math.max(0, (data.targetEndTime || 0) - Date.now());
-    const tag = data.tag || 'pomodor-timer-alert';
+    const sessionId = data.sessionId || null;
 
     if (delayMs > 0 && delayMs < 8 * 60 * 60 * 1000) {
       // Hold an active ExtendableEvent lifetime lock via event.waitUntil so mobile browsers
@@ -85,30 +90,34 @@ self.addEventListener('message', (event) => {
         scheduledTimerId = setTimeout(() => {
           scheduledTimerId = null;
           scheduledResolve = null;
-          showTimerNotification(data.title, data.body, tag, false).finally(resolve);
+          showTimerNotification(data.title, data.body, sessionId, false).finally(resolve);
         }, delayMs);
       });
       event.waitUntil(waitPromise);
     } else if (delayMs === 0) {
-      event.waitUntil(showTimerNotification(data.title, data.body, tag, false));
+      event.waitUntil(showTimerNotification(data.title, data.body, sessionId, false));
     }
   } else if (data.type === 'CANCEL_TIMER_NOTIFICATION') {
     clearExistingSchedule();
+  } else if (data.type === 'CLEAR_NOTIFICATIONS') {
+    event.waitUntil(closeAllExistingNotifications());
   }
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if ('focus' in client) {
-          return client.focus();
+    closeAllExistingNotifications().then(() =>
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+        for (const client of clientList) {
+          if ('focus' in client) {
+            return client.focus();
+          }
         }
-      }
-      if (self.clients.openWindow) {
-        return self.clients.openWindow('/');
-      }
-    })
+        if (self.clients.openWindow) {
+          return self.clients.openWindow('/');
+        }
+      })
+    )
   );
 });
