@@ -7,8 +7,18 @@ interface Env {
   AUTH_SECRET?: string;
 }
 
+export interface PeerPresence {
+  desktopActive: boolean;
+  desktopVisible: boolean;
+  mobileActive: boolean;
+  mobileVisible: boolean;
+}
+
 const DEFAULT_AUTH_SECRET = 'pomodor-focus-timer-secret-jwt-key-2025';
 const DEFAULT_CLIENT_ID = '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
+
+const DESKTOP_PRESENCE_TTL_MS = 4500;
+const MOBILE_PRESENCE_TTL_MS = 6000;
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (
@@ -90,6 +100,15 @@ const SCHEMA_STATEMENTS = [
     PRIMARY KEY (user_id, cup_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_coffee_cups_user ON deleted_coffee_cups(user_id)`,
+  `CREATE TABLE IF NOT EXISTS user_device_presence (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL,
+    device_type TEXT NOT NULL,
+    is_visible INTEGER DEFAULT 0,
+    last_seen_ms INTEGER NOT NULL,
+    PRIMARY KEY (user_id, device_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_device_presence_user ON user_device_presence(user_id)`,
 ];
 
 let isSchemaEnsured = false;
@@ -104,6 +123,95 @@ async function ensureSchema(db: D1Database): Promise<void> {
     }
   }
   isSchemaEnsured = true;
+}
+
+async function updateAndGetPeerPresence(
+  db: D1Database,
+  userId: string,
+  request: Request,
+  now: number
+): Promise<PeerPresence> {
+  const deviceId = (request.headers.get('X-Device-Id') || '').trim();
+  const rawType = (request.headers.get('X-Device-Type') || '').trim().toLowerCase();
+  const deviceType = rawType === 'mobile' ? 'mobile' : 'desktop';
+  const isVisible = request.headers.get('X-Device-Visible') === '1' ? 1 : 0;
+  const isClosed = request.headers.get('X-Device-Closed') === '1';
+
+  try {
+    if (deviceId) {
+      if (isClosed) {
+        await db
+          .prepare('DELETE FROM user_device_presence WHERE user_id = ? AND device_id = ?')
+          .bind(userId, deviceId)
+          .run();
+      } else {
+        await db.batch([
+          db
+            .prepare(
+              `INSERT INTO user_device_presence (user_id, device_id, device_type, is_visible, last_seen_ms)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id, device_id) DO UPDATE SET
+                 device_type = excluded.device_type,
+                 is_visible = excluded.is_visible,
+                 last_seen_ms = excluded.last_seen_ms`
+            )
+            .bind(userId, deviceId, deviceType, isVisible, now),
+          db
+            .prepare('DELETE FROM user_device_presence WHERE user_id = ? AND last_seen_ms < ?')
+            .bind(userId, now - 3600000),
+        ]);
+      }
+    }
+
+    const rows = await db
+      .prepare('SELECT device_id, device_type, is_visible, last_seen_ms FROM user_device_presence WHERE user_id = ?')
+      .bind(userId)
+      .all<{
+        device_id: string;
+        device_type: string;
+        is_visible: number;
+        last_seen_ms: number;
+      }>();
+
+    let desktopActive = false;
+    let desktopVisible = false;
+    let mobileActive = false;
+    let mobileVisible = false;
+
+    for (const r of rows.results || []) {
+      const ageMs = Math.max(0, now - r.last_seen_ms);
+      if (r.device_type === 'desktop') {
+        if (ageMs <= DESKTOP_PRESENCE_TTL_MS) {
+          desktopActive = true;
+          if (r.is_visible === 1) {
+            desktopVisible = true;
+          }
+        }
+      } else if (r.device_type === 'mobile') {
+        if (ageMs <= MOBILE_PRESENCE_TTL_MS) {
+          mobileActive = true;
+          if (r.is_visible === 1) {
+            mobileVisible = true;
+          }
+        }
+      }
+    }
+
+    return {
+      desktopActive,
+      desktopVisible,
+      mobileActive,
+      mobileVisible,
+    };
+  } catch (err) {
+    console.warn('Error updating device presence:', err);
+    return {
+      desktopActive: false,
+      desktopVisible: false,
+      mobileActive: false,
+      mobileVisible: false,
+    };
+  }
 }
 
 export default {
@@ -124,7 +232,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Timer-Heartbeat',
+    'Access-Control-Allow-Headers':
+      'Content-Type, Authorization, X-Timer-Heartbeat, X-Device-Id, X-Device-Type, X-Device-Visible, X-Device-Closed',
     'Content-Type': 'application/json',
   };
 
@@ -407,7 +516,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const isRunningHeartbeat = request.headers.get("X-Timer-Heartbeat") === "1";
       const now = Date.now();
 
-      const [timerRow, coffeeRows, deletedCoffeeRows, tagRows, deletedTagRows] = await Promise.all([
+      const [timerRow, coffeeRows, deletedCoffeeRows, tagRows, deletedTagRows, peerPresence] = await Promise.all([
         env.DB.prepare(
           "SELECT * FROM active_timers WHERE user_id = ?"
         ).bind(currentUserId).first<{
@@ -446,6 +555,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         env.DB.prepare(
           "SELECT tag_id FROM deleted_tags WHERE user_id = ?"
         ).bind(currentUserId).all<{ tag_id: string }>(),
+        updateAndGetPeerPresence(env.DB, currentUserId, request, now),
       ]);
 
       let timer = null;
@@ -507,6 +617,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           deletedCoffeeCupIds,
           tags,
           deletedTagIds,
+          peerPresence,
           serverTime: now,
         }),
         { headers: corsHeaders }
@@ -538,38 +649,46 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
       const updatedAtMs = typeof body.updatedAtMs === "number" ? body.updatedAtMs : serverNow;
 
-      await env.DB.prepare(
-        `INSERT INTO active_timers (
-           user_id, session_type, status, remaining_seconds, total_seconds,
-           target_end_time, current_cycle, tag_id, timer_run_id, updated_at_ms, last_heartbeat_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-           session_type = excluded.session_type,
-           status = excluded.status,
-           remaining_seconds = excluded.remaining_seconds,
-           total_seconds = excluded.total_seconds,
-           target_end_time = excluded.target_end_time,
-           current_cycle = excluded.current_cycle,
-           tag_id = excluded.tag_id,
-           timer_run_id = excluded.timer_run_id,
-           updated_at_ms = excluded.updated_at_ms,
-           last_heartbeat_ms = excluded.last_heartbeat_ms
-         WHERE excluded.updated_at_ms >= active_timers.updated_at_ms`
-      ).bind(
-        currentUserId,
-        body.sessionType,
-        body.status,
-        body.remainingSeconds ?? 1500,
-        body.totalSeconds ?? 1500,
-        body.targetEndTime ?? null,
-        body.currentCycle ?? 1,
-        body.activeTagId ?? null,
-        body.timerRunId ?? null,
-        updatedAtMs,
-        serverNow
-      ).run();
+      const [, peerPresence] = await Promise.all([
+        env.DB.prepare(
+          `INSERT INTO active_timers (
+             user_id, session_type, status, remaining_seconds, total_seconds,
+             target_end_time, current_cycle, tag_id, timer_run_id, updated_at_ms, last_heartbeat_ms
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             session_type = excluded.session_type,
+             status = excluded.status,
+             remaining_seconds = excluded.remaining_seconds,
+             total_seconds = excluded.total_seconds,
+             target_end_time = excluded.target_end_time,
+             current_cycle = excluded.current_cycle,
+             tag_id = excluded.tag_id,
+             timer_run_id = excluded.timer_run_id,
+             updated_at_ms = excluded.updated_at_ms,
+             last_heartbeat_ms = excluded.last_heartbeat_ms
+           WHERE excluded.updated_at_ms >= active_timers.updated_at_ms`
+        )
+          .bind(
+            currentUserId,
+            body.sessionType,
+            body.status,
+            body.remainingSeconds ?? 1500,
+            body.totalSeconds ?? 1500,
+            body.targetEndTime ?? null,
+            body.currentCycle ?? 1,
+            body.activeTagId ?? null,
+            body.timerRunId ?? null,
+            updatedAtMs,
+            serverNow
+          )
+          .run(),
+        updateAndGetPeerPresence(env.DB, currentUserId, request, serverNow),
+      ]);
 
-      return new Response(JSON.stringify({ success: true, updatedAtMs, serverTime: serverNow }), { headers: corsHeaders });
+      return new Response(
+        JSON.stringify({ success: true, updatedAtMs, peerPresence, serverTime: serverNow }),
+        { headers: corsHeaders }
+      );
     }
 
     // POST /api/coffee — Add or remove a coffee cup directly with instant D1 sync

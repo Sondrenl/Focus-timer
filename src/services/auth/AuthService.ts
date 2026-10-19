@@ -10,13 +10,33 @@ export interface RemoteTimerState {
   updatedAtMs: number;
 }
 
+export interface PeerPresence {
+  desktopActive: boolean;
+  desktopVisible: boolean;
+  mobileActive: boolean;
+  mobileVisible: boolean;
+}
+
 export interface RemoteTimerResult {
   timer: RemoteTimerState | null;
   coffeeCups?: CoffeeCup[];
   deletedCoffeeCupIds?: string[];
   tags?: Tag[];
   deletedTagIds?: string[];
+  peerPresence?: PeerPresence;
   serverTime?: number;
+}
+
+export function isMobileDevice(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) {
+    return true;
+  }
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints && navigator.maxTouchPoints > 1) {
+    return true;
+  }
+  return false;
 }
 
 import { UserProfile, AuthState } from '../../types/user';
@@ -367,27 +387,45 @@ export class AuthService {
     return data;
   }
 
-  public async fetchRemoteTimer(isRunning: boolean = false): Promise<RemoteTimerResult | null> {
+  private buildPresenceHeaders(
+    token: string,
+    deviceSessionId?: string,
+    isRunning: boolean = false,
+    isClosed: boolean = false
+  ): Record<string, string> {
+    const isVisible =
+      typeof document !== 'undefined' && document.visibilityState === 'visible' && !isClosed;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'X-Device-Type': isMobileDevice() ? 'mobile' : 'desktop',
+      'X-Device-Visible': isVisible ? '1' : '0',
+    };
+    if (deviceSessionId) {
+      headers['X-Device-Id'] = deviceSessionId;
+    }
+    if (isRunning) {
+      headers['X-Timer-Heartbeat'] = '1';
+    }
+    if (isClosed) {
+      headers['X-Device-Closed'] = '1';
+    }
+    return headers;
+  }
+
+  public async fetchRemoteTimer(
+    isRunning: boolean = false,
+    deviceSessionId?: string
+  ): Promise<RemoteTimerResult | null> {
     const token = this.getStoredToken();
     if (!token) return null;
 
     try {
       const t0 = Date.now();
-      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-      if (isRunning) {
-        headers['X-Timer-Heartbeat'] = '1';
-      }
+      const headers = this.buildPresenceHeaders(token, deviceSessionId, isRunning, false);
       const res = await fetch('/api/timer', { headers });
       const t1 = Date.now();
       if (!res.ok) return null;
-      const data = (await res.json()) as {
-        timer: RemoteTimerState | null;
-        coffeeCups?: CoffeeCup[];
-        deletedCoffeeCupIds?: string[];
-        tags?: Tag[];
-        deletedTagIds?: string[];
-        serverTime?: number;
-      };
+      const data = (await res.json()) as RemoteTimerResult;
       if (typeof data.serverTime === 'number') {
         this.updateClockOffset(data.serverTime, t0, t1);
       }
@@ -397,31 +435,57 @@ export class AuthService {
     }
   }
 
-  public async pushRemoteTimer(timer: RemoteTimerState): Promise<{ success: boolean; updatedAtMs?: number } | null> {
+  public async pushRemoteTimer(
+    timer: RemoteTimerState,
+    deviceSessionId?: string,
+    isClosed: boolean = false
+  ): Promise<{ success: boolean; updatedAtMs?: number; peerPresence?: PeerPresence } | null> {
     const token = this.getStoredToken();
     if (!token) return null;
 
     try {
       const t0 = Date.now();
-      const res = await fetch("/api/timer", {
-        method: "POST",
+      const headers = {
+        ...this.buildPresenceHeaders(token, deviceSessionId, timer.status === 'RUNNING', isClosed),
+        'Content-Type': 'application/json',
+      };
+      const res = await fetch('/api/timer', {
+        method: 'POST',
         keepalive: true,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify(timer),
       });
       const t1 = Date.now();
       if (!res.ok) return null;
-      const data = (await res.json()) as { success: boolean; updatedAtMs?: number; serverTime?: number };
+      const data = (await res.json()) as {
+        success: boolean;
+        updatedAtMs?: number;
+        peerPresence?: PeerPresence;
+        serverTime?: number;
+      };
       if (typeof data.serverTime === 'number') {
         this.updateClockOffset(data.serverTime, t0, t1);
       }
       return data;
     } catch (e) {
-      console.warn("Failed to push remote timer", e);
+      console.warn('Failed to push remote timer', e);
       return null;
+    }
+  }
+
+  public reportDeviceClosed(deviceSessionId: string): void {
+    const token = this.getStoredToken();
+    if (!token || !deviceSessionId) return;
+
+    try {
+      const headers = this.buildPresenceHeaders(token, deviceSessionId, false, true);
+      fetch('/api/timer', {
+        method: 'GET',
+        keepalive: true,
+        headers,
+      }).catch(() => {});
+    } catch {
+      // Ignore unload network errors
     }
   }
 

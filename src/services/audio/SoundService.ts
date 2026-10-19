@@ -1,3 +1,5 @@
+import { isMobileDevice } from '../auth/AuthService';
+
 /**
  * Encodes floating-point mono audio samples (-1.0 to 1.0) into a 16-bit PCM WAV Blob URL.
  */
@@ -57,9 +59,13 @@ function generateSilentKeepAliveWav(): string {
 }
 
 /**
- * SoundService provides synthesized audio feedback using Web Audio API while maintaining
- * an uninterrupted >=5s HTML5 <audio> keep-alive loop (`bgAudio`) that never changes its `.src`
- * in the background—ensuring mobile browsers never revoke background execution between Focus and Break sessions.
+ * SoundService provides synthesized audio feedback using Web Audio API.
+ * - On Mobile: maintains a continuous >=5s sub-audible HTML5 <audio> keep-alive loop (`bgAudio`)
+ *   so the phone stays connected in the background across Focus -> IDLE -> Break transitions even
+ *   when the phone screen is off and the timer is controlled from a laptop.
+ * - On Desktop: never runs background keep-alive audio and suspends the AudioContext immediately
+ *   after each chime so the laptop holds zero OS audio power assertions and sleeps cleanly when
+ *   the laptop lid is closed.
  */
 export class SoundService {
   private audioCtx: AudioContext | null = null;
@@ -68,9 +74,7 @@ export class SoundService {
 
   private bgAudio: HTMLAudioElement | null = null;
   private silentWavUrl: string | null = null;
-  private keepAliveActive: boolean = false;
-  private chimeEndTimeMs: number = 0;
-  private deferredStopTimer: ReturnType<typeof setTimeout> | null = null;
+  private desktopSuspendTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -78,6 +82,17 @@ export class SoundService {
         this.silentWavUrl = generateSilentKeepAliveWav();
       } catch {
         // Ignore if Blob/URL is unavailable in test environment
+      }
+
+      if (isMobileDevice()) {
+        const unlockOnGesture = () => {
+          this.startSilentKeepAlive();
+        };
+        window.addEventListener('pointerdown', unlockOnGesture, { passive: true });
+        window.addEventListener('touchstart', unlockOnGesture, { passive: true });
+        window.addEventListener('touchend', unlockOnGesture, { passive: true });
+        window.addEventListener('click', unlockOnGesture, { passive: true });
+        window.addEventListener('keydown', unlockOnGesture, { passive: true });
       }
     }
   }
@@ -100,7 +115,7 @@ export class SoundService {
   }
 
   /**
-   * Initializes or resumes the AudioContext on user interaction
+   * Initializes or resumes the AudioContext
    */
   private getAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -121,15 +136,14 @@ export class SoundService {
   }
 
   /**
-   * Starts an inaudible 10-second keep-alive audio loop when the timer is started by a user gesture.
-   * `bgAudio` never swaps its `.src`, so the mobile media session stays valid across consecutive
-   * Focus and Break sessions without ever being revoked in the background.
+   * Starts an inaudible 10-second keep-alive audio loop on mobile devices so the phone tab stays
+   * connected in the background while the screen is off.
+   * On desktop devices, this is intentionally a no-op so the laptop never holds an OS audio sleep
+   * assertion when the user closes the laptop lid.
    */
   startSilentKeepAlive(): void {
-    this.keepAliveActive = true;
-    if (this.deferredStopTimer) {
-      clearTimeout(this.deferredStopTimer);
-      this.deferredStopTimer = null;
+    if (!isMobileDevice()) {
+      return;
     }
 
     try {
@@ -175,29 +189,22 @@ export class SoundService {
   }
 
   /**
-   * Stops the silent background keep-alive audio when the timer is paused, reset, or completed.
-   * When `forceImmediate` is false (natural completion at 00:00), it waits 3.5 seconds so the
-   * completion chime and background notification dispatch finish completely before releasing audio.
+   * On mobile, we intentionally keep the sub-audible keep-alive loop running across IDLE/PAUSED
+   * transitions so the phone remains connected in the background when the screen is off and the
+   * user starts the next session (e.g. a break) from their laptop.
+   * Only `stopKeepAliveForUnload()` (when the app/tab is actually closed) tears down the nodes.
    */
-  stopSilentKeepAlive(forceImmediate: boolean = false): void {
-    this.keepAliveActive = false;
-
-    if (this.deferredStopTimer) {
-      clearTimeout(this.deferredStopTimer);
-      this.deferredStopTimer = null;
-    }
-
-    const remainingChimeMs = this.chimeEndTimeMs - Date.now();
-    if (!forceImmediate && remainingChimeMs > 0) {
-      this.deferredStopTimer = setTimeout(() => {
-        this.deferredStopTimer = null;
-        if (!this.keepAliveActive) {
-          this.stopKeepAliveNodesNow();
-        }
-      }, remainingChimeMs + 400);
+  stopSilentKeepAlive(_forceImmediate: boolean = false): void {
+    if (isMobileDevice()) {
       return;
     }
+    this.stopKeepAliveNodesNow();
+  }
 
+  /**
+   * Explicitly stops all background audio nodes when the app or tab is being unloaded/killed.
+   */
+  stopKeepAliveForUnload(): void {
     this.stopKeepAliveNodesNow();
   }
 
@@ -235,14 +242,17 @@ export class SoundService {
     const clampedVol = Math.max(0, Math.min(1, volume));
     if (clampedVol === 0) return;
 
-    // Reserve a 3.5s grace window so the OS never suspends the tab mid-chime or mid-notification
-    this.chimeEndTimeMs = Date.now() + 3500;
     this.playWebAudioChime(clampedVol);
   }
 
   private playWebAudioChime(clampedVol: number): void {
     const ctx = this.getAudioContext();
     if (!ctx) return;
+
+    if (this.desktopSuspendTimer) {
+      clearTimeout(this.desktopSuspendTimer);
+      this.desktopSuspendTimer = null;
+    }
 
     const scheduleNotes = () => {
       const notes = [523.25, 659.25, 783.99];
@@ -266,6 +276,17 @@ export class SoundService {
         osc.start(noteStartTime);
         osc.stop(noteStartTime + 1.3);
       });
+
+      // On desktop, suspend the AudioContext right after the chime finishes so the laptop
+      // holds zero OS audio power assertions and sleeps immediately when the lid is closed.
+      if (!isMobileDevice()) {
+        this.desktopSuspendTimer = setTimeout(() => {
+          this.desktopSuspendTimer = null;
+          if (this.audioCtx && this.audioCtx.state === 'running') {
+            this.audioCtx.suspend().catch(() => {});
+          }
+        }, 1650);
+      }
     };
 
     if (ctx.state === 'suspended') {
