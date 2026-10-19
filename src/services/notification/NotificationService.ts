@@ -2,12 +2,15 @@ import { SessionType } from '../../types/timer';
 
 export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
 
+const NOTIFICATION_TAG = 'pomodor-timer-alert';
+
 /**
  * Service to handle browser & mobile lock-screen notifications via Service Worker
  * with graceful fallback and live permission status inspection.
  */
 export class NotificationService {
   private swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
+  private lastNotifyAtMs: number = 0;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -35,7 +38,6 @@ export class NotificationService {
       if (Notification.permission === 'granted') {
         return true;
       }
-      // Support both Promise-based and legacy callback-based Notification.requestPermission
       const permission = await new Promise<NotificationPermission>((resolve) => {
         try {
           const maybePromise = Notification.requestPermission((res) => resolve(res));
@@ -73,7 +75,6 @@ export class NotificationService {
         if (reg?.active) return reg;
       }
 
-      // Wait briefly (up to 1200ms) for navigator.serviceWorker.ready if worker is still activating
       const readyReg = await Promise.race([
         navigator.serviceWorker.ready,
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
@@ -84,30 +85,43 @@ export class NotificationService {
     }
   }
 
-  async notify(title: string, body: string): Promise<boolean> {
+  async notify(title: string, body: string, isManualTest: boolean = false): Promise<boolean> {
     this.cancelScheduledNotification();
 
     if (!this.hasPermission()) return false;
 
+    const now = Date.now();
+    if (!isManualTest && now - this.lastNotifyAtMs < 2500) {
+      return true;
+    }
+    this.lastNotifyAtMs = now;
+
     try {
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate([200, 100, 200, 100, 400]);
+        navigator.vibrate([200, 100, 200]);
       }
     } catch {
       // Ignore vibration errors
     }
 
-    const uniqueTag = `pomodor-timer-${Date.now()}`;
     const options: NotificationOptions = {
       body,
       icon: '/favicon.svg',
       badge: '/favicon.svg',
-      tag: uniqueTag,
+      tag: NOTIFICATION_TAG,
     };
 
     try {
       const reg = await this.getActiveRegistration();
       if (reg && reg.active && typeof reg.showNotification === 'function') {
+        try {
+          const existing = await reg.getNotifications({ tag: NOTIFICATION_TAG });
+          for (const n of existing) {
+            n.close();
+          }
+        } catch {
+          // Ignore getNotifications error
+        }
         await reg.showNotification(title, options);
         return true;
       }
@@ -134,11 +148,14 @@ export class NotificationService {
       return;
     }
 
-    const title = sessionType === 'WORK' ? 'Session Complete!' : 'Break Finished';
+    const title =
+      sessionType === 'WORK'
+        ? 'Pomodor — Focus session complete'
+        : 'Pomodor — Break complete';
     const body =
       sessionType === 'WORK'
-        ? 'Great focus! Time to take a well-deserved break.'
-        : 'Ready to dive back into deep work?';
+        ? 'Your focus timer has finished. Time for a break.'
+        : 'Your break timer has finished. Ready for the next focus session?';
 
     this.getActiveRegistration().then((reg) => {
       const worker = reg?.active || navigator.serviceWorker?.controller;

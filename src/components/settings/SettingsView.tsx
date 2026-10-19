@@ -227,10 +227,11 @@ export const SettingsView: React.FC = () => {
     updateSettings({ notificationsEnabled: granted });
     if (granted) {
       const sent = await notifications.notify(
-        'Notifications Enabled',
-        'Focus Timer will alert you when intervals complete!'
+        'Pomodor — Focus session complete',
+        'Your focus timer has finished. Time for a break.',
+        true
       );
-      showNotifFeedback(sent ? 'Test alert sent!' : 'Enabled! Check system notification settings.');
+      showNotifFeedback(sent ? 'Sample timer alert sent!' : 'Enabled! Check system notification settings.');
     } else if (currentPerm === 'denied') {
       showNotifFeedback('Notifications are blocked in your browser site settings.');
     } else if (currentPerm === 'unsupported') {
@@ -264,10 +265,11 @@ export const SettingsView: React.FC = () => {
     }
 
     const sent = await notifications.notify(
-      'Test Notification',
-      'Notifications are working on this device!'
+      'Pomodor — Focus session complete',
+      'Your focus timer has finished. Time for a break.',
+      true
     );
-    showNotifFeedback(sent ? 'Test alert sent!' : 'Could not dispatch alert — check OS notification settings.');
+    showNotifFeedback(sent ? 'Sample timer alert sent!' : 'Could not dispatch alert — check OS notification settings.');
   };
 
   const handleResetDefaults = () => {

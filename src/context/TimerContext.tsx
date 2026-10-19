@@ -655,7 +655,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (currentType === 'WORK') {
       if (currentSettings.notificationsEnabled) {
-        void notifications.notify('Session Complete!', 'Great focus! Time to take a well-deserved break.');
+        void notifications.notify(
+          'Pomodor — Focus session complete',
+          'Your focus timer has finished. Time for a break.'
+        );
       } else {
         notifications.cancelScheduledNotification();
       }
@@ -720,7 +723,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else {
       // Break session finished -> Advance to WORK session!
       if (currentSettings.notificationsEnabled) {
-        void notifications.notify('Break Finished', 'Ready to dive back into deep work?');
+        void notifications.notify(
+          'Pomodor — Break complete',
+          'Your break timer has finished. Ready for the next focus session?'
+        );
       } else {
         notifications.cancelScheduledNotification();
       }
