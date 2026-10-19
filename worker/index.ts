@@ -11,18 +11,84 @@ const DEFAULT_AUTH_SECRET = 'pomodor-focus-timer-secret-jwt-key-2025';
 const DEFAULT_CLIENT_ID = '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
 
 const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
-  `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    google_id TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    avatar_url TEXT,
+    avatar_emoji TEXT DEFAULT '',
+    daily_goal_minutes INTEGER DEFAULT 120,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    is_archived INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS deleted_tags (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, tag_id)\n  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_tags (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL,
+    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, tag_id)
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS sessions (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),\n    duration_seconds INTEGER NOT NULL,\n    completed_at TEXT NOT NULL\n  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT,
+    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),
+    duration_seconds INTEGER NOT NULL,
+    completed_at TEXT NOT NULL
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at)`,
-  `CREATE TABLE IF NOT EXISTS coffee_cups (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    date TEXT NOT NULL,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS coffee_cups (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT,
+    date TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_date ON coffee_cups(user_id, date)`,
-  `CREATE TABLE IF NOT EXISTS user_settings (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    work_duration_minutes INTEGER DEFAULT 25,\n    short_break_duration_minutes INTEGER DEFAULT 5,\n    long_break_duration_minutes INTEGER DEFAULT 25,\n    long_break_interval INTEGER DEFAULT 4,\n    auto_start_breaks INTEGER DEFAULT 0,\n    auto_start_pomodoros INTEGER DEFAULT 0,\n    sound_enabled INTEGER DEFAULT 1,\n    sound_volume REAL DEFAULT 0.8,\n    notifications_enabled INTEGER DEFAULT 0,\n    keep_awake INTEGER DEFAULT 0,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
-  `CREATE TABLE IF NOT EXISTS active_timers (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    session_type TEXT NOT NULL,\n    status TEXT NOT NULL,\n    remaining_seconds INTEGER NOT NULL,\n    total_seconds INTEGER NOT NULL,\n    target_end_time INTEGER,\n    current_cycle INTEGER NOT NULL,\n    tag_id TEXT,\n    timer_run_id TEXT,\n    updated_at_ms INTEGER NOT NULL,\n    last_heartbeat_ms INTEGER\n  )`,
-  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    cup_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, cup_id)\n  )`,
+  `CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    work_duration_minutes INTEGER DEFAULT 25,
+    short_break_duration_minutes INTEGER DEFAULT 5,
+    long_break_duration_minutes INTEGER DEFAULT 25,
+    long_break_interval INTEGER DEFAULT 4,
+    auto_start_breaks INTEGER DEFAULT 0,
+    auto_start_pomodoros INTEGER DEFAULT 0,
+    sound_enabled INTEGER DEFAULT 1,
+    sound_volume REAL DEFAULT 0.8,
+    notifications_enabled INTEGER DEFAULT 0,
+    keep_awake INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS active_timers (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    session_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    remaining_seconds INTEGER NOT NULL,
+    total_seconds INTEGER NOT NULL,
+    target_end_time INTEGER,
+    current_cycle INTEGER NOT NULL,
+    tag_id TEXT,
+    timer_run_id TEXT,
+    updated_at_ms INTEGER NOT NULL,
+    last_heartbeat_ms INTEGER
+  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cup_id TEXT NOT NULL,
+    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, cup_id)
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_coffee_cups_user ON deleted_coffee_cups(user_id)`,
 ];
 
@@ -562,7 +628,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
       }
 
-      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows, deletedCoffeeRows] = await Promise.all([\n        env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
+      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows, deletedCoffeeRows] = await Promise.all([
+        env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
           id: string;
           email: string;
           display_name: string;
