@@ -53,72 +53,9 @@ function generateSilentKeepAliveWav(): string {
 }
 
 /**
- * Generates the C5 - E5 - G5 major triad completion chime as a 44.1 kHz WAV.
- */
-function generateWorkChimeWav(): string {
-  const sampleRate = 44100;
-  const durationSec = 1.65;
-  const numSamples = Math.floor(sampleRate * durationSec);
-  const samples = new Float32Array(numSamples);
-  const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
-
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let val = 0;
-    for (let idx = 0; idx < notes.length; idx++) {
-      const noteStart = idx * 0.14;
-      const dt = t - noteStart;
-      if (dt >= 0 && dt <= 1.3) {
-        let env = 0;
-        if (dt <= 0.02) {
-          env = (dt / 0.02) * 0.33;
-        } else {
-          env = 0.33 * Math.pow(0.00025, (dt - 0.02) / 1.28);
-        }
-        val += Math.sin(2 * Math.PI * notes[idx] * dt) * env;
-      }
-    }
-    samples[i] = val;
-  }
-  return createWavBlobUrl(samples, sampleRate);
-}
-
-/**
- * Generates the A4 - C#5 - E5 calming triangle-wave break chime as a 44.1 kHz WAV.
- */
-function generateBreakChimeWav(): string {
-  const sampleRate = 44100;
-  const durationSec = 1.95;
-  const numSamples = Math.floor(sampleRate * durationSec);
-  const samples = new Float32Array(numSamples);
-  const notes = [440.0, 554.37, 659.25]; // A4 major chord
-
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let val = 0;
-    for (let idx = 0; idx < notes.length; idx++) {
-      const noteStart = idx * 0.1;
-      const dt = t - noteStart;
-      if (dt >= 0 && dt <= 1.7) {
-        let env = 0;
-        if (dt <= 0.03) {
-          env = (dt / 0.03) * 0.3;
-        } else {
-          env = 0.3 * Math.pow(0.00025, (dt - 0.03) / 1.67);
-        }
-        const tri = (2 / Math.PI) * Math.asin(Math.sin(2 * Math.PI * notes[idx] * dt));
-        val += tri * env;
-      }
-    }
-    samples[i] = val;
-  }
-  return createWavBlobUrl(samples, sampleRate);
-}
-
-/**
- * SoundService provides synthesized audio feedback using both an HTML5 <audio> pipeline
- * (which stays active on mobile when the phone screen is turned off and plays through
- * iOS Silent Mode) and the Web Audio API as a fallback.
+ * SoundService provides synthesized audio feedback using Web Audio API while maintaining
+ * an uninterrupted HTML5 <audio> + Web Audio keep-alive session in the background so
+ * mobile browsers never cut off the completion chime mid-ring when on the Home Screen or locked.
  */
 export class SoundService {
   private audioCtx: AudioContext | null = null;
@@ -127,17 +64,14 @@ export class SoundService {
 
   private bgAudio: HTMLAudioElement | null = null;
   private silentWavUrl: string | null = null;
-  private workChimeWavUrl: string | null = null;
-  private breakChimeWavUrl: string | null = null;
   private keepAliveActive: boolean = false;
-  private isPlayingChime: boolean = false;
+  private chimeEndTimeMs: number = 0;
+  private deferredStopTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
       try {
         this.silentWavUrl = generateSilentKeepAliveWav();
-        this.workChimeWavUrl = generateWorkChimeWav();
-        this.breakChimeWavUrl = generateBreakChimeWav();
       } catch {
         // Ignore if Blob/URL is unavailable in test environment
       }
@@ -151,17 +85,11 @@ export class SoundService {
       audio.setAttribute('playsinline', 'true');
       audio.setAttribute('webkit-playsinline', 'true');
       audio.preload = 'auto';
-
-      audio.onended = () => {
-        this.isPlayingChime = false;
-        if (this.keepAliveActive && this.silentWavUrl) {
-          audio.src = this.silentWavUrl;
-          audio.loop = true;
-          audio.volume = 0.05;
-          audio.play().catch(() => {});
-        }
-      };
-
+      audio.loop = true;
+      audio.volume = 0.05;
+      if (this.silentWavUrl) {
+        audio.src = this.silentWavUrl;
+      }
       this.bgAudio = audio;
     }
     return this.bgAudio;
@@ -190,23 +118,24 @@ export class SoundService {
 
   /**
    * Starts an inaudible keep-alive audio loop when the timer is started by a user gesture.
-   * Using an HTML5 <audio> element playing a real PCM WAV loop prevents mobile OSes
-   * (iOS Safari / Android Chrome) from suspending JavaScript timers when the phone screen
-   * is turned off, and keeps the media element active so the completion chime plays out loud
-   * when the timer reaches 00:00 even while the phone is locked.
+   * Keeping both the HTML5 <audio> loop and Web Audio oscillator alive without swapping `.src`
+   * prevents mobile OSes from suspending the background tab or cutting off the completion chime.
    */
   startSilentKeepAlive(): void {
     this.keepAliveActive = true;
+    if (this.deferredStopTimer) {
+      clearTimeout(this.deferredStopTimer);
+      this.deferredStopTimer = null;
+    }
 
     try {
       const audio = this.getOrCreateBgAudio();
-      if (audio && this.silentWavUrl && !this.isPlayingChime) {
-        if (!audio.src.endsWith(this.silentWavUrl)) {
-          audio.src = this.silentWavUrl;
-        }
+      if (audio && this.silentWavUrl) {
         audio.loop = true;
         audio.volume = 0.05;
-        audio.play().catch(() => {});
+        if (audio.paused) {
+          audio.play().catch(() => {});
+        }
       }
     } catch {
       // Ignore HTML5 audio errors
@@ -243,15 +172,34 @@ export class SoundService {
 
   /**
    * Stops the silent background keep-alive audio when the timer is paused, reset, or completed.
-   * If a completion chime is currently playing on `bgAudio`, it lets the chime finish first.
+   * When `forceImmediate` is false (natural completion at 00:00), it waits until any active
+   * completion chime has completely finished ringing out before releasing the audio session.
    */
   stopSilentKeepAlive(forceImmediate: boolean = false): void {
     this.keepAliveActive = false;
 
+    if (this.deferredStopTimer) {
+      clearTimeout(this.deferredStopTimer);
+      this.deferredStopTimer = null;
+    }
+
+    const remainingChimeMs = this.chimeEndTimeMs - Date.now();
+    if (!forceImmediate && remainingChimeMs > 0) {
+      this.deferredStopTimer = setTimeout(() => {
+        this.deferredStopTimer = null;
+        if (!this.keepAliveActive) {
+          this.stopKeepAliveNodesNow();
+        }
+      }, remainingChimeMs + 250);
+      return;
+    }
+
+    this.stopKeepAliveNodesNow();
+  }
+
+  private stopKeepAliveNodesNow(): void {
     try {
-      if (this.bgAudio && (forceImmediate || !this.isPlayingChime)) {
-        this.isPlayingChime = false;
-        this.bgAudio.loop = false;
+      if (this.bgAudio) {
         this.bgAudio.pause();
       }
     } catch {
@@ -282,20 +230,8 @@ export class SoundService {
     const clampedVol = Math.max(0, Math.min(1, volume));
     if (clampedVol === 0) return;
 
-    const audio = this.getOrCreateBgAudio();
-    if (audio && this.workChimeWavUrl) {
-      this.isPlayingChime = true;
-      audio.loop = false;
-      audio.src = this.workChimeWavUrl;
-      audio.volume = clampedVol;
-      audio.currentTime = 0;
-      audio.play().catch(() => {
-        this.isPlayingChime = false;
-        this.playWebAudioChime(clampedVol);
-      });
-      return;
-    }
-
+    // Reserve keep-alive grace window so the OS does not suspend the tab before the 1.65s chime finishes
+    this.chimeEndTimeMs = Date.now() + 2600;
     this.playWebAudioChime(clampedVol);
   }
 
@@ -303,27 +239,35 @@ export class SoundService {
     const ctx = this.getAudioContext();
     if (!ctx) return;
 
-    const notes = [523.25, 659.25, 783.99];
-    const now = ctx.currentTime;
+    const scheduleNotes = () => {
+      const notes = [523.25, 659.25, 783.99];
+      const now = ctx.currentTime;
 
-    notes.forEach((freq, idx) => {
-      const noteStartTime = now + idx * 0.14;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      notes.forEach((freq, idx) => {
+        const noteStartTime = now + idx * 0.14;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
 
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, noteStartTime);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, noteStartTime);
 
-      gain.gain.setValueAtTime(0.0001, noteStartTime);
-      gain.gain.exponentialRampToValueAtTime(0.4 * clampedVol, noteStartTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, noteStartTime + 1.2);
+        gain.gain.setValueAtTime(0.0001, noteStartTime);
+        gain.gain.exponentialRampToValueAtTime(0.4 * clampedVol, noteStartTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteStartTime + 1.2);
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
 
-      osc.start(noteStartTime);
-      osc.stop(noteStartTime + 1.3);
-    });
+        osc.start(noteStartTime);
+        osc.stop(noteStartTime + 1.3);
+      });
+    };
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(scheduleNotes).catch(scheduleNotes);
+    } else {
+      scheduleNotes();
+    }
   }
 
   /**
@@ -333,20 +277,8 @@ export class SoundService {
     const clampedVol = Math.max(0, Math.min(1, volume));
     if (clampedVol === 0) return;
 
-    const audio = this.getOrCreateBgAudio();
-    if (audio && this.breakChimeWavUrl) {
-      this.isPlayingChime = true;
-      audio.loop = false;
-      audio.src = this.breakChimeWavUrl;
-      audio.volume = clampedVol;
-      audio.currentTime = 0;
-      audio.play().catch(() => {
-        this.isPlayingChime = false;
-        this.playWebAudioBreakComplete(clampedVol);
-      });
-      return;
-    }
-
+    // Reserve keep-alive grace window so the OS does not suspend the tab before the 1.95s chime finishes
+    this.chimeEndTimeMs = Date.now() + 2800;
     this.playWebAudioBreakComplete(clampedVol);
   }
 
@@ -354,27 +286,35 @@ export class SoundService {
     const ctx = this.getAudioContext();
     if (!ctx) return;
 
-    const notes = [440.0, 554.37, 659.25];
-    const now = ctx.currentTime;
+    const scheduleNotes = () => {
+      const notes = [440.0, 554.37, 659.25];
+      const now = ctx.currentTime;
 
-    notes.forEach((freq, idx) => {
-      const noteStartTime = now + idx * 0.1;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      notes.forEach((freq, idx) => {
+        const noteStartTime = now + idx * 0.1;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
 
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq, noteStartTime);
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, noteStartTime);
 
-      gain.gain.setValueAtTime(0.0001, noteStartTime);
-      gain.gain.exponentialRampToValueAtTime(0.35 * clampedVol, noteStartTime + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.0001, noteStartTime + 1.6);
+        gain.gain.setValueAtTime(0.0001, noteStartTime);
+        gain.gain.exponentialRampToValueAtTime(0.35 * clampedVol, noteStartTime + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteStartTime + 1.6);
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
 
-      osc.start(noteStartTime);
-      osc.stop(noteStartTime + 1.7);
-    });
+        osc.start(noteStartTime);
+        osc.stop(noteStartTime + 1.7);
+      });
+    };
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(scheduleNotes).catch(scheduleNotes);
+    } else {
+      scheduleNotes();
+    }
   }
 }
 

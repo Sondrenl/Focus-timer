@@ -1,8 +1,10 @@
 import { SessionType } from '../../types/timer';
 
+export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
+
 /**
  * Service to handle browser & mobile lock-screen notifications via Service Worker
- * with graceful fallback and permission handling.
+ * with graceful fallback and live permission status inspection.
  */
 export class NotificationService {
   private swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
@@ -22,13 +24,28 @@ export class NotificationService {
     return typeof window !== 'undefined' && 'Notification' in window;
   }
 
+  getPermissionState(): NotificationPermissionStatus {
+    if (!this.isSupported()) return 'unsupported';
+    return Notification.permission;
+  }
+
   async requestPermission(): Promise<boolean> {
     if (!this.isSupported()) return false;
     try {
       if (Notification.permission === 'granted') {
         return true;
       }
-      const permission = await Notification.requestPermission();
+      // Support both Promise-based and legacy callback-based Notification.requestPermission
+      const permission = await new Promise<NotificationPermission>((resolve) => {
+        try {
+          const maybePromise = Notification.requestPermission((res) => resolve(res));
+          if (maybePromise && typeof maybePromise.then === 'function') {
+            maybePromise.then(resolve).catch(() => resolve(Notification.permission));
+          }
+        } catch {
+          resolve(Notification.permission);
+        }
+      });
       return permission === 'granted';
     } catch {
       return false;
@@ -40,26 +57,37 @@ export class NotificationService {
     return Notification.permission === 'granted';
   }
 
-  private async getRegistration(): Promise<ServiceWorkerRegistration | null> {
+  private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
       return null;
     }
     try {
       const existing = await navigator.serviceWorker.getRegistration();
-      if (existing) return existing;
+      if (existing?.active) return existing;
+
       if (this.swRegistrationPromise) {
-        return await this.swRegistrationPromise;
+        const reg = await this.swRegistrationPromise;
+        if (reg?.active) return reg;
+      } else {
+        const reg = await navigator.serviceWorker.register('/sw.js');
+        if (reg?.active) return reg;
       }
-      return await navigator.serviceWorker.register('/sw.js');
+
+      // Wait briefly (up to 1200ms) for navigator.serviceWorker.ready if worker is still activating
+      const readyReg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
+      ]);
+      return readyReg && readyReg.active ? readyReg : null;
     } catch {
       return null;
     }
   }
 
-  notify(title: string, body: string): void {
+  async notify(title: string, body: string): Promise<boolean> {
     this.cancelScheduledNotification();
 
-    if (!this.hasPermission()) return;
+    if (!this.hasPermission()) return false;
 
     try {
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -69,42 +97,36 @@ export class NotificationService {
       // Ignore vibration errors
     }
 
-    // Prefer ServiceWorkerRegistration.showNotification (required by mobile browsers & lock screens)
-    this.getRegistration()
-      .then((reg) => {
-        if (reg && typeof reg.showNotification === 'function') {
-          return reg.showNotification(title, {
-            body,
-            icon: '/favicon.svg',
-            badge: '/favicon.svg',
-            tag: 'pomodor-timer-complete',
-            renotify: true,
-            vibrate: [200, 100, 200, 100, 400],
-          } as NotificationOptions);
-        }
-        // Fallback for desktop environments without an active Service Worker
-        new Notification(title, {
-          body,
-          icon: '/favicon.svg',
-          tag: 'pomodor-timer-complete',
-        });
-      })
-      .catch(() => {
-        try {
-          new Notification(title, {
-            body,
-            icon: '/favicon.svg',
-            tag: 'pomodor-timer-complete',
-          });
-        } catch (err) {
-          console.warn('Unable to dispatch notification:', err);
-        }
-      });
+    const uniqueTag = `pomodor-timer-${Date.now()}`;
+    const options: NotificationOptions = {
+      body,
+      icon: '/favicon.svg',
+      badge: '/favicon.svg',
+      tag: uniqueTag,
+    };
+
+    try {
+      const reg = await this.getActiveRegistration();
+      if (reg && reg.active && typeof reg.showNotification === 'function') {
+        await reg.showNotification(title, options);
+        return true;
+      }
+    } catch {
+      // Fall through to native Notification constructor
+    }
+
+    try {
+      new Notification(title, options);
+      return true;
+    } catch (err) {
+      console.warn('Unable to dispatch notification:', err);
+      return false;
+    }
   }
 
   /**
    * Schedules a backup notification in the Service Worker at the exact targetEndTime
-   * so the phone lock screen still receives the alert even if the browser throttles the page.
+   * so the phone lock screen or Home Screen still receives the alert even if the browser throttles the page.
    */
   scheduleTimerNotification(targetEndTimeMs: number, sessionType: SessionType, enabled: boolean): void {
     if (!enabled || !this.hasPermission()) {
@@ -118,7 +140,7 @@ export class NotificationService {
         ? 'Great focus! Time to take a well-deserved break.'
         : 'Ready to dive back into deep work?';
 
-    this.getRegistration().then((reg) => {
+    this.getActiveRegistration().then((reg) => {
       const worker = reg?.active || navigator.serviceWorker?.controller;
       if (worker) {
         worker.postMessage({
@@ -133,7 +155,7 @@ export class NotificationService {
 
   cancelScheduledNotification(): void {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-    this.getRegistration().then((reg) => {
+    this.getActiveRegistration().then((reg) => {
       const worker = reg?.active || navigator.serviceWorker?.controller;
       if (worker) {
         worker.postMessage({

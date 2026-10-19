@@ -5,6 +5,7 @@ import { Switch } from '../ui/Switch';
 import { Button } from '../ui/Button';
 import { Clock, Volume2, Bell, RotateCcw, Check, Sparkles, Target } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
+import { NotificationPermissionStatus } from '../../services/notification/NotificationService';
 
 /**
  * Sanitizes a decimal string input to allow digits and at most one decimal point
@@ -37,6 +38,10 @@ function sanitizeDecimalInput(raw: string): string {
 export const SettingsView: React.FC = () => {
   const { settings, updateSettings, profile, updateProfile, sound, notifications } = useApp();
   const [savedToast, setSavedToast] = useState(false);
+  const [permissionState, setPermissionState] = useState<NotificationPermissionStatus>(() =>
+    notifications.getPermissionState()
+  );
+  const [notifFeedback, setNotifFeedback] = useState<string | null>(null);
 
   // Local string draft states so the user can freely clear and type new numbers (including decimals) without snapping back mid-edit
   const [workInput, setWorkInput] = useState(() => String(settings.workDurationMinutes));
@@ -44,6 +49,19 @@ export const SettingsView: React.FC = () => {
   const [longBreakInput, setLongBreakInput] = useState(() => String(settings.longBreakDurationMinutes));
   const [intervalInput, setIntervalInput] = useState(() => String(settings.longBreakInterval));
   const [dailyGoalInput, setDailyGoalInput] = useState(() => String(profile.dailyGoalMinutes || 120));
+
+  useEffect(() => {
+    const refreshPermission = () => {
+      setPermissionState(notifications.getPermissionState());
+    };
+    refreshPermission();
+    window.addEventListener('focus', refreshPermission);
+    document.addEventListener('visibilitychange', refreshPermission);
+    return () => {
+      window.removeEventListener('focus', refreshPermission);
+      document.removeEventListener('visibilitychange', refreshPermission);
+    };
+  }, [notifications]);
 
   useEffect(() => {
     setWorkInput((prev) => {
@@ -99,6 +117,11 @@ export const SettingsView: React.FC = () => {
   const showSaved = () => {
     setSavedToast(true);
     setTimeout(() => setSavedToast(false), 2000);
+  };
+
+  const showNotifFeedback = (msg: string) => {
+    setNotifFeedback(msg);
+    setTimeout(() => setNotifFeedback(null), 4000);
   };
 
   const handleDecimalDurationChange = (
@@ -194,15 +217,57 @@ export const SettingsView: React.FC = () => {
   const handleToggleNotifications = async (enable: boolean) => {
     if (!enable) {
       updateSettings({ notificationsEnabled: false });
+      setPermissionState(notifications.getPermissionState());
       showSaved();
       return;
     }
     const granted = await notifications.requestPermission();
+    const currentPerm = notifications.getPermissionState();
+    setPermissionState(currentPerm);
     updateSettings({ notificationsEnabled: granted });
     if (granted) {
-      notifications.notify('Notifications Enabled', 'Focus Timer will alert you when intervals complete!');
+      const sent = await notifications.notify(
+        'Notifications Enabled',
+        'Focus Timer will alert you when intervals complete!'
+      );
+      showNotifFeedback(sent ? 'Test alert sent!' : 'Enabled! Check system notification settings.');
+    } else if (currentPerm === 'denied') {
+      showNotifFeedback('Notifications are blocked in your browser site settings.');
+    } else if (currentPerm === 'unsupported') {
+      showNotifFeedback('On iPhone/iPad, use Share → Add to Home Screen to enable notifications.');
     }
     showSaved();
+  };
+
+  const handleTestNotification = async () => {
+    const currentPerm = notifications.getPermissionState();
+    if (currentPerm === 'unsupported') {
+      showNotifFeedback('On iPhone/iPad, use Share → Add to Home Screen to enable push notifications.');
+      return;
+    }
+
+    const granted = await notifications.requestPermission();
+    const updatedPerm = notifications.getPermissionState();
+    setPermissionState(updatedPerm);
+
+    if (!granted) {
+      showNotifFeedback(
+        updatedPerm === 'denied'
+          ? 'Blocked by browser — allow Notifications for this site in browser settings.'
+          : 'Notification permission was not granted.'
+      );
+      return;
+    }
+
+    if (!settings.notificationsEnabled) {
+      updateSettings({ notificationsEnabled: true });
+    }
+
+    const sent = await notifications.notify(
+      'Test Notification',
+      'Notifications are working on this device!'
+    );
+    showNotifFeedback(sent ? 'Test alert sent!' : 'Could not dispatch alert — check OS notification settings.');
   };
 
   const handleResetDefaults = () => {
@@ -215,6 +280,42 @@ export const SettingsView: React.FC = () => {
     updateProfile({ dailyGoalMinutes: 120 });
     showSaved();
   };
+
+  const getNotificationSubtitle = (): { text: string; className: string } => {
+    if (notifFeedback) {
+      return { text: notifFeedback, className: 'text-md-primary font-medium' };
+    }
+    if (permissionState === 'unsupported') {
+      return {
+        text: 'Requires Add to Home Screen on iOS, or a supported desktop/Android browser',
+        className: 'text-amber-600 dark:text-amber-400',
+      };
+    }
+    if (permissionState === 'denied') {
+      return {
+        text: 'Blocked in browser — enable Notifications in your browser site settings',
+        className: 'text-rose-600 dark:text-rose-400',
+      };
+    }
+    if (permissionState === 'granted' && settings.notificationsEnabled) {
+      return {
+        text: 'Permission granted — alerts active on this device',
+        className: 'text-emerald-600 dark:text-emerald-400',
+      };
+    }
+    if (permissionState === 'granted' && !settings.notificationsEnabled) {
+      return {
+        text: 'Permission granted — toggle switch on to receive alerts',
+        className: 'text-md-on-surface-variant',
+      };
+    }
+    return {
+      text: 'Push notifications when intervals complete',
+      className: 'text-md-on-surface-variant',
+    };
+  };
+
+  const notifSubtitle = getNotificationSubtitle();
 
   return (
     <div className="w-full max-w-3xl mx-auto py-6 px-4 flex flex-col gap-6">
@@ -415,25 +516,33 @@ export const SettingsView: React.FC = () => {
             </div>
             <button
               onClick={handleTestSound}
-              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors"
+              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0"
             >
               Test Chime
             </button>
           </div>
 
-          {/* Desktop / Push Notifications Toggle */}
-          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
-            <div className="flex items-center gap-2">
-              <Bell className="w-4 h-4 text-md-on-surface-variant" />
-              <div>
-                <div className="text-sm font-semibold text-md-on-surface">Desktop Notifications</div>
-                <div className="text-xs text-md-on-surface-variant">Push notifications when intervals complete</div>
+          {/* Desktop / Push Notifications Toggle & Test */}
+          <div className="flex items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
+            <div className="flex items-center gap-2 min-w-0">
+              <Bell className="w-4 h-4 text-md-on-surface-variant shrink-0" />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-md-on-surface">Notifications</div>
+                <div className={`text-xs ${notifSubtitle.className}`}>{notifSubtitle.text}</div>
               </div>
             </div>
-            <Switch
-              checked={settings.notificationsEnabled && notifications.hasPermission()}
-              onChange={handleToggleNotifications}
-            />
+            <div className="flex items-center gap-2.5 shrink-0">
+              <button
+                onClick={handleTestNotification}
+                className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors"
+              >
+                Test Alert
+              </button>
+              <Switch
+                checked={settings.notificationsEnabled && permissionState === 'granted'}
+                onChange={handleToggleNotifications}
+              />
+            </div>
           </div>
         </div>
       </Card>

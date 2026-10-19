@@ -232,6 +232,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isInitialMountDoneRef = useRef<boolean>(false);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const workerRef = useRef<Worker | null>(null);
+  const workerGraceStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fresh mutable refs for state to eliminate stale closures across callbacks
   const sessionTypeRef = useRef<SessionType>(sessionType);
@@ -486,6 +487,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Start timer helper
   const startTimer = useCallback(
     (overrideSec?: number) => {
+      if (workerGraceStopTimerRef.current) {
+        clearTimeout(workerGraceStopTimerRef.current);
+        workerGraceStopTimerRef.current = null;
+      }
+
       const secToRun = overrideSec !== undefined ? overrideSec : remainingSecondsRef.current;
       const now = authService.getServerNow();
       const target = now + secToRun * 1000;
@@ -538,6 +544,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Pause timer helper
   const pauseTimer = useCallback(() => {
+    if (workerGraceStopTimerRef.current) {
+      clearTimeout(workerGraceStopTimerRef.current);
+      workerGraceStopTimerRef.current = null;
+    }
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
@@ -573,6 +583,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Reset timer helper
   const resetTimer = useCallback(() => {
+    if (workerGraceStopTimerRef.current) {
+      clearTimeout(workerGraceStopTimerRef.current);
+      workerGraceStopTimerRef.current = null;
+    }
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
@@ -615,9 +629,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isCompletingRef.current = false;
     }, 1500);
 
-    if (workerRef.current) {
-      workerRef.current.postMessage('STOP');
-    }
     targetEndTimeRef.current = null;
     setTargetEndTime(null);
 
@@ -633,7 +644,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const currentTotalSec = totalSecondsRef.current;
 
     // Play chime BEFORE stopping keep-alive so the active mobile background audio session
-    // seamlessly transitions from the silent loop into the audible completion chime.
+    // stays alive through the entire 1.65s-1.95s chime without getting cut off by the OS.
     if (currentSettings.soundEnabled) {
       if (currentType === 'WORK') {
         sound.playChime(currentSettings.soundVolume);
@@ -644,7 +655,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (currentType === 'WORK') {
       if (currentSettings.notificationsEnabled) {
-        notifications.notify('Session Complete!', 'Great focus! Time to take a well-deserved break.');
+        void notifications.notify('Session Complete!', 'Great focus! Time to take a well-deserved break.');
       } else {
         notifications.cancelScheduledNotification();
       }
@@ -684,6 +695,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sound.stopSilentKeepAlive(false);
         statusRef.current = 'IDLE';
         setStatus('IDLE');
+        if (workerGraceStopTimerRef.current) {
+          clearTimeout(workerGraceStopTimerRef.current);
+        }
+        workerGraceStopTimerRef.current = setTimeout(() => {
+          workerGraceStopTimerRef.current = null;
+          if (statusRef.current !== 'RUNNING' && workerRef.current) {
+            workerRef.current.postMessage('STOP');
+          }
+        }, 3000);
         const payload: RemoteTimerState = {
           sessionType: nextType,
           status: 'IDLE',
@@ -700,7 +720,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else {
       // Break session finished -> Advance to WORK session!
       if (currentSettings.notificationsEnabled) {
-        notifications.notify('Break Finished', 'Ready to dive back into deep work?');
+        void notifications.notify('Break Finished', 'Ready to dive back into deep work?');
       } else {
         notifications.cancelScheduledNotification();
       }
@@ -723,6 +743,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sound.stopSilentKeepAlive(false);
         statusRef.current = 'IDLE';
         setStatus('IDLE');
+        if (workerGraceStopTimerRef.current) {
+          clearTimeout(workerGraceStopTimerRef.current);
+        }
+        workerGraceStopTimerRef.current = setTimeout(() => {
+          workerGraceStopTimerRef.current = null;
+          if (statusRef.current !== 'RUNNING' && workerRef.current) {
+            workerRef.current.postMessage('STOP');
+          }
+        }, 3000);
         const payload: RemoteTimerState = {
           sessionType: 'WORK',
           status: 'IDLE',
@@ -890,7 +919,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setActiveTagId(remote.activeTagId);
         }
 
-        if (workerRef.current) {
+        if (workerRef.current && !workerGraceStopTimerRef.current) {
           workerRef.current.postMessage('STOP');
         }
         sound.stopSilentKeepAlive(false);
@@ -940,6 +969,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     return () => {
+      if (workerGraceStopTimerRef.current) {
+        clearTimeout(workerGraceStopTimerRef.current);
+        workerGraceStopTimerRef.current = null;
+      }
       if (workerRef.current) {
         workerRef.current.postMessage('STOP');
         workerRef.current.terminate();
@@ -951,12 +984,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [authService]);
 
-  // Ensure Web Worker state stays synced with status
+  // Ensure Web Worker state stays synced with status (respecting completion grace period)
   useEffect(() => {
     if (!workerRef.current) return;
     if (status === 'RUNNING' && targetEndTimeRef.current !== null) {
       workerRef.current.postMessage('START');
-    } else {
+    } else if (!workerGraceStopTimerRef.current) {
       workerRef.current.postMessage('STOP');
     }
   }, [status]);
@@ -1047,6 +1080,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Skip interval helper
   const skipInterval = useCallback(() => {
+    if (workerGraceStopTimerRef.current) {
+      clearTimeout(workerGraceStopTimerRef.current);
+      workerGraceStopTimerRef.current = null;
+    }
     if (workerRef.current) {
       workerRef.current.postMessage('STOP');
     }
@@ -1113,6 +1150,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Set session type manually helper
   const setSessionTypeManually = useCallback(
     (type: SessionType) => {
+      if (workerGraceStopTimerRef.current) {
+        clearTimeout(workerGraceStopTimerRef.current);
+        workerGraceStopTimerRef.current = null;
+      }
       if (workerRef.current) {
         workerRef.current.postMessage('STOP');
       }

@@ -16,8 +16,7 @@ function showTimerNotification(title, body) {
     body,
     icon: '/favicon.svg',
     badge: '/favicon.svg',
-    tag: 'pomodor-timer-complete',
-    renotify: true,
+    tag: 'pomodor-timer-' + Date.now(),
     vibrate: [200, 100, 200, 100, 400],
     requireInteraction: false,
   });
