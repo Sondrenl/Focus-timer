@@ -14,7 +14,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   };
 
   return (
-    <header className="w-full flex items-center justify-between px-4 md:px-6 py-3 sticky top-0 z-20 bg-transparent">
+    <header className="w-full shrink-0 flex items-center justify-between px-4 md:px-6 py-3 sticky top-0 z-20 bg-md-background/90 backdrop-blur-xs md:bg-transparent md:backdrop-blur-none">
       {/* Left: Mobile hamburger drawer trigger */}
       <div className="flex items-center gap-3">
         <button

@@ -17,6 +17,7 @@
   --md-sys-color-outline-variant: #ede7dc;
 }
 
+html,
 body {
   margin: 0;
   font-family: 'Roboto Flex', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -24,6 +25,15 @@ body {
   color: #1e1b16;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+@media (max-width: 767px) {
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
 }
 
 /* Custom scrollbars matching M3 rounded aesthetics */
