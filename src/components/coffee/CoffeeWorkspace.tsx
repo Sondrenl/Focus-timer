@@ -1,32 +1,30 @@
 import React, { useState, useMemo } from 'react';
-import { Coffee, Plus, Minus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Coffee, Plus, Minus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
-import { toDateKey, formatFriendlyDate } from '../../utils/dates';
+import { toDateKey } from '../../utils/dates';
 
 export const CoffeeWorkspace: React.FC = () => {
   const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags } = useApp();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
-  const [viewDate, setViewDate] = useState<Date>(() => new Date());
 
-  const viewDateKey = toDateKey(viewDate);
-  const isToday = viewDateKey === toDateKey(new Date());
+  const todayDateKey = toDateKey(new Date());
 
-  // Filter cups for the selected date
-  const cupsForDate = useMemo(() => {
-    return coffeeCups.filter((c) => c.date === viewDateKey);
-  }, [coffeeCups, viewDateKey]);
+  // Filter cups for today
+  const cupsForToday = useMemo(() => {
+    return coffeeCups.filter((c) => c.date === todayDateKey);
+  }, [coffeeCups, todayDateKey]);
 
-  const totalCount = cupsForDate.length;
+  const totalCount = cupsForToday.length;
 
   const currentTag = activeTags.find((t) => t.id === selectedTagId);
   const currentTagColor = currentTag ? currentTag.color : '#8D6E63';
   const currentTagName = currentTag ? currentTag.name : 'No Tag';
 
-  // Compute breakdown of cups by tag for this date
+  // Compute breakdown of cups by tag for today
   const tagBreakdown = useMemo(() => {
     const counts = new Map<string | null, number>();
-    cupsForDate.forEach((c) => {
+    cupsForToday.forEach((c) => {
       const tid = c.tagId || null;
       counts.set(tid, (counts.get(tid) || 0) + 1);
     });
@@ -47,90 +45,38 @@ export const CoffeeWorkspace: React.FC = () => {
     });
 
     return list.sort((a, b) => b.count - a.count);
-  }, [cupsForDate, activeTags]);
+  }, [cupsForToday, activeTags]);
 
   const handleAdd = async () => {
-    await addCoffeeCup(selectedTagId, viewDateKey);
+    await addCoffeeCup(selectedTagId, todayDateKey);
   };
 
   const handleRemove = async () => {
     if (totalCount <= 0) return;
 
-    // Prioritize removing cup of the selected tag if one exists on this date
-    const cupsOfSelectedTag = cupsForDate.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
+    // Prioritize removing cup of the selected tag if one exists today
+    const cupsOfSelectedTag = cupsForToday.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
     const targetCup =
       cupsOfSelectedTag.length > 0
         ? cupsOfSelectedTag[cupsOfSelectedTag.length - 1]
-        : cupsForDate[cupsForDate.length - 1];
+        : cupsForToday[cupsForToday.length - 1];
 
     if (!targetCup) return;
 
-    await removeCoffeeCup(viewDateKey, targetCup.tagId, targetCup.id);
-  };
-
-  const goToPrevDay = () => {
-    setViewDate((prev) => {
-      const d = new Date(prev);
-      d.setDate(d.getDate() - 1);
-      return d;
-    });
-  };
-
-  const goToNextDay = () => {
-    setViewDate((prev) => {
-      const d = new Date(prev);
-      d.setDate(d.getDate() + 1);
-      return d;
-    });
-  };
-
-  const goToToday = () => {
-    setViewDate(new Date());
+    await removeCoffeeCup(todayDateKey, targetCup.tagId, targetCup.id);
   };
 
   return (
     <div className="w-full max-w-xl mx-auto flex flex-col items-center justify-center py-6 px-4">
       {/* 1. Top Tag Selector for Next Cup */}
-      <div className="w-full flex flex-col items-center mb-4">
+      <div className="w-full flex flex-col items-center mb-5">
         <CoffeeTagSelector
           selectedTagId={selectedTagId}
           onSelectTagId={setSelectedTagId}
         />
       </div>
 
-      {/* 2. Date Switcher */}
-      <div className="flex items-center gap-2 mb-4 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 text-xs font-semibold shadow-xs">
-        <button
-          onClick={goToPrevDay}
-          className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
-          title="Previous day"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={goToToday}
-          className="px-3 py-1 rounded-xl text-md-on-surface hover:text-md-primary transition-colors text-center"
-        >
-          {isToday ? 'Today, ' : ''}
-          {formatFriendlyDate(viewDate, true)}
-        </button>
-
-        <button
-          onClick={goToNextDay}
-          disabled={isToday}
-          className={`p-1.5 rounded-xl transition-colors ${
-            isToday
-              ? 'text-md-outline/40 cursor-not-allowed'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-          title="Next day"
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* 3. Central Coffee Hero Circle (Permanent Coffee Theme - does not change to tag color) */}
+      {/* 2. Central Coffee Hero Circle (Permanent Coffee Theme - does not change to tag color) */}
       <div className="relative flex flex-col items-center justify-center my-2 select-none">
         <div className="relative w-72 h-72 md:w-80 md:h-80 flex items-center justify-center">
           {/* Subtle Neutral Coffee Outer Track Ring */}
@@ -148,15 +94,15 @@ export const CoffeeWorkspace: React.FC = () => {
               </div>
 
               <div className="text-xs font-bold text-md-on-surface-variant mt-0.5 uppercase tracking-wider">
-                {totalCount === 1 ? 'Cup Total' : 'Cups Total'}
+                {totalCount === 1 ? 'Cup Today' : 'Cups Today'}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 4. Tag Breakdown Chips for Today */}
-      <div className="w-full flex flex-col items-center mt-2 mb-4">
+      {/* 3. Tag Breakdown Chips for Today */}
+      <div className="w-full flex flex-col items-center mt-3 mb-4">
         {tagBreakdown.length > 0 ? (
           <div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
             {tagBreakdown.map((item) => {
@@ -165,7 +111,7 @@ export const CoffeeWorkspace: React.FC = () => {
                 <button
                   key={item.name}
                   onClick={() => setSelectedTagId(item.tagId)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all border ${
+                  className={`flex items-center gap-2 min-h-[40px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-semibold transition-all border ${
                     isSelected
                       ? 'border-md-primary bg-md-primary/10 shadow-xs'
                       : 'border-md-outline-variant/30 bg-md-surface-container hover:bg-md-surface-container-high'
@@ -173,7 +119,7 @@ export const CoffeeWorkspace: React.FC = () => {
                   title={`Click to set next cup tag to ${item.name}`}
                 >
                   <span
-                    className="w-2 h-2 rounded-full shrink-0"
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
                     style={{ backgroundColor: item.color }}
                   />
                   <span className="text-md-on-surface">{item.name}:</span>
@@ -183,16 +129,16 @@ export const CoffeeWorkspace: React.FC = () => {
             })}
           </div>
         ) : (
-          <span className="text-xs text-md-outline">
-            No coffee logged for this day yet.
+          <span className="text-xs sm:text-sm text-md-outline">
+            No coffee logged today yet.
           </span>
         )}
       </div>
 
-      {/* 5. Visual Cup Tray (Color-coded cups logged today) */}
+      {/* 4. Visual Cup Tray (Color-coded cups logged today) */}
       {totalCount > 0 && (
-        <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-sm mb-4 px-2 py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
-          {cupsForDate.map((cup, idx) => {
+        <div className="flex flex-wrap items-center justify-center gap-2 max-w-sm mb-5 px-3 py-2 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+          {cupsForToday.map((cup, idx) => {
             const cupTag = activeTags.find((t) => t.id === cup.tagId);
             const cupColor = cupTag ? cupTag.color : '#8D6E63';
             const cupName = cupTag ? cupTag.name : 'No Tag';
@@ -200,7 +146,7 @@ export const CoffeeWorkspace: React.FC = () => {
             return (
               <div
                 key={cup.id}
-                className="flex items-center justify-center w-7 h-7 rounded-xl transition-transform hover:scale-115 cursor-help"
+                className="flex items-center justify-center w-8 h-8 rounded-xl transition-transform hover:scale-115 cursor-help"
                 style={{ backgroundColor: `${cupColor}20` }}
                 title={`Cup #${idx + 1}: ${cupName}`}
               >
@@ -211,27 +157,27 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       )}
 
-      {/* 6. Controls */}
+      {/* 5. Controls */}
       <div className="flex items-center justify-center gap-6 mt-1">
         {/* Left: Minus Button */}
         <button
           onClick={handleRemove}
           disabled={totalCount <= 0}
           title="Remove cup"
-          className={`flex items-center justify-center w-14 h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
+          className={`flex items-center justify-center w-16 h-16 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
             totalCount <= 0
               ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed'
               : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
           }`}
           aria-label="Remove cup of coffee"
         >
-          <Minus className="w-6 h-6" />
+          <Minus className="w-7 h-7" />
         </button>
 
         {/* Center: Add Button (Hero FAB showing next cup tag indicator) */}
         <button
           onClick={handleAdd}
-          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
+          className="flex items-center justify-center w-20 h-20 sm:w-22 sm:h-22 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
           style={{ backgroundColor: currentTagColor }}
           aria-label={`Add cup of coffee with tag ${currentTagName}`}
           title={`Add cup (${currentTagName})`}
@@ -241,8 +187,8 @@ export const CoffeeWorkspace: React.FC = () => {
       </div>
 
       {/* Bottom Cue */}
-      <div className="text-[11px] text-md-outline mt-5 select-none text-center">
-        Tapping <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> logs a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
+      <div className="text-xs text-md-outline mt-5 select-none text-center">
+        Tapping <kbd className="font-mono px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> logs a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
       </div>
     </div>
   );

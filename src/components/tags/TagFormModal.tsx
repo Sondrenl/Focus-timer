@@ -23,12 +23,14 @@ interface TagFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   tagToEdit?: Tag | null;
+  onTagSaved?: (tag: Tag) => void;
 }
 
 export const TagFormModal: React.FC<TagFormModalProps> = ({
   isOpen,
   onClose,
   tagToEdit,
+  onTagSaved,
 }) => {
   const { createTag, updateTag } = useApp();
   const [name, setName] = useState('');
@@ -54,10 +56,14 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
     }
 
     try {
+      let savedTag: Tag | null;
       if (tagToEdit) {
-        await updateTag(tagToEdit.id, { name: name.trim(), color });
+        savedTag = await updateTag(tagToEdit.id, { name: name.trim(), color });
       } else {
-        await createTag({ name: name.trim(), color });
+        savedTag = await createTag({ name: name.trim(), color });
+      }
+      if (savedTag) {
+        onTagSaved?.(savedTag);
       }
       onClose();
     } catch (err) {
@@ -72,7 +78,7 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
       onClose={onClose}
       title={tagToEdit ? 'Edit Focus Tag' : 'Create New Focus Tag'}
     >
-      <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3.5 sm:gap-5">
         <Input
           label="Tag Name"
           placeholder="e.g. Deep Work, Study, Writing"
@@ -86,11 +92,11 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
         />
 
         {/* Color Palette Picker */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <label className="text-xs font-semibold text-md-on-surface-variant px-1">
             Tag Theme Color
           </label>
-          <div className="grid grid-cols-5 gap-3 p-3 bg-md-surface-container rounded-2xl border border-md-outline-variant/30">
+          <div className="grid grid-cols-5 gap-2.5 sm:gap-3 p-2.5 sm:p-3 bg-md-surface-container rounded-2xl border border-md-outline-variant/30 place-items-center">
             {PASTEL_PALETTE.map((c) => {
               const isSelected = color.toLowerCase() === c.toLowerCase();
               return (
@@ -114,7 +120,7 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-3 border-t border-md-outline-variant/20">
+        <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-md-outline-variant/20">
           <Button type="button" variant="text" onClick={onClose}>
             Cancel
           </Button>

@@ -13,7 +13,12 @@ import { ProfileRepository } from '../services/repository/ProfileRepository';
 import { AuthService } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
-import { broadcastCoffeeCups, subscribeCoffeeCups } from '../services/timer/TimerBroadcast';
+import {
+  broadcastCoffeeCups,
+  subscribeCoffeeCups,
+  broadcastTags,
+  subscribeTags,
+} from '../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../utils/environment';
 
 interface AppContextValue {
@@ -41,6 +46,7 @@ interface AppContextValue {
   archiveTag: (id: string) => Promise<Tag | null>;
   unarchiveTag: (id: string) => Promise<Tag | null>;
   deleteTag: (id: string) => Promise<boolean>;
+  syncRemoteTags: (remoteTags: Tag[], deletedIds?: string[]) => Promise<void>;
 
   // Sessions
   sessions: CompletedSession[];
@@ -82,6 +88,59 @@ const profileRepository = new ProfileRepository(storageService);
 const coffeeRepository = new CoffeeRepository(storageService);
 const authService = AuthService.getInstance();
 
+function getTagTimestampMs(tag: Tag): number {
+  if (tag.updatedAt) {
+    const t = Date.parse(tag.updatedAt);
+    if (!Number.isNaN(t)) return t;
+  }
+  return 0;
+}
+
+function mergeTagLists(localTags: Tag[], remoteTags: Tag[], deletedTagIds: Set<string>): Tag[] {
+  const mergedMap = new Map<string, Tag>();
+
+  for (const local of localTags) {
+    if (!deletedTagIds.has(local.id)) {
+      mergedMap.set(local.id, local);
+    }
+  }
+
+  for (const remote of remoteTags) {
+    if (deletedTagIds.has(remote.id)) continue;
+    const existing = mergedMap.get(remote.id);
+    if (!existing) {
+      mergedMap.set(remote.id, remote);
+    } else {
+      const localTs = getTagTimestampMs(existing);
+      const remoteTs = getTagTimestampMs(remote);
+      // Adopt remote if its updatedAt timestamp is newer or equal (or if local had no updatedAt)
+      if (remoteTs >= localTs) {
+        mergedMap.set(remote.id, remote);
+      }
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}
+
+function areTagListsEqual(a: Tag[], b: Tag[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const t1 = a[i];
+    const t2 = b[i];
+    if (
+      t1.id !== t2.id ||
+      t1.name !== t2.name ||
+      t1.color !== t2.color ||
+      t1.isArchived !== t2.isArchived ||
+      t1.updatedAt !== t2.updatedAt
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -112,6 +171,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState());
 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
+
+  // Synchronize remote tags (including archive state) received from real-time polling or background sync
+  const syncRemoteTags = useCallback(async (remoteTags: Tag[], remoteDeletedIds?: string[]) => {
+    const deletedTagIds = authService.getDeletedTagIds();
+    if (Array.isArray(remoteDeletedIds)) {
+      remoteDeletedIds.forEach((id) => {
+        deletedTagIds.add(id);
+        authService.addDeletedTagId(id);
+      });
+    }
+
+    const localTags = await tagRepository.getAll();
+    const mergedTags = mergeTagLists(localTags, remoteTags, deletedTagIds);
+
+    if (!areTagListsEqual(localTags, mergedTags)) {
+      await tagRepository.saveAll(mergedTags);
+      setTags(mergedTags);
+    }
+  }, []);
 
   // Synchronize remote coffee cups received from real-time timer polling or background sync
   const syncRemoteCoffeeCups = useCallback(async (remoteCups: CoffeeCup[], remoteDeletedIds?: string[]) => {
@@ -167,30 +245,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
 
     try {
+      // 1. Fetch latest cloud state first so stale local defaults never clobber cloud archives/edits
+      const cloudData = await authService.fetchCloudData();
+
+      // 2. Read current local repositories after network fetch to include any recent local changes
       const currentTags = await tagRepository.getAll();
       const currentSessions = await sessionRepository.getAll();
       const currentSettings = await settingsRepository.get();
       const currentProfile = await profileRepository.get();
-      const deletedTagIds = authService.getDeletedTagIds();
-      const deletedCoffeeCupIds = authService.getDeletedCoffeeCupIds();
-
-      // 1. Push local state to Cloudflare Worker with deleted tracking IDs
-      await authService.pushCloudData({
-        profile: {
-          displayName: currentProfile.displayName,
-          avatarEmoji: currentProfile.avatarEmoji,
-          dailyGoalMinutes: currentProfile.dailyGoalMinutes,
-        },
-        tags: currentTags,
-        deletedTagIds: Array.from(deletedTagIds),
-        deletedCoffeeCupIds: Array.from(deletedCoffeeCupIds),
-        sessions: currentSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')),
-        coffeeCups: await coffeeRepository.getAll(),
-        settings: currentSettings,
-      });
-
-      // 2. Fetch latest combined state from Cloudflare
-      const cloudData = await authService.fetchCloudData();
+      const localCoffee = await coffeeRepository.getAll();
 
       if (cloudData) {
         if (Array.isArray(cloudData.deletedTagIds)) {
@@ -199,78 +262,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (Array.isArray(cloudData.deletedCoffeeCupIds)) {
           cloudData.deletedCoffeeCupIds.forEach((id) => authService.addDeletedCoffeeCupId(id));
         }
-        const effectiveDeletedTagIds = authService.getDeletedTagIds();
-        const effectiveDeletedCoffeeCupIds = authService.getDeletedCoffeeCupIds();
-
-        // Merge cloud tags EXCLUDING any locally or remotely deleted tag IDs
-        const validLocalTags = currentTags.filter((t) => !effectiveDeletedTagIds.has(t.id));
-        const mergedTagMap = new Map<string, Tag>();
-        validLocalTags.forEach((t) => mergedTagMap.set(t.id, t));
-        (cloudData.tags || []).forEach((t) => {
-          if (!effectiveDeletedTagIds.has(t.id)) {
-            mergedTagMap.set(t.id, t);
-          }
-        });
-        const finalTags = Array.from(mergedTagMap.values());
-        await tagRepository.saveAll(finalTags);
-        setTags(finalTags);
-
-        // Merge cloud sessions
-        if (cloudData.sessions) {
-          const sessionMap = new Map<string, CompletedSession>();
-          currentSessions.forEach((s) => sessionMap.set(s.id, s));
-          cloudData.sessions.forEach((s) => {
-            const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
-            sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
-          });
-          let finalSessions = Array.from(sessionMap.values()).sort(
-            (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
-          );
-          if (isProduction()) {
-            finalSessions = finalSessions.filter(
-              (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
-            );
-          }
-          await sessionRepository.saveAll(finalSessions);
-          setSessions(finalSessions);
-        }
-
-        // Merge cloud settings
-        if (cloudData.settings) {
-          const mergedSettings = { ...currentSettings, ...cloudData.settings };
-          await settingsRepository.save(mergedSettings);
-          setSettings(mergedSettings);
-        }
-
-        // Merge cloud coffee cups EXCLUDING any deleted coffee cups
-        if (cloudData.coffeeCups) {
-          const localCoffee = await coffeeRepository.getAll();
-          const cupMap = new Map<string, CoffeeCup>();
-          localCoffee.forEach((c) => {
-            if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
-              cupMap.set(c.id, c);
-            }
-          });
-          cloudData.coffeeCups.forEach((c) => {
-            if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
-              const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
-              cupMap.set(c.id, { ...c, tagId: effectiveTagId });
-            }
-          });
-          const finalCoffee = Array.from(cupMap.values()).sort(
-            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-          );
-          await coffeeRepository.saveAll(finalCoffee);
-          setCoffeeCups(finalCoffee);
-        }
-
-        // Merge cloud profile
-        if (cloudData.profile) {
-          const mergedProfile = { ...currentProfile, ...cloudData.profile };
-          await profileRepository.save(mergedProfile);
-          setProfile(mergedProfile);
-        }
       }
+
+      const effectiveDeletedTagIds = authService.getDeletedTagIds();
+      const effectiveDeletedCoffeeCupIds = authService.getDeletedCoffeeCupIds();
+
+      // 3. Merge tags using updatedAt timestamps (preserves archive/unarchive state across devices)
+      const finalTags = mergeTagLists(
+        currentTags,
+        cloudData?.tags || [],
+        effectiveDeletedTagIds
+      );
+      await tagRepository.saveAll(finalTags);
+      setTags(finalTags);
+
+      // 4. Merge sessions
+      const sessionMap = new Map<string, CompletedSession>();
+      currentSessions.forEach((s) => {
+        const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
+        sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
+      });
+      (cloudData?.sessions || []).forEach((s) => {
+        const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
+        sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
+      });
+      let finalSessions = Array.from(sessionMap.values()).sort(
+        (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+      );
+      if (isProduction()) {
+        finalSessions = finalSessions.filter(
+          (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
+        );
+      }
+      await sessionRepository.saveAll(finalSessions);
+      setSessions(finalSessions);
+
+      // 5. Merge settings
+      let finalSettings = currentSettings;
+      if (cloudData?.settings) {
+        finalSettings = { ...currentSettings, ...cloudData.settings };
+        await settingsRepository.save(finalSettings);
+        setSettings(finalSettings);
+      }
+
+      // 6. Merge coffee cups EXCLUDING any deleted coffee cups
+      const cupMap = new Map<string, CoffeeCup>();
+      localCoffee.forEach((c) => {
+        if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
+          const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
+          cupMap.set(c.id, { ...c, tagId: effectiveTagId });
+        }
+      });
+      (cloudData?.coffeeCups || []).forEach((c) => {
+        if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
+          const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
+          cupMap.set(c.id, { ...c, tagId: effectiveTagId });
+        }
+      });
+      const finalCoffee = Array.from(cupMap.values()).sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      await coffeeRepository.saveAll(finalCoffee);
+      setCoffeeCups(finalCoffee);
+
+      // 7. Merge profile
+      let finalProfile = currentProfile;
+      if (cloudData?.profile) {
+        finalProfile = { ...currentProfile, ...cloudData.profile };
+        await profileRepository.save(finalProfile);
+        setProfile(finalProfile);
+      }
+
+      // 8. Push merged state to Cloudflare Worker
+      await authService.pushCloudData({
+        profile: {
+          displayName: finalProfile.displayName,
+          avatarEmoji: finalProfile.avatarEmoji,
+          dailyGoalMinutes: finalProfile.dailyGoalMinutes,
+        },
+        tags: finalTags,
+        deletedTagIds: Array.from(effectiveDeletedTagIds),
+        deletedCoffeeCupIds: Array.from(effectiveDeletedCoffeeCupIds),
+        sessions: finalSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')),
+        coffeeCups: finalCoffee,
+        settings: finalSettings,
+      });
 
       const nowIso = new Date().toISOString();
       setAuth((prev) => ({
@@ -289,13 +365,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Multi-tab coffee broadcast synchronization
+  // Multi-tab coffee & tag broadcast synchronization
   useEffect(() => {
-    const unsubscribe = subscribeCoffeeCups((cups) => {
+    const unsubCoffee = subscribeCoffeeCups((cups) => {
       coffeeRepository.saveAll(cups);
       setCoffeeCups(cups);
     });
-    return unsubscribe;
+    const unsubTags = subscribeTags((incomingTags) => {
+      tagRepository.saveAll(incomingTags);
+      setTags(incomingTags);
+    });
+    return () => {
+      unsubCoffee();
+      unsubTags();
+    };
   }, []);
 
   // Google Sign In
@@ -460,8 +543,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = await tagRepository.getAll();
     setTags(updated);
     setActiveTagId(created.id);
+    broadcastTags(updated);
     if (auth.isAuthenticated) {
-      syncWithCloud();
+      authService.upsertTagRemote(created).then((remoteTags) => {
+        if (remoteTags) {
+          syncRemoteTags(remoteTags);
+        }
+      });
     }
     return created;
   };
@@ -470,8 +558,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result = await tagRepository.update(id, updates);
     const updated = await tagRepository.getAll();
     setTags(updated);
-    if (auth.isAuthenticated) {
-      syncWithCloud();
+    broadcastTags(updated);
+    if (auth.isAuthenticated && result) {
+      authService.upsertTagRemote(result).then((remoteTags) => {
+        if (remoteTags) {
+          syncRemoteTags(remoteTags);
+        }
+      });
     }
     return result;
   };
@@ -480,8 +573,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result = await tagRepository.archive(id);
     const updated = await tagRepository.getAll();
     setTags(updated);
-    if (auth.isAuthenticated) {
-      syncWithCloud();
+    if (activeTagId === id) {
+      const nextActive = updated.find((t) => !t.isArchived);
+      setActiveTagId(nextActive?.id ?? null);
+    }
+    broadcastTags(updated);
+    if (auth.isAuthenticated && result) {
+      authService.upsertTagRemote(result).then((remoteTags) => {
+        if (remoteTags) {
+          syncRemoteTags(remoteTags);
+        }
+      });
     }
     return result;
   };
@@ -490,8 +592,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const result = await tagRepository.unarchive(id);
     const updated = await tagRepository.getAll();
     setTags(updated);
-    if (auth.isAuthenticated) {
-      syncWithCloud();
+    broadcastTags(updated);
+    if (auth.isAuthenticated && result) {
+      authService.upsertTagRemote(result).then((remoteTags) => {
+        if (remoteTags) {
+          syncRemoteTags(remoteTags);
+        }
+      });
     }
     return result;
   };
@@ -516,6 +623,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const nextActive = updatedTags.find((t) => !t.isArchived);
       setActiveTagId(nextActive?.id ?? null);
     }
+    broadcastTags(updatedTags);
 
     // 5. If authenticated, explicitly delete on server and push
     if (auth.isAuthenticated) {
@@ -799,6 +907,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         archiveTag,
         unarchiveTag,
         deleteTag,
+        syncRemoteTags,
         sessions,
         recordSession,
         clearSessions,

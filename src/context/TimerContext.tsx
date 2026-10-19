@@ -57,7 +57,7 @@ export interface TimerContextValue {
 const TimerContext = createContext<TimerContextValue | null>(null);
 
 export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications, syncRemoteCoffeeCups } = useApp();
+  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications, syncRemoteCoffeeCups, syncRemoteTags } = useApp();
   const authService = AuthService.getInstance();
 
   // Helper to determine target duration in seconds for given session type
@@ -901,6 +901,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         syncRemoteCoffeeCups(result.coffeeCups, result.deletedCoffeeCupIds);
       }
 
+      if (result.tags && syncRemoteTags) {
+        syncRemoteTags(result.tags, result.deletedTagIds);
+      }
+
       // Discard stale timer payload if a local timer action occurred while this GET was in flight
       if (
         result.timer &&
@@ -913,7 +917,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch (err) {
       console.warn('Error checking remote timer', err);
     }
-  }, [authService, applyRemoteState, syncRemoteCoffeeCups]);
+  }, [authService, applyRemoteState, syncRemoteCoffeeCups, syncRemoteTags]);
 
   // Subscribe to BroadcastChannel for zero-latency multi-tab sync on same machine
   useEffect(() => {

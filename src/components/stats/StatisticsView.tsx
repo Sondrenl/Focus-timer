@@ -54,16 +54,6 @@ export const StatisticsView: React.FC = () => {
     { type: 'custom', label: 'Custom' },
   ];
 
-  // Mobile-friendly min-width for activity breakdown horizontal scrolling
-  const chartMinWidth =
-    periodType === 'month'
-      ? Math.max(activityBars.length * 28, 680)
-      : periodType === 'year' || periodType === 'all'
-      ? Math.max(activityBars.length * 42, 480)
-      : periodType === 'custom' && activityBars.length > 7
-      ? activityBars.length * 40
-      : undefined;
-
   return (
     <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6">
       {/* View Header */}
@@ -86,14 +76,15 @@ export const StatisticsView: React.FC = () => {
         </div>
       )}
 
-      {/* 1. Time Period Selector & Period Navigator */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
-        {/* Period Type Segmented Buttons */}
-        <div className="inline-flex p-1 bg-md-surface-container rounded-2xl border border-md-outline-variant/30 overflow-x-auto">
+      {/* 1. Time Period Selector & Period Navigator (Mobile-friendly Grid + Large Touch Targets) */}
+      <div className="flex flex-col gap-3.5 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
+        {/* Period Type Grid (3x2 on mobile, 6 columns on tablet/desktop - no horizontal scroll) */}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 p-1.5 bg-md-surface-container rounded-2xl border border-md-outline-variant/30">
           {periodOptions.map((opt) => {
             const isActive = periodType === opt.type;
             return (
               <button
+                type="button"
                 key={opt.type}
                 onClick={() => {
                   setPeriodType(opt.type);
@@ -102,17 +93,17 @@ export const StatisticsView: React.FC = () => {
                   }
                 }}
                 className={clsx(
-                  'px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 select-none whitespace-nowrap',
+                  'min-h-[44px] px-3 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 select-none flex items-center justify-center gap-1.5 active:scale-95',
                   isActive
-                    ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
+                    ? 'bg-md-primary-container text-md-on-primary-container shadow-xs font-bold'
                     : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
                 )}
               >
                 {opt.type === 'custom' ? (
-                  <span className="flex items-center gap-1.5">
-                    <CalendarDays className="w-3.5 h-3.5" />
-                    Custom
-                  </span>
+                  <>
+                    <CalendarDays className="w-4 h-4 shrink-0" />
+                    <span>Custom</span>
+                  </>
                 ) : (
                   opt.label
                 )}
@@ -122,41 +113,72 @@ export const StatisticsView: React.FC = () => {
         </div>
 
         {/* Period Navigator Controls */}
-        <div className="flex items-center justify-between md:justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center justify-between flex-1 bg-md-surface-container rounded-2xl p-1.5 border border-md-outline-variant/30 min-h-[48px]">
+            {periodType !== 'all' ? (
+              <button
+                type="button"
+                onClick={goToPrev}
+                className="w-11 h-11 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high active:scale-95 transition-all shrink-0"
+                title="Previous period"
+                aria-label="Previous period"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+            ) : (
+              <div className="w-4" />
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                if (periodType === 'custom') {
+                  setIsCalendarModalOpen(true);
+                }
+              }}
+              className={clsx(
+                'px-3 py-1.5 text-sm sm:text-base font-bold text-md-on-surface text-center truncate',
+                periodType === 'custom' && 'hover:text-md-primary underline decoration-dotted underline-offset-4 cursor-pointer'
+              )}
+            >
+              {periodLabel}
+            </button>
+
+            {periodType !== 'all' ? (
+              <button
+                type="button"
+                onClick={goToNext}
+                className="w-11 h-11 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high active:scale-95 transition-all shrink-0"
+                title="Next period"
+                aria-label="Next period"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            ) : (
+              <div className="w-4" />
+            )}
+          </div>
+
           {periodType !== 'all' && periodType !== 'custom' && (
             <button
+              type="button"
               onClick={goToToday}
-              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-md-primary hover:bg-md-primary/10 transition-colors"
+              className="min-h-[48px] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all shrink-0"
             >
               Today
             </button>
           )}
 
-          <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30">
-            {periodType !== 'all' && (
-              <button
-                onClick={goToPrev}
-                className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
-                title="Previous period"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            )}
-
-            <span className="px-3 text-xs font-bold text-md-on-surface whitespace-nowrap">
-              {periodLabel}
-            </span>
-
-            {periodType !== 'all' && (
-              <button
-                onClick={goToNext}
-                className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
-                title="Next period"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+          {periodType === 'custom' && (
+            <button
+              type="button"
+              onClick={() => setIsCalendarModalOpen(true)}
+              className="min-h-[48px] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all flex items-center gap-1.5 shrink-0"
+            >
+              <CalendarDays className="w-4 h-4" />
+              <span>Pick Dates</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -312,15 +334,18 @@ export const StatisticsView: React.FC = () => {
         )}
       </Card>
 
-      {/* 5. Activity Bar Chart */}
-      <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
-        <div className="flex items-center justify-between mb-6">
+      {/* 5. Activity Breakdown (Vertical Stack Layout) */}
+      <Card variant="filled" className="p-5 sm:p-6 bg-md-surface-container-low border border-md-outline-variant/20">
+        <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2.5">
             <Calendar className="w-5 h-5 text-md-primary" />
             <h3 className="text-base font-bold text-md-on-surface">
               Activity Breakdown
             </h3>
           </div>
+          <span className="text-xs text-md-on-surface-variant">
+            {activityBars.filter((b) => b.totalSeconds > 0).length} active {activityBars.filter((b) => b.totalSeconds > 0).length === 1 ? 'entry' : 'entries'}
+          </span>
         </div>
 
         {activityBars.length === 0 ? (
@@ -328,46 +353,58 @@ export const StatisticsView: React.FC = () => {
             No activity logged in this period.
           </div>
         ) : (
-          <div className="w-full overflow-x-auto pb-2 scrollbar-thin">
-            <div
-              className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
-              style={{
-                gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))`,
-                minWidth: chartMinWidth ? `${chartMinWidth}px` : undefined,
-              }}
-            >
-              {activityBars.map((bar) => {
-                const heightPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
-                const hasHours = bar.totalSeconds > 0;
+          <div className="flex flex-col gap-2.5">
+            {activityBars.map((bar) => {
+              const widthPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
+              const hasHours = bar.totalSeconds > 0;
 
-                return (
-                  <div key={bar.key} className="flex flex-col items-center gap-1.5 h-full justify-end group">
-                    <span className="text-[10px] md:text-xs font-semibold text-md-on-surface opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                      {formatDurationHoursMins(bar.totalSeconds)}
+              return (
+                <div
+                  key={bar.key}
+                  className="flex items-center gap-3 p-2.5 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-colors group"
+                >
+                  {/* Left: Date / Period Label */}
+                  <div className="w-16 sm:w-20 shrink-0 flex flex-col">
+                    <span className="text-xs sm:text-sm font-bold text-md-on-surface truncate">
+                      {bar.label}
                     </span>
-                    <div className="w-full max-w-[42px] min-w-[12px] bg-md-surface-container rounded-t-xl h-full flex items-end overflow-hidden">
-                      <div
-                        className={`w-full rounded-t-xl transition-all duration-500 ease-out ${
-                          hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
-                        }`}
-                        style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
-                        title={`${bar.label} ${bar.subLabel || ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`}
-                      />
-                    </div>
-                    <div className="flex flex-col items-center text-center w-full min-w-0">
-                      <span className="text-[11px] font-semibold text-md-on-surface-variant group-hover:text-md-on-surface truncate w-full px-0.5">
-                        {bar.label}
+                    {bar.subLabel && (
+                      <span className="text-[11px] text-md-outline truncate">
+                        {bar.subLabel}
                       </span>
-                      {bar.subLabel && (
-                        <span className="text-[9px] text-md-outline truncate w-full px-0.5">
-                          {bar.subLabel}
-                        </span>
-                      )}
-                    </div>
+                    )}
                   </div>
-                );
-              })}
-            </div>
+
+                  {/* Middle: Horizontal Bar Track */}
+                  <div className="flex-1 h-7 sm:h-8 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+                    <div
+                      className={`h-full rounded-lg transition-all duration-500 ease-out ${
+                        hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
+                      }`}
+                      style={{ width: `${Math.max(hasHours ? 6 : 0, widthPercent)}%` }}
+                      title={`${bar.label} ${bar.subLabel || ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`}
+                    />
+                  </div>
+
+                  {/* Right: Duration & Session Count */}
+                  <div className="w-20 sm:w-28 shrink-0 text-right flex flex-col items-end">
+                    <span
+                      className={clsx(
+                        'text-xs sm:text-sm font-bold tabular-nums',
+                        hasHours ? 'text-md-on-surface' : 'text-md-outline'
+                      )}
+                    >
+                      {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
+                    </span>
+                    {bar.sessionCount > 0 && (
+                      <span className="text-[10px] sm:text-[11px] text-md-on-surface-variant">
+                        {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>

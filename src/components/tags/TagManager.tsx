@@ -36,12 +36,12 @@ export const TagManager: React.FC = () => {
   return (
     <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6">
       {/* Top Action Bar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-2">
+      <div className="flex items-center justify-between gap-4 pb-2">
         <div>
           <h2 className="text-2xl font-bold text-md-on-surface">Tags</h2>
         </div>
         <Button onClick={handleCreateNew} variant="filled" className="shadow-xs">
-          <Plus className="w-4 h-4 mr-1.5" />
+          <Plus className="w-5 h-5 mr-1.5" />
           <span>New Tag</span>
         </Button>
       </div>
@@ -51,14 +51,14 @@ export const TagManager: React.FC = () => {
         <button
           onClick={() => setActiveTab('active')}
           className={clsx(
-            'flex items-center gap-2 px-4 py-2 text-sm font-semibold border-b-2 transition-all -mb-[5px]',
+            'flex items-center gap-2 min-h-[48px] px-5 py-2.5 text-sm font-semibold border-b-2 transition-all -mb-[5px]',
             activeTab === 'active'
               ? 'border-md-primary text-md-primary'
               : 'border-transparent text-md-on-surface-variant hover:text-md-on-surface'
           )}
         >
           <span>Active</span>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-md-surface-container font-medium">
+          <span className="text-xs px-2.5 py-0.5 rounded-full bg-md-surface-container font-medium">
             {activeTags.length}
           </span>
         </button>
@@ -66,14 +66,14 @@ export const TagManager: React.FC = () => {
         <button
           onClick={() => setActiveTab('archived')}
           className={clsx(
-            'flex items-center gap-2 px-4 py-2 text-sm font-semibold border-b-2 transition-all -mb-[5px]',
+            'flex items-center gap-2 min-h-[48px] px-5 py-2.5 text-sm font-semibold border-b-2 transition-all -mb-[5px]',
             activeTab === 'archived'
               ? 'border-md-primary text-md-primary'
               : 'border-transparent text-md-on-surface-variant hover:text-md-on-surface'
           )}
         >
           <span>Archived</span>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-md-surface-container font-medium">
+          <span className="text-xs px-2.5 py-0.5 rounded-full bg-md-surface-container font-medium">
             {archivedTags.length}
           </span>
         </button>
@@ -111,7 +111,7 @@ export const TagManager: React.FC = () => {
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div
-                    className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
+                    className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
                     style={{ backgroundColor: `${tag.color}25`, border: `1.5px solid ${tag.color}` }}
                   >
                     <span
@@ -121,51 +121,55 @@ export const TagManager: React.FC = () => {
                   </div>
 
                   <div className="min-w-0">
-                    <h4 className="text-sm font-bold text-md-on-surface truncate">
+                    <h4 className="text-sm sm:text-base font-bold text-md-on-surface truncate">
                       {tag.name}
                     </h4>
-                    <p className="text-[11px] text-md-on-surface-variant">
+                    <p className="text-xs text-md-on-surface-variant">
                       {count} focus session{count === 1 ? '' : 's'} logged
                     </p>
                   </div>
                 </div>
 
                 {/* Actions: Active tags can only be Edited or Archived. Deletion is reserved for Archived tags. */}
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5 shrink-0">
                   {activeTab === 'active' ? (
                     <>
                       <button
                         onClick={() => handleEdit(tag)}
-                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container transition-colors"
+                        className="w-11 h-11 flex items-center justify-center rounded-2xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container active:scale-95 transition-all"
                         title="Edit Tag"
+                        aria-label={`Edit ${tag.name}`}
                       >
-                        <Edit2 className="w-4 h-4" />
+                        <Edit2 className="w-5 h-5" />
                       </button>
 
                       <button
                         onClick={() => archiveTag(tag.id)}
-                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
+                        className="w-11 h-11 flex items-center justify-center rounded-2xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 active:scale-95 transition-all"
                         title="Archive Tag (Move to archived list before deleting)"
+                        aria-label={`Archive ${tag.name}`}
                       >
-                        <Archive className="w-4 h-4" />
+                        <Archive className="w-5 h-5" />
                       </button>
                     </>
                   ) : (
                     <>
                       <button
                         onClick={() => unarchiveTag(tag.id)}
-                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                        className="w-11 h-11 flex items-center justify-center rounded-2xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 active:scale-95 transition-all"
                         title="Restore Tag"
+                        aria-label={`Restore ${tag.name}`}
                       >
-                        <RotateCcw className="w-4 h-4" />
+                        <RotateCcw className="w-5 h-5" />
                       </button>
 
                       <button
                         onClick={() => setDeleteConfirmId(tag.id)}
-                        className="p-2 rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
+                        className="w-11 h-11 flex items-center justify-center rounded-2xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 active:scale-95 transition-all"
                         title="Delete Tag Permanently"
+                        aria-label={`Delete ${tag.name} permanently`}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-5 h-5" />
                       </button>
                     </>
                   )}
@@ -184,7 +188,7 @@ export const TagManager: React.FC = () => {
             <p className="text-xs text-md-on-surface-variant mb-5 leading-relaxed">
               This will permanently delete this tag. Completed sessions associated with this tag will become "Unassigned".
             </p>
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex items-center justify-end gap-2.5">
               <Button
                 variant="text"
                 size="sm"

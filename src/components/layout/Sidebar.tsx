@@ -56,7 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex flex-col gap-6">
           <button
             onClick={() => handleNav('timer')}
-            className="flex items-center gap-3.5 p-1 rounded-2xl transition-colors text-left group/brand hover:bg-md-surface-container"
+            className="flex items-center gap-3.5 p-1.5 rounded-2xl transition-colors text-left group/brand hover:bg-md-surface-container"
             title="Pomodor Home"
           >
             {/* Crisp Tomato Brand Icon */}
@@ -85,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={() => handleNav(item.id)}
                   title={item.label}
                   className={clsx(
-                    'flex items-center gap-3.5 p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left relative overflow-hidden',
+                    'flex items-center gap-3.5 min-h-[48px] p-2.5 rounded-2xl text-sm font-medium transition-all duration-200 text-left relative overflow-hidden',
                     isActive
                       ? 'bg-md-primary-container text-md-on-primary-container font-semibold shadow-xs'
                       : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
@@ -114,7 +114,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={() => handleNav('profile')}
             title="Profile"
             className={clsx(
-              'flex items-center gap-3.5 p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left w-full relative overflow-hidden',
+              'flex items-center gap-3.5 min-h-[48px] p-2.5 rounded-2xl text-sm font-medium transition-all duration-200 text-left w-full relative overflow-hidden',
               isProfileActive
                 ? 'bg-md-primary-container text-md-on-primary-container font-semibold shadow-xs'
                 : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'

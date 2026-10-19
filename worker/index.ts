@@ -244,6 +244,74 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       );
     }
 
+    // POST /api/tags — Direct upsert of a single tag (create / edit / archive / unarchive)
+    if (url.pathname === '/api/tags' && request.method === 'POST') {
+      if (!currentUserId) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        tag?: {
+          id: string;
+          name: string;
+          color: string;
+          isArchived?: boolean;
+          createdAt?: string;
+          updatedAt?: string;
+        };
+      };
+
+      if (!body.tag || !body.tag.id || !body.tag.name) {
+        return new Response(JSON.stringify({ error: 'Invalid tag payload' }), { status: 400, headers: corsHeaders });
+      }
+
+      const nowIso = new Date().toISOString();
+      const updatedAtIso = body.tag.updatedAt || nowIso;
+
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO tags (id, user_id, name, color, is_archived, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             color = excluded.color,
+             is_archived = excluded.is_archived,
+             updated_at = excluded.updated_at`
+        ).bind(
+          body.tag.id,
+          currentUserId,
+          body.tag.name,
+          body.tag.color,
+          body.tag.isArchived ? 1 : 0,
+          body.tag.createdAt || nowIso,
+          updatedAtIso
+        ),
+        env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ? AND tag_id = ?').bind(currentUserId, body.tag.id),
+      ]);
+
+      const tagRows = await env.DB.prepare('SELECT * FROM tags WHERE user_id = ?')
+        .bind(currentUserId)
+        .all<{
+          id: string;
+          name: string;
+          color: string;
+          is_archived: number;
+          created_at: string;
+          updated_at: string;
+        }>();
+
+      const tags = (tagRows.results || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        color: t.color,
+        isArchived: Boolean(t.is_archived),
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+      }));
+
+      return new Response(JSON.stringify({ success: true, tags, serverTime: Date.now() }), { headers: corsHeaders });
+    }
+
     // DELETE /api/tags/:id — Hard delete a tag and unassign related sessions
     if (url.pathname.startsWith('/api/tags/') && request.method === 'DELETE') {
       if (!currentUserId) {
@@ -264,7 +332,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return new Response(JSON.stringify({ success: true, deletedTagId: tagId }), { headers: corsHeaders });
     }
 
-    // GET /api/timer — Fetch current active timer state, coffee cups, and handle device liveness
+    // GET /api/timer — Fetch current active timer state, coffee cups, tags, and handle device liveness
     if (url.pathname === "/api/timer" && request.method === "GET") {
       if (!currentUserId) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
@@ -273,7 +341,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const isRunningHeartbeat = request.headers.get("X-Timer-Heartbeat") === "1";
       const now = Date.now();
 
-      const [timerRow, coffeeRows, deletedCoffeeRows] = await Promise.all([
+      const [timerRow, coffeeRows, deletedCoffeeRows, tagRows, deletedTagRows] = await Promise.all([
         env.DB.prepare(
           "SELECT * FROM active_timers WHERE user_id = ?"
         ).bind(currentUserId).first<{
@@ -299,6 +367,19 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         env.DB.prepare(
           "SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?"
         ).bind(currentUserId).all<{ cup_id: string }>(),
+        env.DB.prepare(
+          "SELECT * FROM tags WHERE user_id = ?"
+        ).bind(currentUserId).all<{
+          id: string;
+          name: string;
+          color: string;
+          is_archived: number;
+          created_at: string;
+          updated_at: string;
+        }>(),
+        env.DB.prepare(
+          "SELECT tag_id FROM deleted_tags WHERE user_id = ?"
+        ).bind(currentUserId).all<{ tag_id: string }>(),
       ]);
 
       let timer = null;
@@ -341,7 +422,29 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       }));
 
       const deletedCoffeeCupIds = (deletedCoffeeRows.results || []).map((r) => r.cup_id);
-      return new Response(JSON.stringify({ timer, coffeeCups, deletedCoffeeCupIds, serverTime: now }), { headers: corsHeaders });
+
+      const tags = (tagRows.results || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        color: t.color,
+        isArchived: Boolean(t.is_archived),
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+      }));
+
+      const deletedTagIds = (deletedTagRows.results || []).map((r) => r.tag_id);
+
+      return new Response(
+        JSON.stringify({
+          timer,
+          coffeeCups,
+          deletedCoffeeCupIds,
+          tags,
+          deletedTagIds,
+          serverTime: now,
+        }),
+        { headers: corsHeaders }
+      );
     }
 
     // POST /api/timer — Update active timer state
@@ -459,8 +562,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
       }
 
-      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows, deletedCoffeeRows] = await Promise.all([
-        env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
+      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows, deletedCoffeeRows] = await Promise.all([\n        env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
           id: string;
           email: string;
           display_name: string;
@@ -475,6 +577,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           color: string;
           is_archived: number;
           created_at: string;
+          updated_at: string;
         }>(),
         env.DB.prepare("SELECT * FROM sessions WHERE user_id = ? AND id NOT LIKE 'sample-session-%' AND id NOT LIKE 'seed-session-%' ORDER BY completed_at DESC").bind(currentUserId).all<{
           id: string;
@@ -527,6 +630,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         color: t.color,
         isArchived: Boolean(t.is_archived),
         createdAt: t.created_at,
+        updatedAt: t.updated_at,
       }));
 
       const sessions = (sessionRows.results || []).map((s) => ({
@@ -597,6 +701,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           color: string;
           isArchived?: boolean;
           createdAt?: string;
+          updatedAt?: string;
         }>;
         deletedTagIds?: string[];
         deletedCoffeeCupIds?: string[];
@@ -685,27 +790,32 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         );
       }
 
-      // 3. Upsert Tags (excluding any that were deleted)
+      // 3. Upsert Tags (excluding any that were deleted), preserving newer cloud state via updated_at comparison
       const deletedSet = body.mode === 'replace' ? new Set<string>() : new Set(body.deletedTagIds || []);
       if (Array.isArray(body.tags) && body.tags.length > 0) {
         for (const tag of body.tags) {
           if (deletedSet.has(tag.id)) continue;
+          const createdAtIso = tag.createdAt || '1970-01-01T00:00:00.000Z';
+          const updatedAtIso = tag.updatedAt || createdAtIso;
           statements.push(
             env.DB.prepare(
               `INSERT INTO tags (id, user_id, name, color, is_archived, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name,
                  color = excluded.color,
                  is_archived = excluded.is_archived,
-                 updated_at = CURRENT_TIMESTAMP`
+                 updated_at = excluded.updated_at
+               WHERE tags.user_id = excluded.user_id
+                 AND (tags.updated_at IS NULL OR excluded.updated_at >= tags.updated_at)`
             ).bind(
               tag.id,
               currentUserId,
               tag.name,
               tag.color,
               tag.isArchived ? 1 : 0,
-              tag.createdAt || new Date().toISOString()
+              createdAtIso,
+              updatedAtIso
             )
           );
         }
@@ -816,7 +926,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             sessions: body.sessions?.length || 0,
             coffeeCups: body.coffeeCups?.length || 0,
             deletedTags: body.deletedTagIds?.length || 0,
-            deletedCoffeeCups: body.deletedCoffeeCupIds?.length || 0,
+            deletedCoffeeCupIds: body.deletedCoffeeCupIds?.length || 0,
             mode: body.mode || 'merge',
           },
         }),

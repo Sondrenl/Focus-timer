@@ -13,7 +13,9 @@ export interface Tag {
   isArchived: boolean;
   /** ISO timestamp string of creation */
   createdAt: string;
+  /** ISO timestamp string of last modification (archive/unarchive/edit) */
+  updatedAt?: string;
 }
 
-export type CreateTagInput = Omit<Tag, 'id' | 'createdAt' | 'isArchived'>;
+export type CreateTagInput = Omit<Tag, 'id' | 'createdAt' | 'updatedAt' | 'isArchived'>;
 export type UpdateTagInput = Partial<Omit<Tag, 'id' | 'createdAt'>>;

@@ -14,6 +14,8 @@ export interface RemoteTimerResult {
   timer: RemoteTimerState | null;
   coffeeCups?: CoffeeCup[];
   deletedCoffeeCupIds?: string[];
+  tags?: Tag[];
+  deletedTagIds?: string[];
   serverTime?: number;
 }
 
@@ -264,6 +266,28 @@ export class AuthService {
     }
   }
 
+  public async upsertTagRemote(tag: Tag): Promise<Tag[] | null> {
+    const token = this.getStoredToken();
+    if (!token) return null;
+
+    try {
+      const res = await fetch('/api/tags', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tag }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { success: boolean; tags?: Tag[] };
+      return data.tags || null;
+    } catch (e) {
+      console.warn('Failed to upsert tag on remote server', e);
+      return null;
+    }
+  }
+
   public async deleteTag(tagId: string): Promise<void> {
     this.addDeletedTagId(tagId);
     const token = this.getStoredToken();
@@ -360,6 +384,8 @@ export class AuthService {
         timer: RemoteTimerState | null;
         coffeeCups?: CoffeeCup[];
         deletedCoffeeCupIds?: string[];
+        tags?: Tag[];
+        deletedTagIds?: string[];
         serverTime?: number;
       };
       if (typeof data.serverTime === 'number') {
