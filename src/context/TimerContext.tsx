@@ -488,6 +488,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Start timer helper
   const startTimer = useCallback(
     (overrideSec?: number) => {
+      isCompletingRef.current = false;
+
       if (workerGraceStopTimerRef.current) {
         clearTimeout(workerGraceStopTimerRef.current);
         workerGraceStopTimerRef.current = null;
@@ -507,11 +509,16 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastSwScheduleRefreshMsRef.current = Date.now();
       if (settingsRef.current.notificationsEnabled) {
         if (notifications.hasPermission()) {
-          notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true);
+          notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true, runId);
         } else {
           notifications.requestPermission().then((granted) => {
             if (granted && statusRef.current === 'RUNNING') {
-              notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true);
+              notifications.scheduleTimerNotification(
+                targetWallClockMs,
+                sessionTypeRef.current,
+                true,
+                timerRunIdRef.current
+              );
             }
           });
         }
@@ -546,6 +553,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Pause timer helper
   const pauseTimer = useCallback(() => {
+    isCompletingRef.current = false;
     if (workerGraceStopTimerRef.current) {
       clearTimeout(workerGraceStopTimerRef.current);
       workerGraceStopTimerRef.current = null;
@@ -585,6 +593,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Reset timer helper
   const resetTimer = useCallback(() => {
+    isCompletingRef.current = false;
     if (workerGraceStopTimerRef.current) {
       clearTimeout(workerGraceStopTimerRef.current);
       workerGraceStopTimerRef.current = null;
@@ -644,9 +653,30 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const currentSettings = settingsRef.current;
     const currentTag = activeTagIdRef.current;
     const currentTotalSec = totalSecondsRef.current;
+    const completedRunId = timerRunIdRef.current || `${currentType.toLowerCase()}-${now}`;
 
-    // Play chime BEFORE stopping keep-alive so the active mobile background audio session
-    // stays alive through the entire 1.65s-1.95s chime without getting cut off by the OS.
+    // 1. Dispatch notification FIRST while the background session is at peak priority
+    if (currentSettings.notificationsEnabled) {
+      if (currentType === 'WORK') {
+        void notifications.notify(
+          'Pomodor — Focus session complete',
+          'Your focus timer has finished. Time for a break.',
+          false,
+          completedRunId
+        );
+      } else {
+        void notifications.notify(
+          'Pomodor — Break complete',
+          'Your break timer has finished. Ready for the next focus session?',
+          false,
+          completedRunId
+        );
+      }
+    } else {
+      notifications.cancelScheduledNotification();
+    }
+
+    // 2. Play completion chime (reserves 3.5s background audio keep-alive grace period)
     if (currentSettings.soundEnabled) {
       if (currentType === 'WORK') {
         sound.playChime(currentSettings.soundVolume);
@@ -656,14 +686,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (currentType === 'WORK') {
-      if (currentSettings.notificationsEnabled) {
-        void notifications.notify(
-          'Pomodor — Focus session complete',
-          'Your focus timer has finished. Time for a break.'
-        );
-      } else {
-        notifications.cancelScheduledNotification();
-      }
       triggerCompletionConfetti();
 
       const runId = timerRunIdRef.current;
@@ -724,14 +746,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     } else {
       // Break session finished -> Advance to WORK session!
-      if (currentSettings.notificationsEnabled) {
-        void notifications.notify(
-          'Pomodor — Break complete',
-          'Your break timer has finished. Ready for the next focus session?'
-        );
-      } else {
-        notifications.cancelScheduledNotification();
-      }
       const dur = Math.max(1, Math.round(currentSettings.workDurationMinutes * 60));
       const nextCycle = currentType === 'SHORT_BREAK' ? cycle + 1 : 1;
 
@@ -879,7 +893,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           notifications.scheduleTimerNotification(
             Date.now() + diffSec * 1000,
             remote.sessionType,
-            settingsRef.current.notificationsEnabled
+            settingsRef.current.notificationsEnabled,
+            remote.timerRunId
           );
         } else {
           // Target time has already elapsed! Complete session and advance to next!
@@ -1029,7 +1044,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           notifications.scheduleTimerNotification(
             Date.now() + diffMs,
             sessionTypeRef.current,
-            true
+            true,
+            timerRunIdRef.current
           );
         }
 
@@ -1091,7 +1107,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             notifications.scheduleTimerNotification(
               Date.now() + diffMs,
               sessionTypeRef.current,
-              true
+              true,
+              timerRunIdRef.current
             );
           }
         }
@@ -1113,6 +1130,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Skip interval helper
   const skipInterval = useCallback(() => {
+    isCompletingRef.current = false;
     if (workerGraceStopTimerRef.current) {
       clearTimeout(workerGraceStopTimerRef.current);
       workerGraceStopTimerRef.current = null;
@@ -1183,6 +1201,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Set session type manually helper
   const setSessionTypeManually = useCallback(
     (type: SessionType) => {
+      isCompletingRef.current = false;
       if (workerGraceStopTimerRef.current) {
         clearTimeout(workerGraceStopTimerRef.current);
         workerGraceStopTimerRef.current = null;

@@ -42,7 +42,7 @@ function createWavBlobUrl(samples: Float32Array, sampleRate: number): string {
  * Generates a 10-second sub-audible (-74 dB) WAV for keeping mobile HTML5 <audio> alive
  * when the phone screen is turned off or the user goes to the Home Screen.
  * Duration >= 5 seconds is required by mobile browsers (Chromium MediaSessionImpl)
- * to maintain background audio & timer execution priority.
+ * to maintain background audio & timer execution priority across Focus and Break intervals.
  */
 function generateSilentKeepAliveWav(): string {
   const sampleRate = 8000;
@@ -57,80 +57,9 @@ function generateSilentKeepAliveWav(): string {
 }
 
 /**
- * Generates the C5 - E5 - G5 major triad completion chime as a 6-second 44.1 kHz WAV
- * (1.65s chime + 4.35s sub-audible tail so the clip is >= 5s and never cut off on the Home Screen).
- */
-function generateWorkChimeWav(): string {
-  const sampleRate = 44100;
-  const durationSec = 6.0;
-  const numSamples = Math.floor(sampleRate * durationSec);
-  const samples = new Float32Array(numSamples);
-  const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
-
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let val = 0;
-    for (let idx = 0; idx < notes.length; idx++) {
-      const noteStart = idx * 0.14;
-      const dt = t - noteStart;
-      if (dt >= 0 && dt <= 1.5) {
-        let env = 0;
-        if (dt <= 0.02) {
-          env = (dt / 0.02) * 0.33;
-        } else {
-          env = 0.33 * Math.pow(0.00025, (dt - 0.02) / 1.48);
-        }
-        val += Math.sin(2 * Math.PI * notes[idx] * dt) * env;
-      }
-    }
-    // Keep non-zero sub-audible tail after the chime so the OS keeps the tab awake through completion
-    if (Math.abs(val) < 0.0002) {
-      val += Math.sin(2 * Math.PI * 2 * t) * 0.0002;
-    }
-    samples[i] = val;
-  }
-  return createWavBlobUrl(samples, sampleRate);
-}
-
-/**
- * Generates the A4 - C#5 - E5 calming triangle-wave break chime as a 6-second 44.1 kHz WAV
- * (1.95s chime + 4.05s sub-audible tail so the clip is >= 5s and never cut off on the Home Screen).
- */
-function generateBreakChimeWav(): string {
-  const sampleRate = 44100;
-  const durationSec = 6.0;
-  const numSamples = Math.floor(sampleRate * durationSec);
-  const samples = new Float32Array(numSamples);
-  const notes = [440.0, 554.37, 659.25]; // A4 major chord
-
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let val = 0;
-    for (let idx = 0; idx < notes.length; idx++) {
-      const noteStart = idx * 0.1;
-      const dt = t - noteStart;
-      if (dt >= 0 && dt <= 1.8) {
-        let env = 0;
-        if (dt <= 0.03) {
-          env = (dt / 0.03) * 0.3;
-        } else {
-          env = 0.3 * Math.pow(0.00025, (dt - 0.03) / 1.77);
-        }
-        const tri = (2 / Math.PI) * Math.asin(Math.sin(2 * Math.PI * notes[idx] * dt));
-        val += tri * env;
-      }
-    }
-    if (Math.abs(val) < 0.0002) {
-      val += Math.sin(2 * Math.PI * 2 * t) * 0.0002;
-    }
-    samples[i] = val;
-  }
-  return createWavBlobUrl(samples, sampleRate);
-}
-
-/**
- * SoundService provides synthesized audio feedback using both a persistent HTML5 <audio>
- * pipeline (>= 5s duration for mobile Home Screen & lock-screen continuity) and Web Audio API.
+ * SoundService provides synthesized audio feedback using Web Audio API while maintaining
+ * an uninterrupted >=5s HTML5 <audio> keep-alive loop (`bgAudio`) that never changes its `.src`
+ * in the background—ensuring mobile browsers never revoke background execution between Focus and Break sessions.
  */
 export class SoundService {
   private audioCtx: AudioContext | null = null;
@@ -139,8 +68,6 @@ export class SoundService {
 
   private bgAudio: HTMLAudioElement | null = null;
   private silentWavUrl: string | null = null;
-  private workChimeWavUrl: string | null = null;
-  private breakChimeWavUrl: string | null = null;
   private keepAliveActive: boolean = false;
   private chimeEndTimeMs: number = 0;
   private deferredStopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -149,8 +76,6 @@ export class SoundService {
     if (typeof window !== 'undefined') {
       try {
         this.silentWavUrl = generateSilentKeepAliveWav();
-        this.workChimeWavUrl = generateWorkChimeWav();
-        this.breakChimeWavUrl = generateBreakChimeWav();
       } catch {
         // Ignore if Blob/URL is unavailable in test environment
       }
@@ -197,8 +122,8 @@ export class SoundService {
 
   /**
    * Starts an inaudible 10-second keep-alive audio loop when the timer is started by a user gesture.
-   * Keeping both the >=5s HTML5 <audio> loop and Web Audio oscillator alive prevents mobile OSes
-   * from suspending the background tab when the user goes to the Home Screen or locks the phone.
+   * `bgAudio` never swaps its `.src`, so the mobile media session stays valid across consecutive
+   * Focus and Break sessions without ever being revoked in the background.
    */
   startSilentKeepAlive(): void {
     this.keepAliveActive = true;
@@ -209,15 +134,9 @@ export class SoundService {
 
     try {
       const audio = this.getOrCreateBgAudio();
-      if (audio && this.silentWavUrl) {
-        // Only switch back to silentWavUrl if a completion chime isn't currently ringing out
-        if (Date.now() >= this.chimeEndTimeMs) {
-          if (!audio.src.endsWith(this.silentWavUrl)) {
-            audio.src = this.silentWavUrl;
-          }
-          audio.loop = true;
-          audio.volume = 1.0;
-        }
+      if (audio) {
+        audio.loop = true;
+        audio.volume = 1.0;
         if (audio.paused) {
           audio.play().catch(() => {});
         }
@@ -274,11 +193,6 @@ export class SoundService {
         this.deferredStopTimer = null;
         if (!this.keepAliveActive) {
           this.stopKeepAliveNodesNow();
-        } else if (this.bgAudio && this.silentWavUrl) {
-          this.bgAudio.src = this.silentWavUrl;
-          this.bgAudio.loop = true;
-          this.bgAudio.volume = 1.0;
-          this.bgAudio.play().catch(() => {});
         }
       }, remainingChimeMs + 400);
       return;
@@ -291,11 +205,6 @@ export class SoundService {
     try {
       if (this.bgAudio) {
         this.bgAudio.pause();
-        if (this.silentWavUrl && !this.bgAudio.src.endsWith(this.silentWavUrl)) {
-          this.bgAudio.src = this.silentWavUrl;
-          this.bgAudio.loop = true;
-          this.bgAudio.volume = 1.0;
-        }
       }
     } catch {
       // Ignore HTML5 audio pause errors
@@ -327,20 +236,6 @@ export class SoundService {
 
     // Reserve a 3.5s grace window so the OS never suspends the tab mid-chime or mid-notification
     this.chimeEndTimeMs = Date.now() + 3500;
-
-    const audio = this.getOrCreateBgAudio();
-    if (audio && this.workChimeWavUrl) {
-      // Keep loop=true on the 6-second WAV so mobile browsers treat it as continuous media playback
-      audio.loop = true;
-      audio.src = this.workChimeWavUrl;
-      audio.volume = clampedVol;
-      audio.currentTime = 0;
-      audio.play().catch(() => {
-        this.playWebAudioChime(clampedVol);
-      });
-      return;
-    }
-
     this.playWebAudioChime(clampedVol);
   }
 
@@ -388,19 +283,6 @@ export class SoundService {
 
     // Reserve a 3.5s grace window so the OS never suspends the tab mid-chime or mid-notification
     this.chimeEndTimeMs = Date.now() + 3500;
-
-    const audio = this.getOrCreateBgAudio();
-    if (audio && this.breakChimeWavUrl) {
-      audio.loop = true;
-      audio.src = this.breakChimeWavUrl;
-      audio.volume = clampedVol;
-      audio.currentTime = 0;
-      audio.play().catch(() => {
-        this.playWebAudioBreakComplete(clampedVol);
-      });
-      return;
-    }
-
     this.playWebAudioBreakComplete(clampedVol);
   }
 

@@ -2,16 +2,14 @@ import { SessionType } from '../../types/timer';
 
 export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
 
-const NOTIFICATION_TAG = 'pomodor-timer-alert';
-
 /**
  * Service to handle browser & mobile Home Screen / lock-screen notifications via Service Worker
- * with zero-await synchronous dispatch and live permission status inspection.
+ * with per-session tag deduplication and live permission status inspection.
  */
 export class NotificationService {
   private swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
   private cachedRegistration: ServiceWorkerRegistration | null = null;
-  private lastNotifyAtMs: number = 0;
+  private lastNotifiedTag: string | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -19,7 +17,6 @@ export class NotificationService {
         .register('/sw.js')
         .then((reg) => {
           this.cachedRegistration = reg;
-          // Ensure latest sw.js is activated immediately
           reg.update().catch(() => {});
           return reg;
         })
@@ -114,14 +111,24 @@ export class NotificationService {
     }
   }
 
-  async notify(title: string, body: string, isManualTest: boolean = false): Promise<boolean> {
+  async notify(
+    title: string,
+    body: string,
+    isManualTest: boolean = false,
+    sessionRunId?: string | null
+  ): Promise<boolean> {
     if (!this.hasPermission()) return false;
 
-    const now = Date.now();
-    if (!isManualTest && now - this.lastNotifyAtMs < 3000) {
+    const effectiveTag = isManualTest
+      ? `pomodor-test-${Date.now()}`
+      : sessionRunId
+      ? `pomodor-run-${sessionRunId}`
+      : `pomodor-alert-${Date.now()}`;
+
+    if (!isManualTest && sessionRunId && this.lastNotifiedTag === effectiveTag) {
       return true;
     }
-    this.lastNotifyAtMs = now;
+    this.lastNotifiedTag = effectiveTag;
 
     try {
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -135,13 +142,10 @@ export class NotificationService {
       body,
       icon: '/favicon.svg',
       badge: '/favicon.svg',
-      tag: NOTIFICATION_TAG,
+      tag: effectiveTag,
       renotify: true,
     } as NotificationOptions;
 
-    // 1. Synchronous zero-await path: if the Service Worker is already active, post SHOW_NOTIFICATION
-    // immediately (which cancels any pending scheduled timer in sw.js and runs inside event.waitUntil)
-    // AND call showNotification synchronously before any promise boundary can be throttled on the Home Screen.
     const syncWorker =
       this.cachedRegistration?.active ||
       (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
@@ -154,6 +158,7 @@ export class NotificationService {
           type: 'SHOW_NOTIFICATION',
           title,
           body,
+          tag: effectiveTag,
           isManualTest,
         });
       } catch {
@@ -163,6 +168,19 @@ export class NotificationService {
 
     if (this.cachedRegistration?.active && typeof this.cachedRegistration.showNotification === 'function') {
       try {
+        // Close any leftover notification from an earlier session so the new session (e.g. Break after Focus)
+        // always triggers a fresh heads-up banner on Android & iOS.
+        this.cachedRegistration
+          .getNotifications()
+          .then((list) => {
+            for (const n of list) {
+              if (n.tag !== effectiveTag) {
+                n.close();
+              }
+            }
+          })
+          .catch(() => {});
+
         await this.cachedRegistration.showNotification(title, options);
         return true;
       } catch {
@@ -170,7 +188,6 @@ export class NotificationService {
       }
     }
 
-    // 2. Async registration lookup fallback if cachedRegistration was not yet populated
     try {
       const reg = await this.getActiveRegistration();
       if (reg && reg.active && typeof reg.showNotification === 'function') {
@@ -194,7 +211,12 @@ export class NotificationService {
    * Schedules a backup notification in the Service Worker at the exact targetEndTime
    * so the phone Home Screen or lock screen receives the alert even if the browser throttles the page.
    */
-  scheduleTimerNotification(targetEndTimeMs: number, sessionType: SessionType, enabled: boolean): void {
+  scheduleTimerNotification(
+    targetEndTimeMs: number,
+    sessionType: SessionType,
+    enabled: boolean,
+    sessionRunId?: string | null
+  ): void {
     if (!enabled || !this.hasPermission()) {
       this.cancelScheduledNotification();
       return;
@@ -208,6 +230,9 @@ export class NotificationService {
       sessionType === 'WORK'
         ? 'Your focus timer has finished. Time for a break.'
         : 'Your break timer has finished. Ready for the next focus session?';
+    const effectiveTag = sessionRunId
+      ? `pomodor-run-${sessionRunId}`
+      : `pomodor-type-${sessionType.toLowerCase()}`;
 
     const syncWorker =
       this.cachedRegistration?.active ||
@@ -222,6 +247,7 @@ export class NotificationService {
           targetEndTime: targetEndTimeMs,
           title,
           body,
+          tag: effectiveTag,
         });
         return;
       } catch {
@@ -237,6 +263,7 @@ export class NotificationService {
           targetEndTime: targetEndTimeMs,
           title,
           body,
+          tag: effectiveTag,
         });
       }
     });
