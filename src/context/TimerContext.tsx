@@ -124,7 +124,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           // Otherwise, if this device owned the running timer and is now cold-starting (because the user
           // swiped up and killed the browser / installed webapp, or closed the tab), stop the timer.
           const isQuickVisibleReload =
-            hasSessionAlive && isReloadNav && !parsed.wasHidden && timeSinceLastActive < 4000;
+            hasSessionAlive && isReloadNav && timeSinceLastActive < 30000;
           const isAnotherLocalTabTicking =
             Boolean(parsed.tabId && parsed.tabId !== TAB_ID && timeSinceLastActive < 1500);
 
