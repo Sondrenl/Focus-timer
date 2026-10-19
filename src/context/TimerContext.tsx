@@ -425,10 +425,28 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     if (status === 'IDLE') {
       const newDuration = getDurationForType(sessionType);
+      const changed = totalSecondsRef.current !== newDuration || remainingSecondsRef.current !== newDuration;
+      totalSecondsRef.current = newDuration;
+      remainingSecondsRef.current = newDuration;
       setTotalSeconds(newDuration);
       setRemainingSeconds(newDuration);
+
+      if (changed && isInitialMountDoneRef.current) {
+        const now = authService.getServerNow();
+        publishLocalTimerState({
+          sessionType: sessionTypeRef.current,
+          status: 'IDLE',
+          remainingSeconds: newDuration,
+          totalSeconds: newDuration,
+          targetEndTime: null,
+          currentCycle: currentCycleRef.current,
+          activeTagId: activeTagIdRef.current,
+          timerRunId: null,
+          updatedAtMs: now,
+        });
+      }
     }
-  }, [sessionType, settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes, status, getDurationForType]);
+  }, [sessionType, settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes, status, getDurationForType, authService, publishLocalTimerState]);
 
   // Handle activeTagId changes: sync tag selection across tabs and cloud
   useEffect(() => {
@@ -855,16 +873,17 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setRemainingSeconds(remote.remainingSeconds);
         setStatus('PAUSED');
       } else {
-        // IDLE
+        // IDLE: always use current configured duration for this sessionType so remote IDLE polls never overwrite duration settings
         const nextStatus: TimerStatus = remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
+        const configuredDur = getDurationForType(remote.sessionType);
         sessionTypeRef.current = remote.sessionType;
         currentCycleRef.current = remote.currentCycle || 1;
-        totalSecondsRef.current = remote.totalSeconds;
-        remainingSecondsRef.current = remote.remainingSeconds;
+        totalSecondsRef.current = configuredDur;
+        remainingSecondsRef.current = configuredDur;
         statusRef.current = nextStatus;
         setSessionType(remote.sessionType);
         setCurrentCycle(remote.currentCycle || 1);
-        setTotalSeconds(remote.totalSeconds);
+        setTotalSeconds(configuredDur);
         timerRunIdRef.current = remote.timerRunId || null;
         if (remote.activeTagId !== undefined && setActiveTagId) {
           prevActiveTagIdRef.current = remote.activeTagId;
@@ -878,7 +897,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
-        setRemainingSeconds(remote.remainingSeconds);
+        setRemainingSeconds(configuredDur);
         setStatus(nextStatus);
       }
 
@@ -886,7 +905,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isApplyingRemoteRef.current = false;
       }, 150);
     },
-    [authService, setActiveTagId, sound, notifications]
+    [authService, setActiveTagId, sound, notifications, getDurationForType]
   );
 
   // Background Web Worker initialization (created once on mount, never torn down on state updates)

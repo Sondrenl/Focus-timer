@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
@@ -146,6 +146,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tags, setTags] = useState<Tag[]>([]);
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+
+  const settingsRef = useRef<UserSettings>(settings);
+  settingsRef.current = settings;
+
+  const profileRef = useRef<UserProfile>(profile);
+  profileRef.current = profile;
+
+  const lastLocalSettingsEditMsRef = useRef<number>(0);
+  const lastLocalProfileEditMsRef = useRef<number>(0);
+
   const [activeTagId, setActiveTagIdState] = useState<string | null>(() => {
     try {
       return localStorage.getItem('active_tag_id_v1') || null;
@@ -242,6 +252,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const syncWithCloud = useCallback(async (): Promise<void> => {
     if (!authService.getStoredToken()) return;
 
+    const syncStartedMs = Date.now();
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
 
     try {
@@ -297,12 +308,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await sessionRepository.saveAll(finalSessions);
       setSessions(finalSessions);
 
-      // 5. Merge settings
+      // 5. Merge settings: only adopt cloudData.settings on initial sync before local settings edits,
+      // and never overwrite settings if the user edited settings locally!
       let finalSettings = currentSettings;
-      if (cloudData?.settings) {
+      if (cloudData?.settings && lastLocalSettingsEditMsRef.current === 0 && syncStartedMs > lastLocalSettingsEditMsRef.current) {
         finalSettings = { ...currentSettings, ...cloudData.settings };
+        settingsRef.current = finalSettings;
         await settingsRepository.save(finalSettings);
         setSettings(finalSettings);
+      } else {
+        finalSettings = settingsRef.current;
       }
 
       // 6. Merge coffee cups EXCLUDING any deleted coffee cups
@@ -325,12 +340,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await coffeeRepository.saveAll(finalCoffee);
       setCoffeeCups(finalCoffee);
 
-      // 7. Merge profile
+      // 7. Merge profile: only adopt cloudData.profile if the user hasn't edited profile locally
       let finalProfile = currentProfile;
-      if (cloudData?.profile) {
+      if (cloudData?.profile && lastLocalProfileEditMsRef.current === 0 && syncStartedMs > lastLocalProfileEditMsRef.current) {
         finalProfile = { ...currentProfile, ...cloudData.profile };
+        profileRef.current = finalProfile;
         await profileRepository.save(finalProfile);
         setProfile(finalProfile);
+      } else {
+        finalProfile = profileRef.current;
       }
 
       // 8. Push merged state to Cloudflare Worker
@@ -397,13 +415,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Update local profile with Google identity and auto-activate Google avatar
       const updatedProfile: UserProfile = {
-        ...profile,
+        ...profileRef.current,
         id: user.id,
         email: user.email,
         avatarUrl: user.avatarUrl,
         avatarEmoji: '', // Switch to Google account photo
-        displayName: user.displayName || profile.displayName,
+        displayName: user.displayName || profileRef.current.displayName,
       };
+      profileRef.current = updatedProfile;
       await profileRepository.save(updatedProfile);
       setProfile(updatedProfile);
 
@@ -431,11 +450,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncError: null,
     });
     const cleanedProfile: UserProfile = {
-      ...profile,
+      ...profileRef.current,
       id: undefined,
       email: undefined,
       avatarUrl: undefined,
     };
+    profileRef.current = cleanedProfile;
     profileRepository.save(cleanedProfile);
     setProfile(cleanedProfile);
   };
@@ -454,6 +474,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanSessions = isProduction()
         ? loadedSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
         : loadedSessions;
+      profileRef.current = loadedProfile;
+      settingsRef.current = loadedSettings;
       setProfile(loadedProfile);
       setTags(loadedTags);
       setSessions(cleanSessions);
@@ -527,13 +549,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [tags, activeTagId, auth.isAuthenticated, auth.isSyncing, syncWithCloud, setActiveTagId]);
 
-  // Profile Operations
+  // Profile Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {
-    const merged = { ...profile, ...newProfile };
-    await profileRepository.save(merged);
+    lastLocalProfileEditMsRef.current = Date.now();
+    const merged = { ...profileRef.current, ...newProfile };
+    profileRef.current = merged;
     setProfile(merged);
+    await profileRepository.save(merged);
     if (auth.isAuthenticated) {
-      syncWithCloud();
+      await authService.pushCloudData({
+        profile: {
+          displayName: merged.displayName,
+          avatarEmoji: merged.avatarEmoji,
+          dailyGoalMinutes: merged.dailyGoalMinutes,
+        },
+      });
     }
   };
 
@@ -700,13 +730,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSessions(samples);
   };
 
-  // Settings Operations
+  // Settings Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
   const updateSettings = async (newValues: Partial<UserSettings>): Promise<void> => {
-    const merged = { ...settings, ...newValues };
-    await settingsRepository.save(merged);
+    lastLocalSettingsEditMsRef.current = Date.now();
+    const merged = { ...settingsRef.current, ...newValues };
+    settingsRef.current = merged;
     setSettings(merged);
+    await settingsRepository.save(merged);
     if (auth.isAuthenticated) {
-      syncWithCloud();
+      await authService.pushCloudData({
+        settings: merged,
+      });
     }
   };
 
@@ -748,16 +782,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sessionsAdded = incomingSessions.length;
       tagsAdded = incomingTags.length;
 
-      let finalProfile = profile;
+      let finalProfile = profileRef.current;
       if (data.profile) {
         finalProfile = { ...DEFAULT_PROFILE, ...data.profile };
+        profileRef.current = finalProfile;
         await profileRepository.save(finalProfile);
         setProfile(finalProfile);
       }
 
-      let finalSettings = settings;
+      let finalSettings = settingsRef.current;
       if (data.settings) {
         finalSettings = { ...DEFAULT_SETTINGS, ...data.settings };
+        settingsRef.current = finalSettings;
         await settingsRepository.save(finalSettings);
         setSettings(finalSettings);
       }
@@ -851,8 +887,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (auth.isAuthenticated) {
         await authService.pushCloudData({
           mode: 'replace',
-          profile,
-          settings,
+          profile: profileRef.current,
+          settings: settingsRef.current,
           tags,
           sessions: [],
           coffeeCups: [],
@@ -867,6 +903,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const defSettings = await settingsRepository.resetToDefaults();
       const defProfile = await profileRepository.resetToDefaults();
 
+      settingsRef.current = defSettings;
+      profileRef.current = defProfile;
       setSessions([]);
       setCoffeeCups([]);
       setTags(defTags);
