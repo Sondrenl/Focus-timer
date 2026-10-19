@@ -111,19 +111,19 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Select Custom Date Range">
-      <form onSubmit={handleApply} className="flex flex-col gap-4 sm:gap-5">
+      <form onSubmit={handleApply} className="flex flex-col gap-4 md:gap-5">
         {/* Presets */}
         <div className="flex flex-col gap-2">
           <span className="text-xs font-semibold text-md-on-surface-variant px-1">
             Quick Date Presets
           </span>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             {presets.map((p) => (
               <button
                 type="button"
                 key={p.label}
                 onClick={() => handleSelectPreset(p)}
-                className="min-h-[44px] px-3 py-2.5 rounded-xl bg-md-surface-container text-xs sm:text-sm font-semibold text-md-on-surface hover:bg-md-primary hover:text-white transition-all text-center shadow-xs active:scale-95"
+                className="min-h-[44px] md:min-h-0 px-3 md:px-2.5 py-2.5 rounded-xl bg-md-surface-container text-xs font-semibold text-md-on-surface hover:bg-md-primary hover:text-white transition-all text-center shadow-xs active:scale-95"
               >
                 {p.label}
               </button>
@@ -132,10 +132,10 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
         </div>
 
         {/* Start Date & End Date Inputs */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 md:pt-2">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-md-on-surface-variant px-1">
-              Start Date
+              Start Date (DD/MM/YYYY)
             </label>
             <div className="relative">
               <input
@@ -145,14 +145,14 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
                   setStart(e.target.value);
                   if (error) setError('');
                 }}
-                className="w-full min-h-[46px] px-3.5 py-2.5 rounded-2xl bg-md-surface-container-high text-base sm:text-sm font-semibold text-md-on-surface border border-md-outline-variant/30 focus:outline-none focus:border-md-primary"
+                className="w-full min-h-[46px] md:min-h-0 px-3.5 md:px-3 py-2.5 md:py-2 rounded-2xl bg-md-surface-container-high text-base md:text-xs font-semibold text-md-on-surface border border-md-outline-variant/30 focus:outline-none focus:border-md-primary"
               />
             </div>
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-md-on-surface-variant px-1">
-              End Date
+              End Date (DD/MM/YYYY)
             </label>
             <div className="relative">
               <input
@@ -162,7 +162,7 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
                   setEnd(e.target.value);
                   if (error) setError('');
                 }}
-                className="w-full min-h-[46px] px-3.5 py-2.5 rounded-2xl bg-md-surface-container-high text-base sm:text-sm font-semibold text-md-on-surface border border-md-outline-variant/30 focus:outline-none focus:border-md-primary"
+                className="w-full min-h-[46px] md:min-h-0 px-3.5 md:px-3 py-2.5 md:py-2 rounded-2xl bg-md-surface-container-high text-base md:text-xs font-semibold text-md-on-surface border border-md-outline-variant/30 focus:outline-none focus:border-md-primary"
               />
             </div>
           </div>
@@ -171,11 +171,11 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
         {error && <span className="text-xs text-md-error px-1 font-medium">{error}</span>}
 
         {/* Buttons */}
-        <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-md-outline-variant/20">
-          <Button type="button" variant="text" onClick={onClose}>
+        <div className="flex items-center justify-end gap-2.5 md:gap-3 pt-2.5 md:pt-3 border-t border-md-outline-variant/20">
+          <Button type="button" variant="text" size="sm" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" variant="filled">
+          <Button type="submit" variant="filled" size="sm">
             <Check className="w-4 h-4 mr-1.5" />
             Apply Range
           </Button>

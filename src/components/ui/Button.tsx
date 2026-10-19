@@ -26,10 +26,10 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   const sizes = {
-    sm: 'min-h-[42px] text-xs sm:text-sm px-4 py-2 rounded-full gap-1.5',
-    md: 'min-h-[46px] text-sm px-5 py-2.5 rounded-full gap-2',
-    lg: 'min-h-[52px] text-base px-7 py-3.5 rounded-full gap-2.5 font-semibold',
-    icon: 'min-w-[46px] min-h-[46px] p-3 rounded-full',
+    sm: 'min-h-[42px] md:min-h-0 text-xs px-4 py-2 md:px-3 md:py-1.5 rounded-full gap-1.5',
+    md: 'min-h-[46px] md:min-h-0 text-sm px-5 py-2.5 rounded-full gap-2',
+    lg: 'min-h-[52px] md:min-h-0 text-base px-7 py-3.5 rounded-full gap-2.5 font-semibold',
+    icon: 'min-w-[46px] min-h-[46px] md:min-w-0 md:min-h-0 p-3 rounded-full',
   };
 
   return (

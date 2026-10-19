@@ -29,8 +29,8 @@ export const Input: React.FC<InputProps> = ({
         id={inputId}
         className={twMerge(
           clsx(
-            'w-full px-4 py-3 sm:py-2.5 rounded-2xl bg-md-surface-container-high border border-transparent',
-            'text-base sm:text-sm text-md-on-surface placeholder:text-md-outline transition-all duration-150',
+            'w-full px-4 py-3 md:py-2.5 rounded-2xl bg-md-surface-container-high border border-transparent',
+            'text-base md:text-sm text-md-on-surface placeholder:text-md-outline transition-all duration-150',
             'focus:outline-none focus:border-md-primary focus:bg-md-surface-container-highest',
             error && 'border-md-error focus:border-md-error bg-md-error-container/20',
             className
