@@ -14,8 +14,7 @@
     }
   },
   "vars": {
-    "GOOGLE_CLIENT_ID": "229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com",
-    "AUTH_SECRET": "pomodor-focus-timer-secret-jwt-key-2025"
+    "GOOGLE_CLIENT_ID": "229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com"
   },
   "d1_databases": [
     {
@@ -26,8 +25,7 @@
   ],
   "previews": {
     "vars": {
-      "GOOGLE_CLIENT_ID": "229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com",
-      "AUTH_SECRET": "pomodor-focus-timer-secret-jwt-key-2025"
+      "GOOGLE_CLIENT_ID": "229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com"
     },
     "d1_databases": [
       {

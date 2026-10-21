@@ -14,100 +14,30 @@ export interface PeerPresence {
   mobileVisible: boolean;
 }
 
-const DEFAULT_AUTH_SECRET = 'pomodor-focus-timer-secret-jwt-key-2025';
+// In production, AUTH_SECRET must be set via Cloudflare Workers Secrets
+// (`wrangler secret put AUTH_SECRET` or via Cloudflare Dashboard -> Variables and Secrets).
+// A local fallback is used strictly for development/testing when secrets are not yet injected.
+const DEV_FALLBACK_AUTH_SECRET = 'dev-local-secret-do-not-use-in-production';
 const DEFAULT_CLIENT_ID = '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
 
 const DESKTOP_PRESENCE_TTL_MS = 4500;
 const MOBILE_PRESENCE_TTL_MS = 6000;
 
 const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    google_id TEXT UNIQUE NOT NULL,
-    email TEXT NOT NULL,
-    display_name TEXT,
-    avatar_url TEXT,
-    avatar_emoji TEXT DEFAULT '',
-    daily_goal_minutes INTEGER DEFAULT 120,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
-  `CREATE TABLE IF NOT EXISTS tags (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    color TEXT NOT NULL,
-    is_archived INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
+  `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS deleted_tags (
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tag_id TEXT NOT NULL,
-    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, tag_id)
-  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_tags (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, tag_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tag_id TEXT,
-    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),
-    duration_seconds INTEGER NOT NULL,
-    completed_at TEXT NOT NULL
-  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),\n    duration_seconds INTEGER NOT NULL,\n    completed_at TEXT NOT NULL\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at)`,
-  `CREATE TABLE IF NOT EXISTS coffee_cups (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    tag_id TEXT,
-    date TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
+  `CREATE TABLE IF NOT EXISTS coffee_cups (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    date TEXT NOT NULL,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_date ON coffee_cups(user_id, date)`,
-  `CREATE TABLE IF NOT EXISTS user_settings (
-    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    work_duration_minutes INTEGER DEFAULT 25,
-    short_break_duration_minutes INTEGER DEFAULT 5,
-    long_break_duration_minutes INTEGER DEFAULT 25,
-    long_break_interval INTEGER DEFAULT 4,
-    auto_start_breaks INTEGER DEFAULT 0,
-    auto_start_pomodoros INTEGER DEFAULT 0,
-    sound_enabled INTEGER DEFAULT 1,
-    sound_volume REAL DEFAULT 0.8,
-    notifications_enabled INTEGER DEFAULT 0,
-    keep_awake INTEGER DEFAULT 0,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )`,
-  `CREATE TABLE IF NOT EXISTS active_timers (
-    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    session_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    remaining_seconds INTEGER NOT NULL,
-    total_seconds INTEGER NOT NULL,
-    target_end_time INTEGER,
-    current_cycle INTEGER NOT NULL,
-    tag_id TEXT,
-    timer_run_id TEXT,
-    updated_at_ms INTEGER NOT NULL,
-    last_heartbeat_ms INTEGER
-  )`,
-  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    cup_id TEXT NOT NULL,
-    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, cup_id)
-  )`,
+  `CREATE TABLE IF NOT EXISTS user_settings (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    work_duration_minutes INTEGER DEFAULT 25,\n    short_break_duration_minutes INTEGER DEFAULT 5,\n    long_break_duration_minutes INTEGER DEFAULT 25,\n    long_break_interval INTEGER DEFAULT 4,\n    auto_start_breaks INTEGER DEFAULT 0,\n    auto_start_pomodoros INTEGER DEFAULT 0,\n    sound_enabled INTEGER DEFAULT 1,\n    sound_volume REAL DEFAULT 0.8,\n    notifications_enabled INTEGER DEFAULT 0,\n    keep_awake INTEGER DEFAULT 0,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS active_timers (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    session_type TEXT NOT NULL,\n    status TEXT NOT NULL,\n    remaining_seconds INTEGER NOT NULL,\n    total_seconds INTEGER NOT NULL,\n    target_end_time INTEGER,\n    current_cycle INTEGER NOT NULL,\n    tag_id TEXT,\n    timer_run_id TEXT,\n    updated_at_ms INTEGER NOT NULL,\n    last_heartbeat_ms INTEGER\n  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    cup_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, cup_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_coffee_cups_user ON deleted_coffee_cups(user_id)`,
-  `CREATE TABLE IF NOT EXISTS user_device_presence (
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    device_id TEXT NOT NULL,
-    device_type TEXT NOT NULL,
-    is_visible INTEGER DEFAULT 0,
-    last_seen_ms INTEGER NOT NULL,
-    PRIMARY KEY (user_id, device_id)
-  )`,
+  `CREATE TABLE IF NOT EXISTS user_device_presence (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    device_id TEXT NOT NULL,\n    device_type TEXT NOT NULL,\n    is_visible INTEGER DEFAULT 0,\n    last_seen_ms INTEGER NOT NULL,\n    PRIMARY KEY (user_id, device_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_device_presence_user ON user_device_presence(user_id)`,
 ];
 
@@ -115,14 +45,19 @@ let isSchemaEnsured = false;
 
 async function ensureSchema(db: D1Database): Promise<void> {
   if (isSchemaEnsured) return;
-  for (const sql of SCHEMA_STATEMENTS) {
-    try {
-      await db.prepare(sql).run();
-    } catch (err) {
-      console.error('Error ensuring schema statement:', err);
+  try {
+    await db.batch(SCHEMA_STATEMENTS.map((sql) => db.prepare(sql)));
+    isSchemaEnsured = true;
+  } catch {
+    for (const sql of SCHEMA_STATEMENTS) {
+      try {
+        await db.prepare(sql).run();
+      } catch (err) {
+        console.error('Error ensuring schema statement:', err);
+      }
     }
+    isSchemaEnsured = true;
   }
-  isSchemaEnsured = true;
 }
 
 async function updateAndGetPeerPresence(
@@ -145,7 +80,7 @@ async function updateAndGetPeerPresence(
           .bind(userId, deviceId)
           .run();
       } else {
-        await db.batch([
+        const statements: D1PreparedStatement[] = [
           db
             .prepare(
               `INSERT INTO user_device_presence (user_id, device_id, device_type, is_visible, last_seen_ms)
@@ -156,10 +91,18 @@ async function updateAndGetPeerPresence(
                  last_seen_ms = excluded.last_seen_ms`
             )
             .bind(userId, deviceId, deviceType, isVisible, now),
-          db
-            .prepare('DELETE FROM user_device_presence WHERE user_id = ? AND last_seen_ms < ?')
-            .bind(userId, now - 3600000),
-        ]);
+        ];
+
+        // Prune presence records older than 1 hour occasionally (5% probability) to minimize D1 write volume
+        if (Math.random() < 0.05) {
+          statements.push(
+            db
+              .prepare('DELETE FROM user_device_presence WHERE user_id = ? AND last_seen_ms < ?')
+              .bind(userId, now - 3600000)
+          );
+        }
+
+        await db.batch(statements);
       }
     }
 
@@ -241,7 +184,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     return new Response(null, { headers: corsHeaders });
   }
 
-  const authSecret = env.AUTH_SECRET || DEFAULT_AUTH_SECRET;
+  const authSecret = env.AUTH_SECRET || DEV_FALLBACK_AUTH_SECRET;
+  if (!env.AUTH_SECRET) {
+    console.warn(
+      'AUTH_SECRET is not configured in worker environment. Please set it using `wrangler secret put AUTH_SECRET` or in Cloudflare Dashboard.'
+    );
+  }
   const googleClientId = env.GOOGLE_CLIENT_ID || DEFAULT_CLIENT_ID;
 
   try {
@@ -507,7 +455,51 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       return new Response(JSON.stringify({ success: true, deletedTagId: tagId }), { headers: corsHeaders });
     }
 
-    // GET /api/timer — Fetch current active timer state, coffee cups, tags, and handle device liveness
+    // POST /api/sessions — Direct fast upsert of a completed focus session
+    if (url.pathname === '/api/sessions' && request.method === 'POST') {
+      if (!currentUserId) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as {
+        session?: {
+          id: string;
+          tagId?: string | null;
+          sessionType: string;
+          durationSeconds: number;
+          completedAt: string;
+        };
+      };
+
+      if (!body.session || !body.session.id || !body.session.completedAt) {
+        return new Response(JSON.stringify({ error: 'Invalid session payload' }), { status: 400, headers: corsHeaders });
+      }
+
+      if (body.session.id.startsWith('sample-') || body.session.id.startsWith('seed-')) {
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+      }
+
+      await env.DB.prepare(
+        `INSERT INTO sessions (id, user_id, tag_id, session_type, duration_seconds, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           tag_id = excluded.tag_id,
+           session_type = excluded.session_type,
+           duration_seconds = excluded.duration_seconds,
+           completed_at = excluded.completed_at`
+      ).bind(
+        body.session.id,
+        currentUserId,
+        body.session.tagId ?? null,
+        body.session.sessionType,
+        body.session.durationSeconds,
+        body.session.completedAt
+      ).run();
+
+      return new Response(JSON.stringify({ success: true, serverTime: Date.now() }), { headers: corsHeaders });
+    }
+
+    // GET /api/timer — Fetch current active timer state, coffee cups, tags, presence, and session liveness
     if (url.pathname === "/api/timer" && request.method === "GET") {
       if (!currentUserId) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: corsHeaders });
@@ -516,7 +508,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const isRunningHeartbeat = request.headers.get("X-Timer-Heartbeat") === "1";
       const now = Date.now();
 
-      const [timerRow, coffeeRows, deletedCoffeeRows, tagRows, deletedTagRows, peerPresence] = await Promise.all([
+      const [timerRow, coffeeRows, deletedCoffeeRows, tagRows, deletedTagRows, peerPresence, lastSessionRow] = await Promise.all([
         env.DB.prepare(
           "SELECT * FROM active_timers WHERE user_id = ?"
         ).bind(currentUserId).first<{
@@ -556,6 +548,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           "SELECT tag_id FROM deleted_tags WHERE user_id = ?"
         ).bind(currentUserId).all<{ tag_id: string }>(),
         updateAndGetPeerPresence(env.DB, currentUserId, request, now),
+        env.DB.prepare(
+          "SELECT max(completed_at) as last_completed_at FROM sessions WHERE user_id = ? AND id NOT LIKE 'sample-%' AND id NOT LIKE 'seed-%'"
+        ).bind(currentUserId).first<{ last_completed_at: string | null }>(),
       ]);
 
       let timer = null;
@@ -619,6 +614,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           deletedTagIds,
           peerPresence,
           serverTime: now,
+          lastSessionCompletedAt: lastSessionRow?.last_completed_at ?? null,
         }),
         { headers: corsHeaders }
       );
@@ -783,6 +779,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           sound_volume: number;
           notifications_enabled: number;
           keep_awake: number;
+          updated_at: string;
         }>(),
         env.DB.prepare('SELECT tag_id FROM deleted_tags WHERE user_id = ?').bind(currentUserId).all<{
           tag_id: string;
@@ -839,6 +836,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             soundVolume: settingsRow.sound_volume,
             notificationsEnabled: Boolean(settingsRow.notifications_enabled),
             keepAwake: Boolean(settingsRow.keep_awake),
+            updatedAt: settingsRow.updated_at,
           }
         : null;
 

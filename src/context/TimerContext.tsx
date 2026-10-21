@@ -83,7 +83,7 @@ export interface TimerContextValue {
 const TimerContext = createContext<TimerContextValue | null>(null);
 
 export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications, syncRemoteCoffeeCups, syncRemoteTags } = useApp();
+  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications, syncRemoteCoffeeCups, syncRemoteTags, sessions, syncWithCloud } = useApp();
   const authService = AuthService.getInstance();
 
   // Helper to determine target duration in seconds for given session type
@@ -221,6 +221,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const isAuthenticatedRef = useRef<boolean>(auth.isAuthenticated);
   isAuthenticatedRef.current = auth.isAuthenticated;
+
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const lastKnownCloudSessionCompletedAtRef = useRef<string | null>(null);
+  const lastVisibilitySyncMsRef = useRef<number>(0);
 
   /**
    * Determines whether THIS device should play the completion chime and show the notification:
@@ -1006,6 +1011,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         syncRemoteTags(result.tags, result.deletedTagIds);
       }
 
+      if (result.lastSessionCompletedAt) {
+        const latestLocalCompletedAt =
+          sessionsRef.current.length > 0
+            ? sessionsRef.current[sessionsRef.current.length - 1].completedAt
+            : null;
+
+        if (!latestLocalCompletedAt || result.lastSessionCompletedAt > latestLocalCompletedAt) {
+          if (result.lastSessionCompletedAt !== lastKnownCloudSessionCompletedAtRef.current) {
+            lastKnownCloudSessionCompletedAtRef.current = result.lastSessionCompletedAt;
+            void syncWithCloud();
+          }
+        }
+      }
+
       // Discard stale timer payload if a local timer action occurred while this GET was in flight
       if (
         result.timer &&
@@ -1021,7 +1040,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isWakeSyncingRef.current = false;
       console.warn('Error checking remote timer', err);
     }
-  }, [authService, applyRemoteState, syncRemoteCoffeeCups, syncRemoteTags, syncScheduledNotification]);
+  }, [authService, applyRemoteState, syncRemoteCoffeeCups, syncRemoteTags, syncScheduledNotification, syncWithCloud]);
 
   const checkRemoteTimerRef = useRef(checkRemoteTimer);
   checkRemoteTimerRef.current = checkRemoteTimer;
@@ -1128,6 +1147,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // to the cloud so peer devices know within milliseconds whether the laptop screen is open or closed.
       if (isAuthenticatedRef.current) {
         void checkRemoteTimerRef.current();
+        const nowMs = Date.now();
+        if (nowMs - lastVisibilitySyncMsRef.current > 20000) {
+          lastVisibilitySyncMsRef.current = nowMs;
+          void syncWithCloud();
+        }
       }
 
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
@@ -1187,7 +1211,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('focus', handleVisibilityOrFocus);
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
     };
-  }, [authService, sound, syncScheduledNotification]);
+  }, [authService, sound, syncScheduledNotification, syncWithCloud]);
 
   // Backup main-thread interval (safeguards countdown & polling if Web Worker is unavailable)
   useEffect(() => {

@@ -1,13 +1,15 @@
 import { RemoteTimerState } from '../auth/AuthService';
 import { CoffeeCup } from '../../types/coffee';
 import { Tag } from '../../types/tag';
+import { CompletedSession } from '../../types/session';
 
 export interface TimerBroadcastEvent {
   senderId: string;
-  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'TAB_HELLO' | 'TAB_ACK' | 'TAB_GOODBYE';
+  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'TAB_HELLO' | 'TAB_ACK' | 'TAB_GOODBYE';
   timer?: RemoteTimerState;
   coffeeCups?: CoffeeCup[];
   tags?: Tag[];
+  session?: CompletedSession;
 }
 
 const CHANNEL_NAME = 'focus_timer_sync_v1';
@@ -140,6 +142,35 @@ export const subscribeTags = (callback: (tags: Tag[]) => void): (() => void) => 
   const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
     if (event.data && event.data.senderId !== TAB_ID && event.data.tags) {
       callback(event.data.tags);
+    }
+  };
+
+  channel.addEventListener('message', handler);
+  return () => {
+    channel?.removeEventListener('message', handler);
+  };
+};
+
+export const broadcastSession = (session: CompletedSession): void => {
+  try {
+    if (channel) {
+      channel.postMessage({
+        senderId: TAB_ID,
+        type: 'SESSION',
+        session,
+      } as TimerBroadcastEvent);
+    }
+  } catch (e) {
+    console.warn('Session BroadcastChannel error:', e);
+  }
+};
+
+export const subscribeSessions = (callback: (session: CompletedSession) => void): (() => void) => {
+  if (!channel) return () => {};
+
+  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
+    if (event.data && event.data.senderId !== TAB_ID && event.data.session) {
+      callback(event.data.session);
     }
   };
 

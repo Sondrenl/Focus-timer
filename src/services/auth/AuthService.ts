@@ -25,6 +25,7 @@ export interface RemoteTimerResult {
   deletedTagIds?: string[];
   peerPresence?: PeerPresence;
   serverTime?: number;
+  lastSessionCompletedAt?: string | null;
 }
 
 export function isMobileDevice(): boolean {
@@ -58,7 +59,7 @@ export interface CloudDataResponse {
   deletedTagIds?: string[];
   deletedCoffeeCupIds?: string[];
   sessions: CompletedSession[];
-  settings: UserSettings | null;
+  settings: (UserSettings & { updatedAt?: string }) | null;
   coffeeCups?: CoffeeCup[];
   syncedAt: string;
   serverTime?: number;
@@ -323,6 +324,27 @@ export class AuthService {
     }
   }
 
+  public async recordSessionRemote(session: CompletedSession): Promise<boolean> {
+    const token = this.getStoredToken();
+    if (!token) return false;
+
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        keepalive: true,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ session }),
+      });
+      return res.ok;
+    } catch (e) {
+      console.warn('Failed to post session to remote server', e);
+      return false;
+    }
+  }
+
   public async fetchCloudData(): Promise<CloudDataResponse | null> {
     const token = this.getStoredToken();
     if (!token) return null;
@@ -479,11 +501,11 @@ export class AuthService {
 
     try {
       const headers = this.buildPresenceHeaders(token, deviceSessionId, false, true);
-      fetch('/api/timer', {
+      void fetch('/api/timer', {
         method: 'GET',
         keepalive: true,
         headers,
-      }).catch(() => {});
+      });
     } catch {
       // Ignore unload network errors
     }

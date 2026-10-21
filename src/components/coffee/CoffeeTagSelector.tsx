@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Plus, Check, Tag as TagIcon } from 'lucide-react';
+import { ChevronDown, Plus, Tag as TagIcon } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TagFormModal } from '../tags/TagFormModal';
-import { Modal } from '../ui/Modal';
 
 interface CoffeeTagSelectorProps {
   selectedTagId: string | null;
@@ -18,14 +17,15 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Close dropdown on click/tap outside
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: MouseEvent | TouchEvent | PointerEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, []);
 
   const currentTag = activeTags.find((t) => t.id === selectedTagId);
@@ -38,7 +38,7 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
       </span>
 
       <div className="relative inline-block">
-        {/* Trigger Button: Large touch pill on mobile, original compact pill on desktop (md:) */}
+        {/* Trigger Button: Large touch pill on mobile, compact pill on desktop */}
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
@@ -62,37 +62,38 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
           )}
           <ChevronDown
             className={`w-5 h-5 md:w-3.5 md:h-3.5 text-md-on-surface-variant md:text-md-outline transition-transform duration-200 ${
-              isOpen ? 'md:rotate-180' : ''
+              isOpen ? 'rotate-180' : ''
             }`}
           />
         </button>
 
-        {/* Desktop Dropdown Menu (md and up - identical to original desktop design) */}
+        {/* Dropdown Menu: Enlarged touch-friendly dropdown on mobile, compact on desktop */}
         {isOpen && (
-          <div className="hidden md:block absolute left-1/2 -translate-x-1/2 mt-2 w-60 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-1.5 shadow-elevation-2 z-30 animate-in fade-in zoom-in-95 duration-150">
-            <div className="text-[11px] font-semibold text-md-on-surface-variant px-3 py-1 uppercase tracking-wider">
+          <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),19rem)] md:w-60 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30 animate-in fade-in zoom-in-95 duration-150">
+            <div className="text-xs md:text-[11px] font-semibold text-md-on-surface-variant px-3 py-2 md:py-1 uppercase tracking-wider">
               Choose Tag for Cup
             </div>
 
-            <div className="max-h-56 overflow-y-auto space-y-1 py-1">
+            <div className="max-h-64 md:max-h-56 overflow-y-auto space-y-1 py-1">
               {/* No Tag Option */}
               <button
+                type="button"
                 onClick={() => {
                   onSelectTagId(null);
                   setIsOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left ${
+                className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-medium transition-colors text-left ${
                   selectedTagId === null
                     ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
-                    : 'hover:bg-md-surface-container text-md-on-surface'
+                    : 'hover:bg-md-surface-container text-md-on-surface active:bg-md-surface-container'
                 }`}
               >
-                <div className="flex items-center gap-2 truncate">
-                  <TagIcon className="w-3.5 h-3.5 text-md-outline shrink-0" />
+                <div className="flex items-center gap-2.5 md:gap-2 truncate">
+                  <TagIcon className="w-4 h-4 md:w-3.5 md:h-3.5 text-md-outline shrink-0" />
                   <span className="truncate">No Tag</span>
                 </div>
                 {selectedTagId === null && (
-                  <span className="text-[10px] text-md-primary font-bold">Active</span>
+                  <span className="text-xs md:text-[10px] text-md-primary font-bold">Active</span>
                 )}
               </button>
 
@@ -101,134 +102,48 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
                 const isSelected = tag.id === selectedTagId;
                 return (
                   <button
+                    type="button"
                     key={tag.id}
                     onClick={() => {
                       onSelectTagId(tag.id);
                       setIsOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left ${
+                    className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-medium transition-colors text-left ${
                       isSelected
                         ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
-                        : 'hover:bg-md-surface-container text-md-on-surface'
+                        : 'hover:bg-md-surface-container text-md-on-surface active:bg-md-surface-container'
                     }`}
                   >
-                    <div className="flex items-center gap-2 truncate">
+                    <div className="flex items-center gap-2.5 md:gap-2 truncate">
                       <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        className="w-3.5 h-3.5 md:w-2.5 md:h-2.5 rounded-full shrink-0 shadow-xs"
                         style={{ backgroundColor: tag.color }}
                       />
                       <span className="truncate">{tag.name}</span>
                     </div>
                     {isSelected && (
-                      <span className="text-[10px] text-md-primary font-bold">Active</span>
+                      <span className="text-xs md:text-[10px] text-md-primary font-bold">Active</span>
                     )}
                   </button>
                 );
               })}
             </div>
 
-            <div className="border-t border-md-outline-variant/30 pt-1 mt-1">
+            <div className="border-t border-md-outline-variant/30 pt-1.5 md:pt-1 mt-1">
               <button
+                type="button"
                 onClick={() => {
                   setIsOpen(false);
                   setIsModalOpen(true);
                 }}
-                className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-md-primary hover:bg-md-primary/10 transition-colors text-left"
+                className="w-full flex items-center gap-2 md:gap-1.5 min-h-[44px] md:min-h-0 px-3.5 py-2.5 md:px-3 md:py-1.5 rounded-xl text-sm md:text-xs font-semibold text-md-primary hover:bg-md-primary/10 active:bg-md-primary/15 transition-colors text-left"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-4 h-4 md:w-3.5 md:h-3.5" />
                 <span>Create New Tag...</span>
               </button>
             </div>
           </div>
         )}
-
-        {/* Mobile Tag Picker Modal (< md only) */}
-        <div className="md:hidden">
-          <Modal
-            isOpen={isOpen}
-            onClose={() => setIsOpen(false)}
-            title="Choose Tag for Cup"
-          >
-            <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-1 gap-2 max-h-[52dvh] overflow-y-auto pr-0.5">
-                {/* No Tag Option */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectTagId(null);
-                    setIsOpen(false);
-                  }}
-                  className={`w-full flex items-center justify-between min-h-[52px] px-4 py-3 rounded-2xl text-sm font-semibold transition-all text-left border ${
-                    selectedTagId === null
-                      ? 'bg-md-primary-container text-md-on-primary-container border-md-primary/40 shadow-xs'
-                      : 'bg-md-surface-container hover:bg-md-surface-container-highest text-md-on-surface border-md-outline-variant/25'
-                  }`}
-                >
-                  <div className="flex items-center gap-3.5 truncate">
-                    <TagIcon className="w-4 h-4 text-md-outline shrink-0" />
-                    <div className="flex flex-col">
-                      <span className="truncate">No Tag</span>
-                      <span className="text-xs font-normal opacity-75">Log coffee without a tag</span>
-                    </div>
-                  </div>
-                  {selectedTagId === null && (
-                    <div className="w-7 h-7 rounded-full bg-md-primary text-md-on-primary flex items-center justify-center shrink-0">
-                      <Check className="w-4 h-4 stroke-[2.5]" />
-                    </div>
-                  )}
-                </button>
-
-                {/* Active User Tags */}
-                {activeTags.map((tag) => {
-                  const isSelected = tag.id === selectedTagId;
-                  return (
-                    <button
-                      type="button"
-                      key={tag.id}
-                      onClick={() => {
-                        onSelectTagId(tag.id);
-                        setIsOpen(false);
-                      }}
-                      className={`w-full flex items-center justify-between min-h-[52px] px-4 py-3 rounded-2xl text-sm font-semibold transition-all text-left border ${
-                        isSelected
-                          ? 'bg-md-primary-container text-md-on-primary-container border-md-primary/40 shadow-xs'
-                          : 'bg-md-surface-container hover:bg-md-surface-container-highest text-md-on-surface border-md-outline-variant/25'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3.5 truncate">
-                        <span
-                          className="w-4 h-4 rounded-full shrink-0 shadow-xs"
-                          style={{ backgroundColor: tag.color }}
-                        />
-                        <span className="truncate">{tag.name}</span>
-                      </div>
-                      {isSelected && (
-                        <div className="w-7 h-7 rounded-full bg-md-primary text-md-on-primary flex items-center justify-center shrink-0">
-                          <Check className="w-4 h-4 stroke-[2.5]" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Prominent Create New Tag Action */}
-              <div className="border-t border-md-outline-variant/30 pt-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsOpen(false);
-                    setIsModalOpen(true);
-                  }}
-                  className="w-full flex items-center justify-center gap-2.5 min-h-[48px] px-4 py-3 rounded-2xl text-sm font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-98 transition-all"
-                >
-                  <Plus className="w-5 h-5" />
-                  <span>Create New Tag</span>
-                </button>
-              </div>
-            </div>
-          </Modal>
-        </div>
 
         {/* Quick Tag Creation Modal */}
         <TagFormModal
