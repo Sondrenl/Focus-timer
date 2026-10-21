@@ -375,12 +375,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => clearTimeout(timer);
   }, []);
 
-  // On mobile, keep silent background audio alive and manage screen wake lock.
+  // Manage screen wake lock when the timer is actively running.
   // On desktop, never acquire wake lock unless explicitly requested in settings so closing the laptop lid sleeps immediately.
   useEffect(() => {
-    if (IS_MOBILE) {
-      sound.startSilentKeepAlive();
-    }
     if (status === 'RUNNING' && (IS_MOBILE || settings.keepAwake)) {
       wakeLockService.acquire();
     } else {
@@ -389,7 +386,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       wakeLockService.release();
     };
-  }, [status, settings.keepAwake, sound]);
+  }, [status, settings.keepAwake]);
 
   // Persist state to localStorage on updates
   useEffect(() => {
@@ -1139,9 +1136,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const handleVisibilityOrFocus = () => {
       const isHidden = document.visibilityState === 'hidden';
 
-      if (IS_MOBILE) {
-        sound.startSilentKeepAlive();
-      }
+
 
       // Immediately report visibility transitions (including closing the laptop lid -> hidden!)
       // to the cloud so peer devices know within milliseconds whether the laptop screen is open or closed.

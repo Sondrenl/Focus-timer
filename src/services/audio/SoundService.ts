@@ -1,117 +1,40 @@
-import { isMobileDevice } from '../auth/AuthService';
-
 /**
- * Encodes floating-point mono audio samples (-1.0 to 1.0) into a 16-bit PCM WAV Blob URL.
- */
-function createWavBlobUrl(samples: Float32Array, sampleRate: number): string {
-  const numSamples = samples.length;
-  const buffer = new ArrayBuffer(44 + numSamples * 2);
-  const view = new DataView(buffer);
-
-  const writeString = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  };
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + numSamples * 2, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true); // PCM chunk size
-  view.setUint16(20, 1, true); // PCM format = 1
-  view.setUint16(22, 1, true); // Mono = 1 channel
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // Byte rate
-  view.setUint16(32, 2, true); // Block align
-  view.setUint16(34, 16, true); // 16-bit
-  writeString(36, 'data');
-  view.setUint32(40, numSamples * 2, true);
-
-  let offset = 44;
-  for (let i = 0; i < numSamples; i++) {
-    const clamped = Math.max(-1, Math.min(1, samples[i]));
-    const intSample = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
-    view.setInt16(offset, Math.round(intSample), true);
-    offset += 2;
-  }
-
-  const blob = new Blob([buffer], { type: 'audio/wav' });
-  return URL.createObjectURL(blob);
-}
-
-/**
- * Generates a 10-second sub-audible (-74 dB) WAV for keeping mobile HTML5 <audio> alive
- * when the phone screen is turned off or the user goes to the Home Screen.
- * Duration >= 5 seconds is required by mobile browsers (Chromium MediaSessionImpl)
- * to maintain background audio & timer execution priority across Focus and Break intervals.
- */
-function generateSilentKeepAliveWav(): string {
-  const sampleRate = 8000;
-  const durationSec = 10;
-  const totalSamples = sampleRate * durationSec;
-  const samples = new Float32Array(totalSamples);
-  for (let i = 0; i < totalSamples; i++) {
-    // Non-zero (~6/32767) at volume 1.0 so mobile OS audio decoders never suspend it as digital silence
-    samples[i] = Math.sin((2 * Math.PI * 2 * i) / sampleRate) * 0.0002;
-  }
-  return createWavBlobUrl(samples, sampleRate);
-}
-
-/**
- * SoundService provides synthesized audio feedback using Web Audio API.
- * - On Mobile: maintains a continuous >=5s sub-audible HTML5 <audio> keep-alive loop (`bgAudio`)
- *   so the phone stays connected in the background across Focus -> IDLE -> Break transitions even
- *   when the phone screen is off and the timer is controlled from a laptop.
- * - On Desktop: never runs background keep-alive audio and suspends the AudioContext immediately
- *   after each chime so the laptop holds zero OS audio power assertions and sleeps cleanly when
- *   the laptop lid is closed.
+ * SoundService provides synthesized audio feedback using the Web Audio API.
+ * - Does NOT create or play HTML5 <audio> elements in the background, preventing mobile OSes
+ *   (e.g. Android Chrome) from displaying unwanted media playback widgets / lock-screen controls.
+ * - Completion chimes are played via Web Audio oscillators and the AudioContext is immediately
+ *   suspended after ringing so zero audio power assertions or media locks are held.
  */
 export class SoundService {
   private audioCtx: AudioContext | null = null;
-  private keepAliveOsc: OscillatorNode | null = null;
-  private keepAliveGain: GainNode | null = null;
-
-  private bgAudio: HTMLAudioElement | null = null;
-  private silentWavUrl: string | null = null;
-  private desktopSuspendTimer: ReturnType<typeof setTimeout> | null = null;
+  private suspendTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
-      try {
-        this.silentWavUrl = generateSilentKeepAliveWav();
-      } catch {
-        // Ignore if Blob/URL is unavailable in test environment
+      // Explicitly clear any stale mediaSession playback state in mobile browsers
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.playbackState = 'none';
+        } catch {
+          // Ignore
+        }
       }
 
-      if (isMobileDevice()) {
-        const unlockOnGesture = () => {
-          this.startSilentKeepAlive();
-        };
-        window.addEventListener('pointerdown', unlockOnGesture, { passive: true });
-        window.addEventListener('touchstart', unlockOnGesture, { passive: true });
-        window.addEventListener('touchend', unlockOnGesture, { passive: true });
-        window.addEventListener('click', unlockOnGesture, { passive: true });
-        window.addEventListener('keydown', unlockOnGesture, { passive: true });
-      }
+      // Unlock AudioContext on the first user interaction so chimes can play on completion
+      const unlockOnGesture = () => {
+        this.getAudioContext();
+        window.removeEventListener('pointerdown', unlockOnGesture);
+        window.removeEventListener('touchstart', unlockOnGesture);
+        window.removeEventListener('touchend', unlockOnGesture);
+        window.removeEventListener('click', unlockOnGesture);
+        window.removeEventListener('keydown', unlockOnGesture);
+      };
+      window.addEventListener('pointerdown', unlockOnGesture, { passive: true });
+      window.addEventListener('touchstart', unlockOnGesture, { passive: true });
+      window.addEventListener('touchend', unlockOnGesture, { passive: true });
+      window.addEventListener('click', unlockOnGesture, { passive: true });
+      window.addEventListener('keydown', unlockOnGesture, { passive: true });
     }
-  }
-
-  private getOrCreateBgAudio(): HTMLAudioElement | null {
-    if (typeof window === 'undefined' || typeof Audio === 'undefined') return null;
-    if (!this.bgAudio) {
-      const audio = new Audio();
-      audio.setAttribute('playsinline', 'true');
-      audio.setAttribute('webkit-playsinline', 'true');
-      audio.preload = 'auto';
-      audio.loop = true;
-      audio.volume = 1.0;
-      if (this.silentWavUrl) {
-        audio.src = this.silentWavUrl;
-      }
-      this.bgAudio = audio;
-    }
-    return this.bgAudio;
   }
 
   /**
@@ -136,100 +59,45 @@ export class SoundService {
   }
 
   /**
-   * Starts an inaudible 10-second keep-alive audio loop on mobile devices so the phone tab stays
-   * connected in the background while the screen is off.
-   * On desktop devices, this is intentionally a no-op so the laptop never holds an OS audio sleep
-   * assertion when the user closes the laptop lid.
+   * Safe no-op retained for API compatibility.
+   * Background audio loops are intentionally disabled to prevent mobile media notification widgets.
    */
   startSilentKeepAlive(): void {
-    if (!isMobileDevice()) {
-      return;
-    }
-
-    try {
-      const audio = this.getOrCreateBgAudio();
-      if (audio) {
-        audio.loop = true;
-        audio.volume = 1.0;
-        if (audio.paused) {
-          audio.play().catch(() => {});
-        }
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore HTML5 audio errors
-    }
-
-    try {
-      const ctx = this.getAudioContext();
-      if (!ctx) return;
-
-      if (this.keepAliveOsc) {
-        if (ctx.state === 'suspended') {
-          ctx.resume().catch(() => {});
-        }
-        return;
-      }
-
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(1, ctx.currentTime);
-      gain.gain.setValueAtTime(0.00001, ctx.currentTime);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-
-      this.keepAliveOsc = osc;
-      this.keepAliveGain = gain;
-    } catch {
-      // Ignore audio context restrictions if called without user gesture
     }
   }
 
   /**
-   * On mobile, we intentionally keep the sub-audible keep-alive loop running across IDLE/PAUSED
-   * transitions so the phone remains connected in the background when the screen is off and the
-   * user starts the next session (e.g. a break) from their laptop.
-   * Only `stopKeepAliveForUnload()` (when the app/tab is actually closed) tears down the nodes.
+   * Safe no-op retained for API compatibility.
    */
   stopSilentKeepAlive(_forceImmediate: boolean = false): void {
-    if (isMobileDevice()) {
-      return;
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+      } catch {
+        // Ignore
+      }
     }
-    this.stopKeepAliveNodesNow();
   }
 
   /**
-   * Explicitly stops all background audio nodes when the app or tab is being unloaded/killed.
+   * Explicitly suspends audio context when the app or tab is being unloaded.
    */
   stopKeepAliveForUnload(): void {
-    this.stopKeepAliveNodesNow();
-  }
-
-  private stopKeepAliveNodesNow(): void {
-    try {
-      if (this.bgAudio) {
-        this.bgAudio.pause();
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore HTML5 audio pause errors
     }
-
-    try {
-      if (this.keepAliveOsc) {
-        this.keepAliveOsc.stop();
-        this.keepAliveOsc.disconnect();
-        this.keepAliveOsc = null;
-      }
-      if (this.keepAliveGain) {
-        this.keepAliveGain.disconnect();
-        this.keepAliveGain = null;
-      }
-    } catch {
-      this.keepAliveOsc = null;
-      this.keepAliveGain = null;
+    if (this.audioCtx && this.audioCtx.state === 'running') {
+      this.audioCtx.suspend().catch(() => {});
     }
   }
 
@@ -249,9 +117,9 @@ export class SoundService {
     const ctx = this.getAudioContext();
     if (!ctx) return;
 
-    if (this.desktopSuspendTimer) {
-      clearTimeout(this.desktopSuspendTimer);
-      this.desktopSuspendTimer = null;
+    if (this.suspendTimer) {
+      clearTimeout(this.suspendTimer);
+      this.suspendTimer = null;
     }
 
     const scheduleNotes = () => {
@@ -277,16 +145,14 @@ export class SoundService {
         osc.stop(noteStartTime + 1.3);
       });
 
-      // On desktop, suspend the AudioContext right after the chime finishes so the laptop
-      // holds zero OS audio power assertions and sleeps immediately when the lid is closed.
-      if (!isMobileDevice()) {
-        this.desktopSuspendTimer = setTimeout(() => {
-          this.desktopSuspendTimer = null;
-          if (this.audioCtx && this.audioCtx.state === 'running') {
-            this.audioCtx.suspend().catch(() => {});
-          }
-        }, 1650);
-      }
+      // Suspend the AudioContext shortly after the chime finishes so the device
+      // holds zero OS audio assertions and stays quiet.
+      this.suspendTimer = setTimeout(() => {
+        this.suspendTimer = null;
+        if (this.audioCtx && this.audioCtx.state === 'running') {
+          this.audioCtx.suspend().catch(() => {});
+        }
+      }, 1650);
     };
 
     if (ctx.state === 'suspended') {
