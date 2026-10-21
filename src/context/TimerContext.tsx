@@ -275,11 +275,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    if (!shouldThisDeviceAlert(sessionTypeRef.current)) {
-      notifications.cancelScheduledNotification();
-      return;
-    }
-
     const now = authService.getServerNow();
     const diffMs = Math.max(0, targetEndTimeRef.current - now);
     if (diffMs > 0) {
@@ -291,7 +286,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         timerRunIdRef.current
       );
     }
-  }, [authService, notifications, shouldThisDeviceAlert]);
+  }, [authService, notifications]);
 
   /**
    * Dispatches the completion notification and chime once per completed runId if this device should alert.
@@ -528,14 +523,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastSwScheduleRefreshMsRef.current = Date.now();
       if (settingsRef.current.notificationsEnabled) {
         if (notifications.hasPermission()) {
-          if (shouldThisDeviceAlert(sessionTypeRef.current)) {
-            notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true, runId);
-          } else {
-            notifications.cancelScheduledNotification();
-          }
+          notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true, runId);
         } else {
           notifications.requestPermission().then((granted) => {
-            if (granted && statusRef.current === 'RUNNING' && shouldThisDeviceAlert(sessionTypeRef.current)) {
+            if (granted && statusRef.current === 'RUNNING') {
               notifications.scheduleTimerNotification(
                 targetWallClockMs,
                 sessionTypeRef.current,
@@ -898,11 +889,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setStatus('RUNNING');
           lastTickWallMsRef.current = Date.now();
 
-          if (shouldThisDeviceAlert(remote.sessionType)) {
+          if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
             notifications.scheduleTimerNotification(
               Date.now() + diffSec * 1000,
               remote.sessionType,
-              settingsRef.current.notificationsEnabled,
+              true,
               remote.timerRunId
             );
           } else {

@@ -261,15 +261,23 @@ export class NotificationService {
         ? navigator.serviceWorker.controller
         : null);
 
+    const isMobile =
+      typeof navigator !== 'undefined' &&
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    const messageData = {
+      type: 'SCHEDULE_TIMER_NOTIFICATION',
+      targetEndTime: targetEndTimeMs,
+      title,
+      body,
+      sessionId: sessionRunId || null,
+      sessionType,
+      isMobile,
+    };
+
     if (syncWorker) {
       try {
-        syncWorker.postMessage({
-          type: 'SCHEDULE_TIMER_NOTIFICATION',
-          targetEndTime: targetEndTimeMs,
-          title,
-          body,
-          sessionId: sessionRunId || null,
-        });
+        syncWorker.postMessage(messageData);
         return;
       } catch {
         // Fall through to async lookup
@@ -279,13 +287,7 @@ export class NotificationService {
     this.getActiveRegistration().then((reg) => {
       const worker = reg?.active || navigator.serviceWorker?.controller;
       if (worker) {
-        worker.postMessage({
-          type: 'SCHEDULE_TIMER_NOTIFICATION',
-          targetEndTime: targetEndTimeMs,
-          title,
-          body,
-          sessionId: sessionRunId || null,
-        });
+        worker.postMessage(messageData);
       }
     });
   }
