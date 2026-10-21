@@ -67,14 +67,28 @@ export function useStatistics() {
     };
   });
 
-  // Navigation handlers
+  const now = new Date();
+  const todayKey = toDateKey(now);
+
+  // Navigation handlers with month-end and leap-year overflow protection
   const goToPrev = () => {
     setReferenceDate((prev) => {
       const d = new Date(prev);
-      if (periodType === 'day') d.setDate(d.getDate() - 1);
-      else if (periodType === 'week') d.setDate(d.getDate() - 7);
-      else if (periodType === 'month') d.setMonth(d.getMonth() - 1);
-      else if (periodType === 'year') d.setFullYear(d.getFullYear() - 1);
+      if (periodType === 'day') {
+        d.setDate(d.getDate() - 1);
+      } else if (periodType === 'week') {
+        d.setDate(d.getDate() - 7);
+      } else if (periodType === 'month') {
+        // Setting day to 1 prevents 31st overflow (e.g. March 31 -> Feb 31 -> March 3)
+        const targetMonth = d.getMonth() - 1;
+        d.setDate(1);
+        d.setMonth(targetMonth);
+      } else if (periodType === 'year') {
+        // Setting day to 1 prevents leap-year Feb 29 overflow
+        const targetYear = d.getFullYear() - 1;
+        d.setDate(1);
+        d.setFullYear(targetYear);
+      }
       return d;
     });
   };
@@ -82,10 +96,20 @@ export function useStatistics() {
   const goToNext = () => {
     setReferenceDate((prev) => {
       const d = new Date(prev);
-      if (periodType === 'day') d.setDate(d.getDate() + 1);
-      else if (periodType === 'week') d.setDate(d.getDate() + 7);
-      else if (periodType === 'month') d.setMonth(d.getMonth() + 1);
-      else if (periodType === 'year') d.setFullYear(d.getFullYear() + 1);
+      if (periodType === 'day') {
+        d.setDate(d.getDate() + 1);
+      } else if (periodType === 'week') {
+        d.setDate(d.getDate() + 7);
+      } else if (periodType === 'month') {
+        // Setting day to 1 prevents end-of-month overflow (e.g. Jan 31 -> Feb 31 -> March 3)
+        const targetMonth = d.getMonth() + 1;
+        d.setDate(1);
+        d.setMonth(targetMonth);
+      } else if (periodType === 'year') {
+        const targetYear = d.getFullYear() + 1;
+        d.setDate(1);
+        d.setFullYear(targetYear);
+      }
       return d;
     });
   };
@@ -94,6 +118,50 @@ export function useStatistics() {
     setReferenceDate(new Date());
   };
 
+  // Determine if viewing current period
+  const isCurrentPeriod = useMemo(() => {
+    if (periodType === 'day') {
+      return toDateKey(referenceDate) === todayKey;
+    }
+    if (periodType === 'week') {
+      const { start, end } = getWeekRange(referenceDate);
+      return todayKey >= toDateKey(start) && todayKey <= toDateKey(end);
+    }
+    if (periodType === 'month') {
+      return (
+        referenceDate.getFullYear() === now.getFullYear() &&
+        referenceDate.getMonth() === now.getMonth()
+      );
+    }
+    if (periodType === 'year') {
+      return referenceDate.getFullYear() === now.getFullYear();
+    }
+    return true; // 'all' and 'custom' are static / range-driven
+  }, [periodType, referenceDate, todayKey]);
+
+  // Determine if forward navigation is permitted (cannot navigate past current period)
+  const canGoNext = useMemo(() => {
+    if (periodType === 'all' || periodType === 'custom') return false;
+    if (periodType === 'day') {
+      return toDateKey(referenceDate) < todayKey;
+    }
+    if (periodType === 'week') {
+      const { end } = getWeekRange(referenceDate);
+      return toDateKey(end) < todayKey;
+    }
+    if (periodType === 'month') {
+      if (referenceDate.getFullYear() < now.getFullYear()) return true;
+      if (referenceDate.getFullYear() === now.getFullYear()) {
+        return referenceDate.getMonth() < now.getMonth();
+      }
+      return false;
+    }
+    if (periodType === 'year') {
+      return referenceDate.getFullYear() < now.getFullYear();
+    }
+    return false;
+  }, [periodType, referenceDate, todayKey]);
+
   // Main statistics derivation
   const stats = useMemo(() => {
     let startDate: Date;
@@ -101,6 +169,15 @@ export function useStatistics() {
     let periodLabel = '';
 
     const ref = referenceDate;
+
+    // Sanitized custom range bounds
+    let sCustomKey = customRange.start;
+    let eCustomKey = customRange.end;
+    if (sCustomKey > eCustomKey) {
+      const tmp = sCustomKey;
+      sCustomKey = eCustomKey;
+      eCustomKey = tmp;
+    }
 
     if (periodType === 'day') {
       const r = getDayRange(ref);
@@ -125,8 +202,8 @@ export function useStatistics() {
       endDate = r.end;
       periodLabel = `${startDate.getFullYear()}`;
     } else if (periodType === 'custom') {
-      const s = new Date(`${customRange.start}T00:00:00.000`);
-      const e = new Date(`${customRange.end}T23:59:59.999`);
+      const s = new Date(`${sCustomKey}T00:00:00.000`);
+      const e = new Date(`${eCustomKey}T23:59:59.999`);
       startDate = s;
       endDate = e;
       periodLabel = `${formatFriendlyDate(s, true)} – ${formatFriendlyDate(e, true)}`;
@@ -137,16 +214,21 @@ export function useStatistics() {
       periodLabel = 'All Time History';
     }
 
-    // Filter work sessions within period
+    // Filter work sessions within period with robust timestamp validation
     const filteredSessions = sessions.filter((s) => {
       if (s.sessionType !== 'WORK') return false;
       if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) return false;
+      if (!s.completedAt) return false;
       const d = new Date(s.completedAt);
+      if (isNaN(d.getTime())) return false;
       return d >= startDate && d <= endDate;
     });
 
     // 1. Total Metrics
-    const totalFocusSeconds = filteredSessions.reduce((acc, s) => acc + s.durationSeconds, 0);
+    const totalFocusSeconds = filteredSessions.reduce(
+      (acc, s) => acc + (s.durationSeconds > 0 ? s.durationSeconds : 0),
+      0
+    );
     const totalFocusHours = Number((totalFocusSeconds / 3600).toFixed(1));
     const totalWorkCount = filteredSessions.length;
 
@@ -158,7 +240,7 @@ export function useStatistics() {
     filteredSessions.forEach((s) => {
       const tagId = s.tagId || 'unassigned';
       const curr = tagSecondsMap.get(tagId) || { seconds: 0, count: 0 };
-      curr.seconds += s.durationSeconds;
+      curr.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
       curr.count += 1;
       tagSecondsMap.set(tagId, curr);
     });
@@ -193,8 +275,14 @@ export function useStatistics() {
         activityBars = [];
       } else {
         const sessionHours = filteredSessions.map((s) => new Date(s.completedAt).getHours());
-        const minHour = Math.min(...sessionHours);
-        const maxHour = Math.max(...sessionHours);
+        let minHour = Math.min(...sessionHours);
+        let maxHour = Math.max(...sessionHours);
+
+        // If minHour === maxHour (single active hour), pad by 1 hour on each side for clear visual context
+        if (minHour === maxHour) {
+          minHour = Math.max(0, minHour - 1);
+          maxHour = Math.min(23, maxHour + 1);
+        }
 
         const hoursCount = maxHour - minHour + 1;
         const hoursArray = Array.from({ length: hoursCount }, (_, i) => {
@@ -211,7 +299,7 @@ export function useStatistics() {
           const h = d.getHours();
           const target = hoursArray.find((item) => item.hour === h);
           if (target) {
-            target.seconds += s.durationSeconds;
+            target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
             target.count += 1;
           }
         });
@@ -227,7 +315,7 @@ export function useStatistics() {
     } else if (periodType === 'week') {
       const days = Array.from({ length: 7 }, (_, i) => {
         const d = new Date(startDate);
-        d.setDate(d.getDate() + i);
+        d.setDate(startDate.getDate() + i);
         return {
           date: d,
           dateKey: toDateKey(d),
@@ -241,7 +329,7 @@ export function useStatistics() {
         const key = toDateKey(s.completedAt);
         const target = days.find((d) => d.dateKey === key);
         if (target) {
-          target.seconds += s.durationSeconds;
+          target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
           target.count += 1;
         }
       });
@@ -256,6 +344,7 @@ export function useStatistics() {
       }));
     } else if (periodType === 'month') {
       const daysInMonth = new Date(ref.getFullYear(), ref.getMonth() + 1, 0).getDate();
+      const monthShort = MONTH_NAMES[ref.getMonth()].slice(0, 3);
       const monthDays = Array.from({ length: daysInMonth }, (_, i) => {
         const d = new Date(ref.getFullYear(), ref.getMonth(), i + 1);
         return {
@@ -270,7 +359,7 @@ export function useStatistics() {
         const key = toDateKey(s.completedAt);
         const target = monthDays.find((d) => d.dateKey === key);
         if (target) {
-          target.seconds += s.durationSeconds;
+          target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
           target.count += 1;
         }
       });
@@ -278,6 +367,7 @@ export function useStatistics() {
       activityBars = monthDays.map((item) => ({
         key: item.dateKey,
         label: `${item.dayNum}`,
+        subLabel: monthShort,
         totalSeconds: item.seconds,
         hours: Number((item.seconds / 3600).toFixed(1)),
         sessionCount: item.count,
@@ -292,8 +382,10 @@ export function useStatistics() {
 
       filteredSessions.forEach((s) => {
         const m = new Date(s.completedAt).getMonth();
-        months[m].seconds += s.durationSeconds;
-        months[m].count += 1;
+        if (months[m]) {
+          months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+          months[m].count += 1;
+        }
       });
 
       activityBars = months.map((item) => ({
@@ -309,7 +401,7 @@ export function useStatistics() {
       } else {
         const sessionYears = Array.from(
           new Set(filteredSessions.map((s) => new Date(s.completedAt).getFullYear()))
-        ).sort();
+        ).sort((a, b) => a - b);
 
         if (sessionYears.length <= 1) {
           const yr = sessionYears[0] || new Date().getFullYear();
@@ -323,8 +415,10 @@ export function useStatistics() {
 
           filteredSessions.forEach((s) => {
             const m = new Date(s.completedAt).getMonth();
-            months[m].seconds += s.durationSeconds;
-            months[m].count += 1;
+            if (months[m]) {
+              months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+              months[m].count += 1;
+            }
           });
 
           activityBars = months.map((item) => ({
@@ -336,8 +430,8 @@ export function useStatistics() {
             sessionCount: item.count,
           }));
         } else {
-          const minYear = Math.min(...sessionYears);
-          const maxYear = Math.max(...sessionYears);
+          const minYear = sessionYears[0];
+          const maxYear = sessionYears[sessionYears.length - 1];
           const yearStats: { year: number; seconds: number; count: number }[] = [];
           for (let y = minYear; y <= maxYear; y++) {
             yearStats.push({
@@ -351,7 +445,7 @@ export function useStatistics() {
             const y = new Date(s.completedAt).getFullYear();
             const target = yearStats.find((item) => item.year === y);
             if (target) {
-              target.seconds += s.durationSeconds;
+              target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
               target.count += 1;
             }
           });
@@ -366,17 +460,20 @@ export function useStatistics() {
         }
       }
     } else {
-      // 'custom' date range
-      const sDate = new Date(`${customRange.start}T00:00:00.000`);
-      const eDate = new Date(`${customRange.end}T23:59:59.999`);
-      const dayDiff = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / (1000 * 60 * 60 * 24)));
+      // 'custom' date range: Exact UTC day count to eliminate DST offsets
+      const [sY, sM, sD] = sCustomKey.split('-').map(Number);
+      const [eY, eM, eD] = eCustomKey.split('-').map(Number);
+      const sUtc = Date.UTC(sY, sM - 1, sD);
+      const eUtc = Date.UTC(eY, eM - 1, eD);
+      const dayDiff = Math.max(1, Math.round((eUtc - sUtc) / 86400000) + 1);
 
       if (dayDiff <= 14) {
         const dayList = Array.from({ length: dayDiff }, (_, i) => {
-          const d = new Date(sDate.getTime() + i * 86400000);
+          const d = new Date(startDate);
+          d.setDate(startDate.getDate() + i);
           return {
             dateKey: toDateKey(d),
-            label: `${d.getDate()}/${d.getMonth() + 1}`,
+            label: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
             seconds: 0,
             count: 0,
           };
@@ -386,7 +483,7 @@ export function useStatistics() {
           const key = toDateKey(s.completedAt);
           const target = dayList.find((d) => d.dateKey === key);
           if (target) {
-            target.seconds += s.durationSeconds;
+            target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
             target.count += 1;
           }
         });
@@ -399,25 +496,38 @@ export function useStatistics() {
           sessionCount: item.count,
         }));
       } else {
-        const stepDays = Math.ceil(dayDiff / 6);
-        activityBars = Array.from({ length: 6 }, (_, i) => {
-          const chunkStart = new Date(sDate.getTime() + i * stepDays * 86400000);
-          const chunkEnd = new Date(Math.min(eDate.getTime(), sDate.getTime() + ((i + 1) * stepDays - 1) * 86400000));
+        // Partition custom range into up to 6 non-overlapping, contiguous chunks
+        const numChunks = Math.min(dayDiff, 6);
+        activityBars = Array.from({ length: numChunks }, (_, i) => {
+          const startDayOffset = Math.round((i * dayDiff) / numChunks);
+          const endDayOffset = Math.round(((i + 1) * dayDiff) / numChunks) - 1;
+
+          const chunkStart = new Date(startDate);
+          chunkStart.setDate(startDate.getDate() + startDayOffset);
+          chunkStart.setHours(0, 0, 0, 0);
+
+          const chunkEnd = new Date(startDate);
+          chunkEnd.setDate(startDate.getDate() + endDayOffset);
+          chunkEnd.setHours(23, 59, 59, 999);
 
           let sec = 0;
           let count = 0;
           filteredSessions.forEach((s) => {
             const t = new Date(s.completedAt).getTime();
             if (t >= chunkStart.getTime() && t <= chunkEnd.getTime()) {
-              sec += s.durationSeconds;
+              sec += s.durationSeconds > 0 ? s.durationSeconds : 0;
               count += 1;
             }
           });
 
+          const isSingleDay = startDayOffset === endDayOffset;
+          const sLabel = `${chunkStart.getDate()} ${MONTH_NAMES[chunkStart.getMonth()].slice(0, 3)}`;
+          const eLabel = `${chunkEnd.getDate()} ${MONTH_NAMES[chunkEnd.getMonth()].slice(0, 3)}`;
+
           return {
             key: `chunk-${i}`,
-            label: `${chunkStart.getDate()}/${chunkStart.getMonth() + 1}`,
-            subLabel: `to ${chunkEnd.getDate()}/${chunkEnd.getMonth() + 1}`,
+            label: sLabel,
+            subLabel: isSingleDay ? undefined : `to ${eLabel}`,
             totalSeconds: sec,
             hours: Number((sec / 3600).toFixed(1)),
             sessionCount: count,
@@ -439,7 +549,7 @@ export function useStatistics() {
       const hourCounts = new Array(24).fill(0);
       filteredSessions.forEach((s) => {
         const h = new Date(s.completedAt).getHours();
-        hourCounts[h] = Math.min(3600, hourCounts[h] + s.durationSeconds);
+        hourCounts[h] = Math.min(3600, hourCounts[h] + (s.durationSeconds > 0 ? s.durationSeconds : 0));
       });
       let maxH = 0;
       let maxSec = -1;
@@ -450,10 +560,11 @@ export function useStatistics() {
         }
       });
       const clampedSec = Math.min(3600, Math.max(0, maxSec));
+      const nextH = (maxH + 1) % 24;
       productiveMetric = {
         title: 'Peak Focus Hour',
-        value: `${maxH.toString().padStart(2, '0')}:00 – ${(maxH + 1).toString().padStart(2, '0')}:00`,
-        subtext: `${formatDurationHoursMins(clampedSec)} focused`,
+        value: maxSec > 0 ? `${maxH.toString().padStart(2, '0')}:00 – ${nextH.toString().padStart(2, '0')}:00` : 'N/A',
+        subtext: maxSec > 0 ? `${formatDurationHoursMins(clampedSec)} focused` : 'No sessions logged',
         hasData: maxSec > 0,
       };
     } else if (periodType === 'all') {
@@ -463,7 +574,7 @@ export function useStatistics() {
       filteredSessions.forEach((s) => {
         const d = new Date(s.completedAt);
         const dayIdx = d.getDay();
-        weekdaySecs[dayIdx] += s.durationSeconds;
+        weekdaySecs[dayIdx] += s.durationSeconds > 0 ? s.durationSeconds : 0;
         weekdayDateSets[dayIdx].add(toDateKey(d));
       });
 
@@ -483,8 +594,8 @@ export function useStatistics() {
       const avgFormatted = formatDurationHoursMins(Math.round(highestAvgSec > 0 ? highestAvgSec : 0));
       productiveMetric = {
         title: 'Most Productive Day',
-        value: `${WEEKDAY_NAMES[bestWeekday]}s`,
-        subtext: `${avgFormatted} average per ${WEEKDAY_NAMES[bestWeekday].slice(0, 3)}`,
+        value: highestAvgSec > 0 ? `${WEEKDAY_NAMES[bestWeekday]}s` : 'N/A',
+        subtext: highestAvgSec > 0 ? `${avgFormatted} average per ${WEEKDAY_NAMES[bestWeekday].slice(0, 3)}` : 'No sessions logged',
         hasData: highestAvgSec > 0,
       };
     } else if (periodType === 'week') {
@@ -498,13 +609,44 @@ export function useStatistics() {
         }
       }
       productiveMetric = {
-        title: 'Best Day This Week',
+        title: isCurrentPeriod ? 'Best Day This Week' : 'Most Productive Day',
         value: maxSec > 0 ? bestLabel : 'N/A',
         subtext: maxSec > 0 ? `${formatDurationHoursMins(maxSec)} focused` : 'No sessions logged',
         hasData: maxSec > 0,
       };
+    } else if (periodType === 'month') {
+      let maxSec = -1;
+      let bestDay = -1;
+      for (const bar of activityBars) {
+        if (bar.totalSeconds > maxSec) {
+          maxSec = bar.totalSeconds;
+          bestDay = Number(bar.label);
+        }
+      }
+      const monthShort = MONTH_NAMES[ref.getMonth()].slice(0, 3);
+      productiveMetric = {
+        title: 'Most Productive Day',
+        value: maxSec > 0 ? `${bestDay} ${monthShort}` : 'N/A',
+        subtext: maxSec > 0 ? `${formatDurationHoursMins(maxSec)} focused` : 'No sessions logged',
+        hasData: maxSec > 0,
+      };
+    } else if (periodType === 'year') {
+      let maxSec = -1;
+      let bestMonthIdx = -1;
+      for (let i = 0; i < activityBars.length; i++) {
+        if (activityBars[i].totalSeconds > maxSec) {
+          maxSec = activityBars[i].totalSeconds;
+          bestMonthIdx = i;
+        }
+      }
+      productiveMetric = {
+        title: 'Most Productive Month',
+        value: maxSec > 0 && bestMonthIdx >= 0 ? MONTH_NAMES[bestMonthIdx] : 'N/A',
+        subtext: maxSec > 0 ? `${formatDurationHoursMins(maxSec)} focused` : 'No sessions logged',
+        hasData: maxSec > 0,
+      };
     } else {
-      // Month, Year, Custom: Most productive interval
+      // Custom: Most productive interval
       let maxSec = -1;
       let bestLabel = 'N/A';
       for (const bar of activityBars) {
@@ -525,53 +667,83 @@ export function useStatistics() {
     const startKey = toDateKey(startDate);
     const endKey = toDateKey(endDate);
     const filteredCoffee = coffeeCups.filter((cup) => {
+      if (!cup || !cup.date) return false;
       return cup.date >= startKey && cup.date <= endKey;
     });
     const totalCoffeeCups = filteredCoffee.length;
 
-    // Elapsed days for calculating daily average across time ranges
-    const now = new Date();
-    const todayKey = toDateKey(now);
+    // Elapsed days calculation using UTC date boundaries to prevent DST offset drift
     let coffeeElapsedDays = 1;
 
     if (periodType === 'day') {
       coffeeElapsedDays = 1;
     } else if (periodType === 'week') {
-      if (startKey <= todayKey && todayKey <= endKey) {
-        const diff = Math.floor((now.getTime() - startDate.getTime()) / 86400000) + 1;
-        coffeeElapsedDays = Math.max(1, Math.min(7, diff));
-      } else {
+      if (todayKey >= startKey && todayKey <= endKey) {
+        // Current week: days elapsed from start of week (Monday) to today
+        const [sY, sM, sD] = startKey.split('-').map(Number);
+        const [tY, tM, tD] = todayKey.split('-').map(Number);
+        const diffDays = Math.round((Date.UTC(tY, tM - 1, tD) - Date.UTC(sY, sM - 1, sD)) / 86400000) + 1;
+        coffeeElapsedDays = Math.max(1, Math.min(7, diffDays));
+      } else if (todayKey > endKey) {
+        // Past week: full 7 days elapsed
         coffeeElapsedDays = 7;
+      } else {
+        // Future week
+        coffeeElapsedDays = 1;
       }
     } else if (periodType === 'month') {
       const daysInMonth = new Date(ref.getFullYear(), ref.getMonth() + 1, 0).getDate();
       if (ref.getFullYear() === now.getFullYear() && ref.getMonth() === now.getMonth()) {
         coffeeElapsedDays = Math.max(1, Math.min(daysInMonth, now.getDate()));
-      } else {
+      } else if (
+        ref.getFullYear() < now.getFullYear() ||
+        (ref.getFullYear() === now.getFullYear() && ref.getMonth() < now.getMonth())
+      ) {
         coffeeElapsedDays = daysInMonth;
+      } else {
+        coffeeElapsedDays = 1;
       }
     } else if (periodType === 'year') {
-      const isCurrentYear = ref.getFullYear() === now.getFullYear();
-      if (isCurrentYear) {
-        const startOfYear = new Date(now.getFullYear(), 0, 1);
-        const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000) + 1;
-        coffeeElapsedDays = Math.max(1, dayOfYear);
+      const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+      const totalDaysInYear = isLeap(ref.getFullYear()) ? 366 : 365;
+      if (ref.getFullYear() === now.getFullYear()) {
+        const startOfYearUtc = Date.UTC(now.getFullYear(), 0, 1);
+        const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+        const dayOfYear = Math.round((todayUtc - startOfYearUtc) / 86400000) + 1;
+        coffeeElapsedDays = Math.max(1, Math.min(totalDaysInYear, dayOfYear));
+      } else if (ref.getFullYear() < now.getFullYear()) {
+        coffeeElapsedDays = totalDaysInYear;
       } else {
-        const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-        coffeeElapsedDays = isLeap(ref.getFullYear()) ? 366 : 365;
+        coffeeElapsedDays = 1;
       }
     } else if (periodType === 'custom') {
-      const sDate = new Date(`${customRange.start}T00:00:00.000`);
-      const eDate = new Date(`${customRange.end}T23:59:59.999`);
-      const effectiveEnd = eDate.getTime() > now.getTime() ? now : eDate;
-      coffeeElapsedDays = Math.max(1, Math.floor((effectiveEnd.getTime() - sDate.getTime()) / 86400000) + 1);
+      const [sY, sM, sD] = sCustomKey.split('-').map(Number);
+      const [eY, eM, eD] = eCustomKey.split('-').map(Number);
+      const [tY, tM, tD] = todayKey.split('-').map(Number);
+      const sUtc = Date.UTC(sY, sM - 1, sD);
+      const eUtc = Date.UTC(eY, eM - 1, eD);
+      const todayUtc = Date.UTC(tY, tM - 1, tD);
+
+      const effectiveEndUtc = Math.min(eUtc, todayUtc);
+      if (effectiveEndUtc >= sUtc) {
+        coffeeElapsedDays = Math.max(1, Math.round((effectiveEndUtc - sUtc) / 86400000) + 1);
+      } else {
+        coffeeElapsedDays = 1;
+      }
     } else {
       // 'all' time: days from earliest coffee cup to today
       if (filteredCoffee.length > 0) {
         const sortedDates = filteredCoffee.map((c) => c.date).sort();
         const firstDateStr = sortedDates[0];
-        const firstDate = new Date(`${firstDateStr}T00:00:00.000`);
-        coffeeElapsedDays = Math.max(1, Math.floor((now.getTime() - firstDate.getTime()) / 86400000) + 1);
+        const [fY, fM, fD] = firstDateStr.split('-').map(Number);
+        const [tY, tM, tD] = todayKey.split('-').map(Number);
+        const firstUtc = Date.UTC(fY, fM - 1, fD);
+        const todayUtc = Date.UTC(tY, tM - 1, tD);
+        if (todayUtc >= firstUtc) {
+          coffeeElapsedDays = Math.max(1, Math.round((todayUtc - firstUtc) / 86400000) + 1);
+        } else {
+          coffeeElapsedDays = 1;
+        }
       } else {
         coffeeElapsedDays = 1;
       }
@@ -598,7 +770,7 @@ export function useStatistics() {
     });
 
     if (periodType === 'all') {
-      // All Time View: "the day you in average have the most cups"
+      // All Time View: Day of week with highest average cups
       if (filteredCoffee.length === 0) {
         coffeePeakMetric = {
           title: 'Peak Coffee Day',
@@ -725,20 +897,21 @@ export function useStatistics() {
         }
       });
 
+      const isCurrentDay = toDateKey(referenceDate) === todayKey;
       if (topTagCount > 0) {
         const found = tags.find((t) => t.id === topTagId);
         const tagName = topTagId ? (found ? found.name : 'Unknown') : 'No Tag';
         coffeePeakMetric = {
-          title: 'Top Tag Today',
+          title: isCurrentDay ? 'Top Tag Today' : 'Top Tag For Day',
           value: tagName,
           subtext: `${topTagCount} ${topTagCount === 1 ? 'cup' : 'cups'} logged`,
           hasData: true,
         };
       } else {
         coffeePeakMetric = {
-          title: 'Top Tag Today',
+          title: isCurrentDay ? 'Top Tag Today' : 'Top Tag For Day',
           value: 'N/A',
-          subtext: 'No coffee logged today',
+          subtext: isCurrentDay ? 'No coffee logged today' : 'No coffee logged for day',
           hasData: false,
         };
       }
@@ -775,7 +948,7 @@ export function useStatistics() {
       activityBars,
       productiveMetric,
     };
-  }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange]);
+  }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange, isCurrentPeriod, todayKey]);
 
   return {
     periodType,
@@ -786,6 +959,8 @@ export function useStatistics() {
     goToPrev,
     goToNext,
     goToToday,
+    canGoNext,
+    isCurrentPeriod,
     totalFocusSeconds: stats.totalFocusSeconds,
     totalFocusHours: stats.totalFocusHours,
     totalWorkCount: stats.totalWorkCount,

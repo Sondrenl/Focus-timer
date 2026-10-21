@@ -29,6 +29,8 @@ export const StatisticsView: React.FC = () => {
     goToPrev,
     goToNext,
     goToToday,
+    canGoNext,
+    isCurrentPeriod,
     totalFocusSeconds,
     totalWorkCount,
     totalCoffeeCups,
@@ -96,7 +98,7 @@ export const StatisticsView: React.FC = () => {
       )}
 
       {/* 1. Time Period Selector & Period Navigator */}
-      {/* Desktop Layout (md and up - identical to original desktop version) */}
+      {/* Desktop Layout (md and up) */}
       <div className="hidden md:flex flex-row items-center justify-between gap-4 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
         {/* Period Type Segmented Buttons */}
         <div className="inline-flex p-1 bg-md-surface-container rounded-2xl border border-md-outline-variant/30 overflow-x-auto">
@@ -133,7 +135,7 @@ export const StatisticsView: React.FC = () => {
 
         {/* Period Navigator Controls */}
         <div className="flex items-center justify-end gap-2">
-          {periodType !== 'all' && periodType !== 'custom' && (
+          {periodType !== 'all' && periodType !== 'custom' && !isCurrentPeriod && (
             <button
               onClick={goToToday}
               className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-md-primary hover:bg-md-primary/10 transition-colors"
@@ -143,7 +145,7 @@ export const StatisticsView: React.FC = () => {
           )}
 
           <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30">
-            {periodType !== 'all' && (
+            {periodType !== 'all' && periodType !== 'custom' && (
               <button
                 onClick={goToPrev}
                 className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
@@ -153,14 +155,29 @@ export const StatisticsView: React.FC = () => {
               </button>
             )}
 
-            <span className="px-3 text-xs font-bold text-md-on-surface whitespace-nowrap">
+            <button
+              type="button"
+              onClick={() => {
+                if (periodType === 'custom') {
+                  setIsCalendarModalOpen(true);
+                }
+              }}
+              className={clsx(
+                "px-3 text-xs font-bold text-md-on-surface whitespace-nowrap",
+                periodType === 'custom' && "hover:text-md-primary underline decoration-dotted underline-offset-4 cursor-pointer"
+              )}
+            >
               {periodLabel}
-            </span>
+            </button>
 
-            {periodType !== 'all' && (
+            {periodType !== 'all' && periodType !== 'custom' && (
               <button
                 onClick={goToNext}
-                className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
+                disabled={!canGoNext}
+                className={clsx(
+                  "p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors",
+                  !canGoNext && "opacity-30 cursor-not-allowed pointer-events-none"
+                )}
                 title="Next period"
               >
                 <ChevronRight className="w-4 h-4" />
@@ -207,7 +224,7 @@ export const StatisticsView: React.FC = () => {
 
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center justify-between flex-1 bg-md-surface-container rounded-2xl p-1.5 border border-md-outline-variant/30 min-h-[48px]">
-            {periodType !== 'all' ? (
+            {periodType !== 'all' && periodType !== 'custom' ? (
               <button
                 type="button"
                 onClick={goToPrev}
@@ -236,11 +253,15 @@ export const StatisticsView: React.FC = () => {
               {periodLabel}
             </button>
 
-            {periodType !== 'all' ? (
+            {periodType !== 'all' && periodType !== 'custom' ? (
               <button
                 type="button"
                 onClick={goToNext}
-                className="w-11 h-11 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high active:scale-95 transition-all shrink-0"
+                disabled={!canGoNext}
+                className={clsx(
+                  "w-11 h-11 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high active:scale-95 transition-all shrink-0",
+                  !canGoNext && "opacity-30 cursor-not-allowed pointer-events-none"
+                )}
                 title="Next period"
                 aria-label="Next period"
               >
@@ -251,7 +272,7 @@ export const StatisticsView: React.FC = () => {
             )}
           </div>
 
-          {periodType !== 'all' && periodType !== 'custom' && (
+          {periodType !== 'all' && periodType !== 'custom' && !isCurrentPeriod && (
             <button
               type="button"
               onClick={goToToday}
@@ -382,7 +403,7 @@ export const StatisticsView: React.FC = () => {
             </div>
           </Card>
 
-          {/* Peak Coffee Insight (For all-time: day with highest average cups) */}
+          {/* Peak Coffee Insight */}
           <Card variant="filled" className="p-5 flex items-center gap-4 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
             <div className="w-12 h-12 rounded-2xl bg-amber-600/10 text-amber-600 flex items-center justify-center shrink-0">
               <Award className="w-6 h-6" />
@@ -443,7 +464,7 @@ export const StatisticsView: React.FC = () => {
           </div>
         ) : (
           <>
-            {/* Desktop Horizontal Column Chart (md and up - identical to original desktop version) */}
+            {/* Desktop Horizontal Column Chart (md and up) */}
             <div className="hidden md:block w-full overflow-x-auto pb-2 scrollbar-thin">
               <div
                 className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
@@ -455,6 +476,7 @@ export const StatisticsView: React.FC = () => {
                 {activityBars.map((bar) => {
                   const heightPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
                   const hasHours = bar.totalSeconds > 0;
+                  const tooltipText = `${bar.label}${bar.subLabel ? ' ' + bar.subLabel : ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`;
 
                   return (
                     <div key={bar.key} className="flex flex-col items-center gap-1.5 h-full justify-end group">
@@ -467,7 +489,7 @@ export const StatisticsView: React.FC = () => {
                             hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
                           }`}
                           style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
-                          title={`${bar.label} ${bar.subLabel || ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`}
+                          title={tooltipText}
                         />
                       </div>
                       <div className="flex flex-col items-center text-center w-full min-w-0">
@@ -491,6 +513,7 @@ export const StatisticsView: React.FC = () => {
               {activityBars.map((bar) => {
                 const widthPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
                 const hasHours = bar.totalSeconds > 0;
+                const tooltipText = `${bar.label}${bar.subLabel ? ' ' + bar.subLabel : ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`;
 
                 return (
                   <div
@@ -514,7 +537,7 @@ export const StatisticsView: React.FC = () => {
                           hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
                         }`}
                         style={{ width: `${Math.max(hasHours ? 6 : 0, widthPercent)}%` }}
-                        title={`${bar.label} ${bar.subLabel || ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`}
+                        title={tooltipText}
                       />
                     </div>
 

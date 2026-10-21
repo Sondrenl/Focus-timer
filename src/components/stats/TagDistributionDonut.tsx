@@ -83,12 +83,14 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
           })}
         </svg>
 
-        {/* Center Text - Removed redundant tag count */}
+        {/* Center Text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none px-4">
           {hoveredItem ? (
             <>
               <span className="text-xl font-extrabold text-md-on-surface tracking-tight truncate max-w-[120px]">
-                {hoveredItem.percentage}%
+                {hoveredItem.percentage === 0 && hoveredItem.totalSeconds > 0
+                  ? '<1%'
+                  : `${hoveredItem.percentage}%`}
               </span>
               <span className="text-xs font-semibold text-md-on-surface-variant truncate max-w-[120px] mt-0.5">
                 {hoveredItem.name}
@@ -151,7 +153,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                   className="w-10 text-right font-extrabold"
                   style={{ color: item.color }}
                 >
-                  {item.percentage}%
+                  {item.percentage === 0 && item.totalSeconds > 0 ? '<1%' : `${item.percentage}%`}
                 </span>
               </div>
             </div>
