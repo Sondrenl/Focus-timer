@@ -22,6 +22,7 @@ import {
   subscribeSessions,
 } from '../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../utils/environment';
+import { toDateKey } from '../utils/dates';
 
 interface AppContextValue {
   // Environment
@@ -61,7 +62,7 @@ interface AppContextValue {
 
   // Data Import / Export / Reset
   exportBackup: () => BackupData;
-  importBackup: (data: BackupData, mode: 'merge' | 'replace') => Promise<{ sessionsAdded: number; tagsAdded: number }>;
+  importBackup: (data: BackupData, mode: 'merge' | 'replace') => Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }>;
   resetAllData: (scope: 'sessions-only' | 'factory-reset') => Promise<void>;
 
   // Services
@@ -859,7 +860,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
       : sessions;
     return {
-      version: '2.0.0',
+      version: '2.1.1',
       exportedAt: new Date().toISOString(),
       profile,
       tags,
@@ -872,16 +873,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const importBackup = async (
     data: BackupData,
     mode: 'merge' | 'replace'
-  ): Promise<{ sessionsAdded: number; tagsAdded: number }> => {
+  ): Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }> => {
     if (mode === 'replace') {
       await sessionRepository.clear();
       await coffeeRepository.clear();
       authService.clearDeletedTagIds();
       authService.clearDeletedCoffeeCupIds();
 
-      const newTags = data.tags || [];
-      const newSessions = data.sessions || [];
-      const newCoffee = data.coffeeCups || [];
+      // 1. Sanitize incoming tags: guarantee valid id, name, color, isArchived, and updatedAt
+      const newTags: Tag[] = (data.tags || []).map((t) => ({
+        id: t.id || ('tag-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7)),
+        name: (t.name || 'Untitled Tag').trim(),
+        color: t.color || '#7E57C2',
+        isArchived: Boolean(t.isArchived),
+        createdAt: t.createdAt || new Date().toISOString(),
+        updatedAt: t.updatedAt || t.createdAt || new Date().toISOString(),
+      }));
+
+      // 2. Filter sessions (purge sample/seed sessions in production)
+      const newSessions: CompletedSession[] = (data.sessions || []).filter((s) => {
+        if (!s || !s.id || !s.completedAt) return false;
+        if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) {
+          return false;
+        }
+        return true;
+      });
+
+      // 3. Sanitize coffee cups: guarantee valid id and date
+      const newCoffee: CoffeeCup[] = (data.coffeeCups || []).map((c) => ({
+        id: c.id || ('cup-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7)),
+        tagId: c.tagId || null,
+        date: c.date || (c.createdAt ? toDateKey(new Date(c.createdAt)) : toDateKey(new Date())),
+        createdAt: c.createdAt || new Date().toISOString(),
+      }));
+
       const newSettings: UserSettings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
       const newProfile: UserProfile = { ...DEFAULT_PROFILE, ...(data.profile || {}) };
 
@@ -897,6 +922,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSettings(newSettings);
       setProfile(newProfile);
 
+      // Validate activeTagId after replacement
+      const activeStillValid = newTags.some((t) => t.id === activeTagId && !t.isArchived);
+      if (!activeStillValid) {
+        setActiveTagId(newTags.find((t) => !t.isArchived)?.id ?? null);
+      }
+
+      // Broadcast changes across tabs
+      broadcastTags(newTags);
+      broadcastCoffeeCups(newCoffee);
+      if (newSessions.length > 0) {
+        broadcastSession(newSessions[newSessions.length - 1]);
+      }
+
       if (auth.isAuthenticated) {
         await authService.pushCloudData({
           mode: 'replace',
@@ -908,32 +946,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
-      return { sessionsAdded: newSessions.length, tagsAdded: newTags.length };
+      return { sessionsAdded: newSessions.length, tagsAdded: newTags.length, coffeeAdded: newCoffee.length };
     } else {
       // Merge mode
       const currentTags = await tagRepository.getAll();
       const currentSessions = await sessionRepository.getAll();
       const currentCoffee = await coffeeRepository.getAll();
 
-      // Merge tags
+      // 1. Merge tags
       const tagMap = new Map<string, Tag>();
       currentTags.forEach((t) => tagMap.set(t.id, t));
       let tagsAdded = 0;
       (data.tags || []).forEach((t) => {
-        if (!tagMap.has(t.id)) {
-          tagMap.set(t.id, t);
+        const sanitizedTag: Tag = {
+          id: t.id || ('tag-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7)),
+          name: (t.name || 'Untitled Tag').trim(),
+          color: t.color || '#7E57C2',
+          isArchived: Boolean(t.isArchived),
+          createdAt: t.createdAt || new Date().toISOString(),
+          updatedAt: t.updatedAt || t.createdAt || new Date().toISOString(),
+        };
+        const existing = tagMap.get(sanitizedTag.id);
+        if (!existing) {
+          tagMap.set(sanitizedTag.id, sanitizedTag);
           tagsAdded++;
+        } else {
+          // If incoming tag has newer updatedAt, adopt updates
+          const existingTs = getTagTimestampMs(existing);
+          const incomingTs = getTagTimestampMs(sanitizedTag);
+          if (incomingTs > existingTs) {
+            tagMap.set(sanitizedTag.id, sanitizedTag);
+          }
         }
       });
       const mergedTags = Array.from(tagMap.values());
       await tagRepository.saveAll(mergedTags);
       setTags(mergedTags);
 
-      // Merge sessions
+      // 2. Merge sessions
       const sessionMap = new Map<string, CompletedSession>();
       currentSessions.forEach((s) => sessionMap.set(s.id, s));
       let sessionsAdded = 0;
       (data.sessions || []).forEach((s) => {
+        if (!s || !s.id || !s.completedAt) return;
+        if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) {
+          return;
+        }
         if (!sessionMap.has(s.id)) {
           sessionMap.set(s.id, s);
           sessionsAdded++;
@@ -945,12 +1003,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await sessionRepository.saveAll(mergedSessions);
       setSessions(mergedSessions);
 
-      // Merge coffee cups
+      // 3. Merge coffee cups
       const coffeeMap = new Map<string, CoffeeCup>();
       currentCoffee.forEach((c) => coffeeMap.set(c.id, c));
+      let coffeeAdded = 0;
       (data.coffeeCups || []).forEach((c) => {
-        if (!coffeeMap.has(c.id)) {
-          coffeeMap.set(c.id, c);
+        if (!c || !c.id) return;
+        const sanitizedCup: CoffeeCup = {
+          id: c.id,
+          tagId: c.tagId || null,
+          date: c.date || (c.createdAt ? toDateKey(new Date(c.createdAt)) : toDateKey(new Date())),
+          createdAt: c.createdAt || new Date().toISOString(),
+        };
+        if (!coffeeMap.has(sanitizedCup.id)) {
+          coffeeMap.set(sanitizedCup.id, sanitizedCup);
+          coffeeAdded++;
         }
       });
       const mergedCoffee = Array.from(coffeeMap.values()).sort(
@@ -959,11 +1026,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await coffeeRepository.saveAll(mergedCoffee);
       setCoffeeCups(mergedCoffee);
 
+      // 4. Merge settings and profile if provided
+      if (data.settings) {
+        const curSettings = await settingsRepository.get();
+        const mergedSettings = { ...curSettings, ...data.settings };
+        await settingsRepository.save(mergedSettings);
+        setSettings(mergedSettings);
+      }
+      if (data.profile) {
+        const curProfile = await profileRepository.get();
+        const mergedProfile = { ...curProfile, ...data.profile };
+        await profileRepository.save(mergedProfile);
+        setProfile(mergedProfile);
+      }
+
+      // 5. Broadcast to other open tabs
+      broadcastTags(mergedTags);
+      broadcastCoffeeCups(mergedCoffee);
+
       if (auth.isAuthenticated) {
         await syncWithCloud();
       }
 
-      return { sessionsAdded, tagsAdded };
+      return { sessionsAdded, tagsAdded, coffeeAdded };
     }
   };
 

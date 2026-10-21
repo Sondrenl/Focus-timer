@@ -164,8 +164,9 @@ export const ProfileView: React.FC = () => {
 
         const hasTags = Array.isArray(parsed.tags);
         const hasSessions = Array.isArray(parsed.sessions);
+        const hasCoffee = Array.isArray(parsed.coffeeCups);
 
-        if (!hasTags && !hasSessions) {
+        if (!hasTags && !hasSessions && !hasCoffee) {
           throw new Error('File does not appear to be a valid Focus Timer backup.');
         }
 
@@ -195,8 +196,15 @@ export const ProfileView: React.FC = () => {
     try {
       const result = await importBackup(pendingBackup, importMode);
       setPendingBackup(null);
+      const parts = [
+        `${result.sessionsAdded} sessions`,
+        `${result.tagsAdded} tags`,
+      ];
+      if (typeof result.coffeeAdded === 'number') {
+        parts.push(`${result.coffeeAdded} coffee cups`);
+      }
       setImportSuccessMessage(
-        `Import complete! Restored ${result.sessionsAdded} sessions and ${result.tagsAdded} tags.`
+        `Import complete! Restored ${parts.join(', ')}.`
       );
       setTimeout(() => setImportSuccessMessage(null), 4000);
     } catch {
