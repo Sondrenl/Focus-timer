@@ -5,7 +5,7 @@ import { CoffeeTagSelector } from './CoffeeTagSelector';
 import { toDateKey, formatFriendlyDate } from '../../utils/dates';
 
 export const CoffeeWorkspace: React.FC = () => {
-  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags } = useApp();
+  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags } = useApp();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [viewDate, setViewDate] = useState<Date>(() => new Date());
 
@@ -36,7 +36,7 @@ export const CoffeeWorkspace: React.FC = () => {
       if (tid === null) {
         list.push({ tagId: null, name: 'No Tag', color: '#8D6E63', count });
       } else {
-        const found = activeTags.find((t) => t.id === tid);
+        const found = tags.find((t) => t.id === tid);
         list.push({
           tagId: tid,
           name: found ? found.name : 'Unknown Tag',
@@ -47,7 +47,7 @@ export const CoffeeWorkspace: React.FC = () => {
     });
 
     return list.sort((a, b) => b.count - a.count);
-  }, [cupsForDate, activeTags]);
+  }, [cupsForDate, tags]);
 
   const handleAdd = async () => {
     await addCoffeeCup(selectedTagId, viewDateKey);
@@ -193,7 +193,7 @@ export const CoffeeWorkspace: React.FC = () => {
       {totalCount > 0 && (
         <div className="flex flex-wrap items-center justify-center gap-2 md:gap-1.5 max-w-sm mb-5 md:mb-4 px-3 py-2 md:px-2 md:py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
           {cupsForDate.map((cup, idx) => {
-            const cupTag = activeTags.find((t) => t.id === cup.tagId);
+            const cupTag = tags.find((t) => t.id === cup.tagId);
             const cupColor = cupTag ? cupTag.color : '#8D6E63';
             const cupName = cupTag ? cupTag.name : 'No Tag';
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Tag } from '../../types/tag';
@@ -7,7 +7,13 @@ import { TagFormModal } from './TagFormModal';
 import { clsx } from 'clsx';
 
 export const TagManager: React.FC = () => {
-  const { tags, sessions, archiveTag, unarchiveTag, deleteTag } = useApp();
+  const { tags, sessions, archiveTag, unarchiveTag, deleteTag, auth, syncWithCloud } = useApp();
+
+  useEffect(() => {
+    if (auth.isAuthenticated && !auth.isSyncing) {
+      syncWithCloud().catch(() => {});
+    }
+  }, [auth.isAuthenticated]);
   const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tagToEdit, setTagToEdit] = useState<Tag | null>(null);

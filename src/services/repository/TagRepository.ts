@@ -71,7 +71,22 @@ export class TagRepository implements ITagRepository {
   }
 
   async getAll(): Promise<Tag[]> {
-    return this.storage.getItem<Tag[]>(TAGS_STORAGE_KEY, []);
+    const raw = this.storage.getItem<Tag[]>(TAGS_STORAGE_KEY, []);
+    let needsMigration = false;
+    const tags = raw.map((t) => {
+      if (!t.updatedAt) {
+        needsMigration = true;
+        return {
+          ...t,
+          updatedAt: t.createdAt || EPOCH_ISO,
+        };
+      }
+      return t;
+    });
+    if (needsMigration) {
+      this.storage.setItem(TAGS_STORAGE_KEY, tags);
+    }
+    return tags;
   }
 
   async getActive(): Promise<Tag[]> {

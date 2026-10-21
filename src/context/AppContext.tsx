@@ -91,8 +91,10 @@ const coffeeRepository = new CoffeeRepository(storageService);
 const authService = AuthService.getInstance();
 
 function getTagTimestampMs(tag: Tag): number {
-  if (tag.updatedAt) {
-    const t = Date.parse(tag.updatedAt);
+  const tsStr = tag.updatedAt || tag.createdAt;
+  if (tsStr) {
+    const normalized = tsStr.includes('T') ? tsStr : tsStr.replace(' ', 'T') + 'Z';
+    const t = Date.parse(normalized);
     if (!Number.isNaN(t)) return t;
   }
   return 0;
@@ -203,6 +205,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!areTagListsEqual(localTags, mergedTags)) {
       await tagRepository.saveAll(mergedTags);
       setTags(mergedTags);
+      broadcastTags(mergedTags);
     }
   }, []);
 

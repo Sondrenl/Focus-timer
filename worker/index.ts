@@ -25,7 +25,7 @@ const MOBILE_PRESENCE_TTL_MS = 6000;
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
-  `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT NOT NULL,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
   `CREATE TABLE IF NOT EXISTS deleted_tags (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, tag_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
@@ -47,7 +47,6 @@ async function ensureSchema(db: D1Database): Promise<void> {
   if (isSchemaEnsured) return;
   try {
     await db.batch(SCHEMA_STATEMENTS.map((sql) => db.prepare(sql)));
-    isSchemaEnsured = true;
   } catch {
     for (const sql of SCHEMA_STATEMENTS) {
       try {
@@ -56,8 +55,36 @@ async function ensureSchema(db: D1Database): Promise<void> {
         console.error('Error ensuring schema statement:', err);
       }
     }
-    isSchemaEnsured = true;
   }
+
+  // Ensure tags table has compound PRIMARY KEY (user_id, id) for multi-tenant safety
+  try {
+    const tableInfo = await db.prepare('PRAGMA table_info(tags)').all<{ name: string; pk: number }>();
+    const userIdCol = (tableInfo.results || []).find((col) => col.name === 'user_id');
+    if (userIdCol && userIdCol.pk === 0) {
+      await db.batch([
+        db.prepare(`CREATE TABLE IF NOT EXISTS tags_new (
+          id TEXT NOT NULL,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          color TEXT NOT NULL,
+          is_archived INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, id)
+        )`),
+        db.prepare(`INSERT OR IGNORE INTO tags_new (id, user_id, name, color, is_archived, created_at, updated_at)
+          SELECT id, user_id, name, color, is_archived, created_at, updated_at FROM tags`),
+        db.prepare('DROP TABLE tags'),
+        db.prepare('ALTER TABLE tags_new RENAME TO tags'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)'),
+      ]);
+    }
+  } catch (migErr) {
+    console.warn('Tags PK migration check:', migErr);
+  }
+
+  isSchemaEnsured = true;
 }
 
 async function updateAndGetPeerPresence(
@@ -395,7 +422,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         env.DB.prepare(
           `INSERT INTO tags (id, user_id, name, color, is_archived, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
+           ON CONFLICT(user_id, id) DO UPDATE SET
              name = excluded.name,
              color = excluded.color,
              is_archived = excluded.is_archived,
@@ -448,6 +475,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
       await env.DB.batch([
         env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
+        env.DB.prepare('UPDATE coffee_cups SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
         env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
         env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId),
       ]);
@@ -985,13 +1013,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             env.DB.prepare(
               `INSERT INTO tags (id, user_id, name, color, is_archived, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
+               ON CONFLICT(user_id, id) DO UPDATE SET
                  name = excluded.name,
                  color = excluded.color,
                  is_archived = excluded.is_archived,
                  updated_at = excluded.updated_at
                WHERE tags.user_id = excluded.user_id
-                 AND (tags.updated_at IS NULL OR excluded.updated_at >= tags.updated_at)`
+                 AND (tags.updated_at IS NULL OR tags.updated_at = '' OR datetime(excluded.updated_at) >= datetime(tags.updated_at))`
             ).bind(
               tag.id,
               currentUserId,
