@@ -3,13 +3,16 @@ import { CoffeeCup } from '../../types/coffee';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
 
+export type ResetScope = 'sessions-only' | 'factory-reset';
+
 export interface TimerBroadcastEvent {
   senderId: string;
-  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'TAB_HELLO' | 'TAB_ACK' | 'TAB_GOODBYE';
+  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'RESET' | 'TAB_HELLO' | 'TAB_ACK' | 'TAB_GOODBYE';
   timer?: RemoteTimerState;
   coffeeCups?: CoffeeCup[];
   tags?: Tag[];
   session?: CompletedSession;
+  resetScope?: ResetScope;
 }
 
 const CHANNEL_NAME = 'focus_timer_sync_v1';
@@ -176,6 +179,54 @@ export const subscribeSessions = (callback: (session: CompletedSession) => void)
 
   channel.addEventListener('message', handler);
   return () => {
+    channel?.removeEventListener('message', handler);
+  };
+};
+
+const localResetListeners = new Set<(scope: ResetScope) => void>();
+
+export const broadcastReset = (resetScope: ResetScope): void => {
+  // Notify local subscribers on this tab
+  localResetListeners.forEach((fn) => {
+    try {
+      fn(resetScope);
+    } catch (err) {
+      console.warn('Local reset listener error:', err);
+    }
+  });
+
+  // Post to peer tabs
+  try {
+    if (channel) {
+      channel.postMessage({
+        senderId: TAB_ID,
+        type: 'RESET',
+        resetScope,
+      } as TimerBroadcastEvent);
+    }
+  } catch (e) {
+    console.warn('Reset BroadcastChannel error:', e);
+  }
+};
+
+export const subscribeReset = (callback: (scope: ResetScope) => void): (() => void) => {
+  localResetListeners.add(callback);
+
+  if (!channel) {
+    return () => {
+      localResetListeners.delete(callback);
+    };
+  }
+
+  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
+    if (event.data && event.data.senderId !== TAB_ID && event.data.type === 'RESET' && event.data.resetScope) {
+      callback(event.data.resetScope);
+    }
+  };
+
+  channel.addEventListener('message', handler);
+  return () => {
+    localResetListeners.delete(callback);
     channel?.removeEventListener('message', handler);
   };
 };

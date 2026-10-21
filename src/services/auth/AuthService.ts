@@ -376,6 +376,7 @@ export class AuthService {
     deletedTagIds?: string[];
     deletedCoffeeCupIds?: string[];
     clearSessions?: boolean;
+    clearHistory?: boolean;
     sessions?: CompletedSession[];
     coffeeCups?: CoffeeCup[];
     settings?: UserSettings;

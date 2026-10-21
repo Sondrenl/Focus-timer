@@ -62,6 +62,7 @@ export const ProfileView: React.FC = () => {
 
   // Danger Zone confirmation modal state
   const [resetModalScope, setResetModalScope] = useState<'sessions-only' | 'factory-reset' | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
 
   // Google Sign-In button container ref
   const googleButtonContainerRef = useRef<HTMLDivElement>(null);
@@ -225,9 +226,23 @@ export const ProfileView: React.FC = () => {
 
   // Handle Reset Execution
   const handleConfirmReset = async () => {
-    if (!resetModalScope) return;
-    await resetAllData(resetModalScope);
-    setResetModalScope(null);
+    if (!resetModalScope || isResetting) return;
+    const scope = resetModalScope;
+    setIsResetting(true);
+    try {
+      await resetAllData(scope);
+      setResetModalScope(null);
+      setImportSuccessMessage(
+        scope === 'sessions-only'
+          ? 'Focus and coffee history permanently cleared.'
+          : 'Factory reset complete! All data has been reset to defaults.'
+      );
+      setTimeout(() => setImportSuccessMessage(null), 4000);
+    } catch {
+      setImportError('An error occurred while resetting data.');
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   return (
@@ -744,10 +759,15 @@ export const ProfileView: React.FC = () => {
               <Button
                 variant="filled"
                 size="sm"
-                className="bg-md-error text-white hover:bg-red-700 font-semibold"
+                disabled={isResetting}
+                className="bg-md-error text-white hover:bg-red-700 font-semibold disabled:opacity-50"
                 onClick={handleConfirmReset}
               >
-                {resetModalScope === 'sessions-only' ? 'Yes, Delete History' : 'Yes, Wipe Everything'}
+                {isResetting
+                  ? 'Wiping...'
+                  : resetModalScope === 'sessions-only'
+                  ? 'Yes, Delete History'
+                  : 'Yes, Wipe Everything'}
               </Button>
             </div>
           </div>

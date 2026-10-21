@@ -20,6 +20,8 @@ import {
   subscribeTags,
   broadcastSession,
   subscribeSessions,
+  broadcastReset,
+  subscribeReset,
 } from '../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../utils/environment';
 import { toDateKey } from '../utils/dates';
@@ -586,6 +588,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     init();
   }, [syncWithCloud, setActiveTagId]);
 
+  // Listen for reset events broadcast from other tabs
+  useEffect(() => {
+    const unsub = subscribeReset((scope) => {
+      if (scope === 'sessions-only') {
+        sessionRepository.clear();
+        coffeeRepository.clear();
+        authService.clearDeletedCoffeeCupIds();
+        setSessions([]);
+        setCoffeeCups([]);
+      } else if (scope === 'factory-reset') {
+        sessionRepository.clear();
+        coffeeRepository.clear();
+        authService.clearDeletedTagIds();
+        authService.clearDeletedCoffeeCupIds();
+        setSessions([]);
+        setCoffeeCups([]);
+        tagRepository.getAll().then((t) => {
+          setTags(t);
+          setActiveTagId(t.find((tag) => !tag.isArchived)?.id ?? null);
+        });
+        settingsRepository.get().then(setSettings);
+        profileRepository.get().then(setProfile);
+      }
+    });
+    return unsub;
+  }, [setActiveTagId]);
+
   // Active unarchived tags sorted by most recently completed Pomodoro (sessionType === 'WORK')
   const activeTags = useMemo(() => {
     const unarchived = tags.filter((t) => !t.isArchived);
@@ -753,6 +782,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await sessionRepository.saveAll(updatedSessions);
     setSessions(updatedSessions);
 
+    // 3.5 Unassign coffee cups that had this tag
+    const currentCoffee = await coffeeRepository.getAll();
+    const updatedCoffee = currentCoffee.map((cup) => (cup.tagId === id ? { ...cup, tagId: null } : cup));
+    await coffeeRepository.saveAll(updatedCoffee);
+    setCoffeeCups(updatedCoffee);
+    broadcastCoffeeCups(updatedCoffee);
+
     // 4. Update tags in state
     const updatedTags = await tagRepository.getAll();
     setTags(updatedTags);
@@ -824,12 +860,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();
+    await coffeeRepository.clear();
+    authService.clearDeletedCoffeeCupIds();
+
     setSessions([]);
+    setCoffeeCups([]);
+
+    broadcastCoffeeCups([]);
+    broadcastReset('sessions-only');
+
     if (auth.isAuthenticated) {
       await authService.pushCloudData({
         clearSessions: true,
+        clearHistory: true,
       });
-      syncWithCloud();
+      await syncWithCloud();
     }
   };
 
@@ -1072,6 +1117,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSettings(defaultSettings);
       setProfile(defaultProfile);
       setActiveTagId(defaultTags[0]?.id || null);
+
+      lastLocalSettingsEditMsRef.current = 0;
+      lastLocalProfileEditMsRef.current = 0;
+
+      broadcastTags(defaultTags);
+      broadcastCoffeeCups([]);
+      broadcastReset('factory-reset');
 
       if (auth.isAuthenticated) {
         await authService.pushCloudData({

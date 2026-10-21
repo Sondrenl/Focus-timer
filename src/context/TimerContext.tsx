@@ -4,7 +4,7 @@ import { UserSettings } from '../types/settings';
 import { useApp } from './AppContext';
 import { triggerCompletionConfetti } from '../utils/confetti';
 import { AuthService, RemoteTimerState, PeerPresence, isMobileDevice } from '../services/auth/AuthService';
-import { broadcastTimerState, subscribeTimerState, hasActivePeerTabs, TAB_ID } from '../services/timer/TimerBroadcast';
+import { broadcastTimerState, subscribeTimerState, subscribeReset, hasActivePeerTabs, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
 
 const WORKER_SCRIPT = `
@@ -1356,6 +1356,14 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
     return unsubscribe;
   }, [applyRemoteState]);
+
+  // Reset running timer when a wipe or factory reset occurs
+  useEffect(() => {
+    const unsubscribe = subscribeReset(() => {
+      resetTimer();
+    });
+    return unsubscribe;
+  }, [resetTimer]);
 
   // Check immediately on auth login/mount
   useEffect(() => {

@@ -955,8 +955,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ?').bind(currentUserId),
         ]);
-      } else if (body.clearSessions) {
-        await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId).run();
+      } else if (body.clearSessions || (body as any).clearHistory) {
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ?').bind(currentUserId),
+        ]);
       }
 
       const statements: D1PreparedStatement[] = [];
