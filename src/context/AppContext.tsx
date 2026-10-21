@@ -585,7 +585,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     init();
   }, [syncWithCloud, setActiveTagId]);
 
-  const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
+  // Active unarchived tags sorted by most recently completed Pomodoro (sessionType === 'WORK')
+  const activeTags = useMemo(() => {
+    const unarchived = tags.filter((t) => !t.isArchived);
+
+    // Build map of tagId -> latest completed WORK session timestamp in milliseconds
+    const latestWorkMap = new Map<string, number>();
+    for (const session of sessions) {
+      if (session.sessionType === 'WORK' && session.tagId) {
+        const time = new Date(session.completedAt).getTime();
+        if (!Number.isNaN(time)) {
+          const existing = latestWorkMap.get(session.tagId) || 0;
+          if (time > existing) {
+            latestWorkMap.set(session.tagId, time);
+          }
+        }
+      }
+    }
+
+    return [...unarchived].sort((a, b) => {
+      const timeA = latestWorkMap.get(a.id) || 0;
+      const timeB = latestWorkMap.get(b.id) || 0;
+
+      // Both have completed Pomodoros: most recently completed first
+      if (timeA > 0 && timeB > 0) {
+        if (timeA !== timeB) return timeB - timeA;
+      }
+
+      // One has completed Pomodoros and the other doesn't: used tags come first
+      if (timeA > 0 && timeB === 0) return -1;
+      if (timeB > 0 && timeA === 0) return 1;
+
+      // Neither has completed Pomodoros: sort by createdAt DESC (newest tags first)
+      const createdA = new Date(a.createdAt || 0).getTime() || 0;
+      const createdB = new Date(b.createdAt || 0).getTime() || 0;
+      if (createdA !== createdB) {
+        return createdB - createdA;
+      }
+
+      // Stable fallback: alphabetical by name
+      return a.name.localeCompare(b.name);
+    });
+  }, [tags, sessions]);
 
   useEffect(() => {
     if (activeTagId !== null && tags.length > 0) {
