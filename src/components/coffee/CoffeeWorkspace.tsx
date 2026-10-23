@@ -155,8 +155,59 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Tag Breakdown Chips for Today */}
-      <div className="w-full flex flex-col items-center mt-3 md:mt-2 mb-4">
+      {/* 4. Controls */}
+      <div className="flex items-center justify-center gap-6 mt-4 mb-4">
+        {/* Left: Minus Button */}
+        <button
+          onClick={handleRemove}
+          disabled={totalCount <= 0}
+          title="Remove cup"
+          className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
+            totalCount <= 0
+              ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed'
+              : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
+          }`}
+          aria-label="Remove cup of coffee"
+        >
+          <Minus className="w-7 h-7 md:w-6 md:h-6" />
+        </button>
+
+        {/* Center: Add Button (Hero FAB showing next cup tag indicator) */}
+        <button
+          onClick={handleAdd}
+          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
+          style={{ backgroundColor: currentTagColor }}
+          aria-label={`Add cup of coffee with tag ${currentTagName}`}
+          title={`Add cup (${currentTagName})`}
+        >
+          <Plus className="w-9 h-9 stroke-[2.5]" />
+        </button>
+      </div>
+
+      {/* 5. Visual Cup Tray (Color-coded cups logged today - below controls) */}
+      {totalCount > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-2 md:gap-1.5 max-w-sm mb-3 px-3 py-2 md:px-2 md:py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+          {cupsForDate.map((cup, idx) => {
+            const cupTag = tags.find((t) => t.id === cup.tagId);
+            const cupColor = cupTag ? cupTag.color : '#8D6E63';
+            const cupName = cupTag ? cupTag.name : 'No Tag';
+
+            return (
+              <div
+                key={cup.id}
+                className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-transform hover:scale-115 cursor-help"
+                style={{ backgroundColor: `${cupColor}20` }}
+                title={`Cup #${idx + 1}: ${cupName}`}
+              >
+                <Coffee className="w-4 h-4" style={{ color: cupColor }} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 6. Tag Breakdown Chips for Today */}
+      <div className="w-full flex flex-col items-center mb-2">
         {tagBreakdown.length > 0 ? (
           <div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
             {tagBreakdown.map((item) => {
@@ -187,57 +238,6 @@ export const CoffeeWorkspace: React.FC = () => {
             No coffee logged for this day yet.
           </span>
         )}
-      </div>
-
-      {/* 5. Visual Cup Tray (Color-coded cups logged today) */}
-      {totalCount > 0 && (
-        <div className="flex flex-wrap items-center justify-center gap-2 md:gap-1.5 max-w-sm mb-5 md:mb-4 px-3 py-2 md:px-2 md:py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
-          {cupsForDate.map((cup, idx) => {
-            const cupTag = tags.find((t) => t.id === cup.tagId);
-            const cupColor = cupTag ? cupTag.color : '#8D6E63';
-            const cupName = cupTag ? cupTag.name : 'No Tag';
-
-            return (
-              <div
-                key={cup.id}
-                className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-transform hover:scale-115 cursor-help"
-                style={{ backgroundColor: `${cupColor}20` }}
-                title={`Cup #${idx + 1}: ${cupName}`}
-              >
-                <Coffee className="w-4 h-4" style={{ color: cupColor }} />
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* 6. Controls */}
-      <div className="flex items-center justify-center gap-6 mt-1">
-        {/* Left: Minus Button */}
-        <button
-          onClick={handleRemove}
-          disabled={totalCount <= 0}
-          title="Remove cup"
-          className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
-            totalCount <= 0
-              ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed'
-              : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
-          }`}
-          aria-label="Remove cup of coffee"
-        >
-          <Minus className="w-7 h-7 md:w-6 md:h-6" />
-        </button>
-
-        {/* Center: Add Button (Hero FAB showing next cup tag indicator) */}
-        <button
-          onClick={handleAdd}
-          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
-          style={{ backgroundColor: currentTagColor }}
-          aria-label={`Add cup of coffee with tag ${currentTagName}`}
-          title={`Add cup (${currentTagName})`}
-        >
-          <Plus className="w-9 h-9 stroke-[2.5]" />
-        </button>
       </div>
 
       {/* Bottom Cue */}
