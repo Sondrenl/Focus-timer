@@ -1,21 +1,19 @@
 import React, { useState, useMemo } from 'react';
-import { Coffee, Plus, Minus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Coffee, Plus, Minus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
-import { toDateKey, formatFriendlyDate } from '../../utils/dates';
+import { toDateKey } from '../../utils/dates';
 
 export const CoffeeWorkspace: React.FC = () => {
   const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags } = useApp();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
-  const [viewDate, setViewDate] = useState<Date>(() => new Date());
 
-  const viewDateKey = toDateKey(viewDate);
-  const isToday = viewDateKey === toDateKey(new Date());
+  const todayKey = toDateKey(new Date());
 
-  // Filter cups for the selected date
+  // Filter cups for today
   const cupsForDate = useMemo(() => {
-    return coffeeCups.filter((c) => c.date === viewDateKey);
-  }, [coffeeCups, viewDateKey]);
+    return coffeeCups.filter((c) => c.date === todayKey);
+  }, [coffeeCups, todayKey]);
 
   const totalCount = cupsForDate.length;
 
@@ -50,13 +48,13 @@ export const CoffeeWorkspace: React.FC = () => {
   }, [cupsForDate, tags]);
 
   const handleAdd = async () => {
-    await addCoffeeCup(selectedTagId, viewDateKey);
+    await addCoffeeCup(selectedTagId, todayKey);
   };
 
   const handleRemove = async () => {
     if (totalCount <= 0) return;
 
-    // Prioritize removing cup of the selected tag if one exists on this date
+    // Prioritize removing cup of the selected tag if one exists today
     const cupsOfSelectedTag = cupsForDate.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
     const targetCup =
       cupsOfSelectedTag.length > 0
@@ -65,27 +63,7 @@ export const CoffeeWorkspace: React.FC = () => {
 
     if (!targetCup) return;
 
-    await removeCoffeeCup(viewDateKey, targetCup.tagId, targetCup.id);
-  };
-
-  const goToPrevDay = () => {
-    setViewDate((prev) => {
-      const d = new Date(prev);
-      d.setDate(d.getDate() - 1);
-      return d;
-    });
-  };
-
-  const goToNextDay = () => {
-    setViewDate((prev) => {
-      const d = new Date(prev);
-      d.setDate(d.getDate() + 1);
-      return d;
-    });
-  };
-
-  const goToToday = () => {
-    setViewDate(new Date());
+    await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
   };
 
   return (
@@ -98,39 +76,7 @@ export const CoffeeWorkspace: React.FC = () => {
         />
       </div>
 
-      {/* 2. Date Switcher (Desktop only - hidden on mobile as requested) */}
-      <div className="hidden md:flex items-center gap-2 mb-4 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 text-xs font-semibold shadow-xs">
-        <button
-          onClick={goToPrevDay}
-          className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
-          title="Previous day"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={goToToday}
-          className="px-3 py-1 rounded-xl text-md-on-surface hover:text-md-primary transition-colors text-center"
-        >
-          {isToday ? 'Today, ' : ''}
-          {formatFriendlyDate(viewDate, true)}
-        </button>
-
-        <button
-          onClick={goToNextDay}
-          disabled={isToday}
-          className={`p-1.5 rounded-xl transition-colors ${
-            isToday
-              ? 'text-md-outline/40 cursor-not-allowed'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-          title="Next day"
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* 3. Central Coffee Hero Circle (Permanent Coffee Theme - does not change to tag color) */}
+      {/* 2. Central Coffee Hero Circle (Permanent Coffee Theme - does not change to tag color) */}
       <div className="relative flex flex-col items-center justify-center my-2 select-none">
         <div className="relative w-72 h-72 md:w-80 md:h-80 flex items-center justify-center">
           {/* Subtle Neutral Coffee Outer Track Ring */}
@@ -155,7 +101,7 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Controls */}
+      {/* 3. Controls */}
       <div className="flex items-center justify-center gap-6 mt-4 mb-4">
         {/* Left: Minus Button */}
         <button
@@ -184,7 +130,7 @@ export const CoffeeWorkspace: React.FC = () => {
         </button>
       </div>
 
-      {/* 5. Visual Cup Tray (Color-coded cups logged today - below controls) */}
+      {/* 4. Visual Cup Tray (Color-coded cups logged today - below controls) */}
       {totalCount > 0 && (
         <div className="flex flex-wrap items-center justify-center gap-2 md:gap-1.5 max-w-sm mb-3 px-3 py-2 md:px-2 md:py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
           {cupsForDate.map((cup, idx) => {
@@ -206,7 +152,7 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       )}
 
-      {/* 6. Tag Breakdown Chips for Today */}
+      {/* 5. Tag Breakdown Chips for Today */}
       <div className="w-full flex flex-col items-center mb-2">
         {tagBreakdown.length > 0 ? (
           <div className="flex flex-wrap items-center justify-center gap-2 max-w-md">
