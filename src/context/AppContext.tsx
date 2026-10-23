@@ -608,8 +608,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setTags(t);
           setActiveTagId(t.find((tag) => !tag.isArchived)?.id ?? null);
         });
-        settingsRepository.get().then(setSettings);
-        profileRepository.get().then(setProfile);
+        settingsRepository.get().then((s) => {
+          settingsRef.current = s;
+          setSettings(s);
+        });
+        profileRepository.get().then((p) => {
+          profileRef.current = p;
+          setProfile(p);
+        });
       }
     });
     return unsub;
@@ -686,7 +692,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Profile Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {
-    lastLocalProfileEditMsRef.current = Date.now();
+    const editMs = Date.now();
+    lastLocalProfileEditMsRef.current = editMs;
     const merged = { ...profileRef.current, ...newProfile };
     profileRef.current = merged;
     setProfile(merged);
@@ -699,7 +706,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           dailyGoalMinutes: merged.dailyGoalMinutes,
         },
       });
-      lastLocalProfileEditMsRef.current = 0;
+      setTimeout(() => {
+        if (lastLocalProfileEditMsRef.current === editMs) {
+          lastLocalProfileEditMsRef.current = 0;
+        }
+      }, 2000);
     }
   };
 
@@ -886,7 +897,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Settings Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
   const updateSettings = async (newValues: Partial<UserSettings>): Promise<void> => {
-    lastLocalSettingsEditMsRef.current = Date.now();
+    const editMs = Date.now();
+    lastLocalSettingsEditMsRef.current = editMs;
     const merged = { ...settingsRef.current, ...newValues };
     settingsRef.current = merged;
     setSettings(merged);
@@ -895,7 +907,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await authService.pushCloudData({
         settings: merged,
       });
-      lastLocalSettingsEditMsRef.current = 0;
+      setTimeout(() => {
+        if (lastLocalSettingsEditMsRef.current === editMs) {
+          lastLocalSettingsEditMsRef.current = 0;
+        }
+      }, 2000);
     }
   };
 
@@ -961,6 +977,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await settingsRepository.save(newSettings);
       await profileRepository.save(newProfile);
 
+      settingsRef.current = newSettings;
+      profileRef.current = newProfile;
       setTags(newTags);
       setSessions(newSessions);
       setCoffeeCups(newCoffee);
@@ -1076,12 +1094,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const curSettings = await settingsRepository.get();
         const mergedSettings = { ...curSettings, ...data.settings };
         await settingsRepository.save(mergedSettings);
+        settingsRef.current = mergedSettings;
         setSettings(mergedSettings);
       }
       if (data.profile) {
         const curProfile = await profileRepository.get();
         const mergedProfile = { ...curProfile, ...data.profile };
         await profileRepository.save(mergedProfile);
+        profileRef.current = mergedProfile;
         setProfile(mergedProfile);
       }
 
@@ -1111,6 +1131,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const defaultSettings = await settingsRepository.resetToDefaults();
       const defaultProfile = await profileRepository.resetToDefaults();
 
+      settingsRef.current = defaultSettings;
+      profileRef.current = defaultProfile;
       setSessions([]);
       setCoffeeCups([]);
       setTags(defaultTags);

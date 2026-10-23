@@ -19,7 +19,44 @@ export class SettingsRepository implements ISettingsRepository {
     if (!saved) {
       return { ...DEFAULT_SETTINGS };
     }
-    return { ...DEFAULT_SETTINGS, ...saved };
+    const merged: UserSettings = { ...DEFAULT_SETTINGS, ...saved };
+
+    // Guard against corrupt/non-positive duration or cycle numbers
+    if (
+      typeof merged.workDurationMinutes !== 'number' ||
+      merged.workDurationMinutes <= 0 ||
+      Number.isNaN(merged.workDurationMinutes)
+    ) {
+      merged.workDurationMinutes = DEFAULT_SETTINGS.workDurationMinutes;
+    }
+    if (
+      typeof merged.shortBreakDurationMinutes !== 'number' ||
+      merged.shortBreakDurationMinutes <= 0 ||
+      Number.isNaN(merged.shortBreakDurationMinutes)
+    ) {
+      merged.shortBreakDurationMinutes = DEFAULT_SETTINGS.shortBreakDurationMinutes;
+    }
+    if (
+      typeof merged.longBreakDurationMinutes !== 'number' ||
+      merged.longBreakDurationMinutes <= 0 ||
+      Number.isNaN(merged.longBreakDurationMinutes)
+    ) {
+      merged.longBreakDurationMinutes = DEFAULT_SETTINGS.longBreakDurationMinutes;
+    }
+    if (
+      typeof merged.longBreakInterval !== 'number' ||
+      merged.longBreakInterval < 1 ||
+      Number.isNaN(merged.longBreakInterval)
+    ) {
+      merged.longBreakInterval = DEFAULT_SETTINGS.longBreakInterval;
+    }
+    if (typeof merged.soundVolume !== 'number' || Number.isNaN(merged.soundVolume)) {
+      merged.soundVolume = DEFAULT_SETTINGS.soundVolume;
+    } else {
+      merged.soundVolume = Math.max(0, Math.min(1, merged.soundVolume));
+    }
+
+    return merged;
   }
 
   async save(settings: UserSettings): Promise<void> {

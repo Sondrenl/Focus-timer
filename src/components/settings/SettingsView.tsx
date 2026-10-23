@@ -43,6 +43,11 @@ export const SettingsView: React.FC = () => {
   );
   const [notifFeedback, setNotifFeedback] = useState<string | null>(null);
 
+  // Focus tracking to prevent draft inputs from snapping back or clobbering while actively typing
+  const [focusedField, setFocusedField] = useState<
+    'work' | 'shortBreak' | 'longBreak' | 'interval' | 'dailyGoal' | null
+  >(null);
+
   // Local string draft states so the user can freely clear and type new numbers (including decimals) without snapping back mid-edit
   const [workInput, setWorkInput] = useState(() => String(settings.workDurationMinutes));
   const [shortBreakInput, setShortBreakInput] = useState(() => String(settings.shortBreakDurationMinutes));
@@ -64,6 +69,7 @@ export const SettingsView: React.FC = () => {
   }, [notifications]);
 
   useEffect(() => {
+    if (focusedField === 'work') return;
     setWorkInput((prev) => {
       const parsedPrev = parseFloat(prev);
       if (!Number.isNaN(parsedPrev) && Math.abs(parsedPrev - settings.workDurationMinutes) < 1e-6) {
@@ -71,9 +77,10 @@ export const SettingsView: React.FC = () => {
       }
       return String(settings.workDurationMinutes);
     });
-  }, [settings.workDurationMinutes]);
+  }, [settings.workDurationMinutes, focusedField]);
 
   useEffect(() => {
+    if (focusedField === 'shortBreak') return;
     setShortBreakInput((prev) => {
       const parsedPrev = parseFloat(prev);
       if (!Number.isNaN(parsedPrev) && Math.abs(parsedPrev - settings.shortBreakDurationMinutes) < 1e-6) {
@@ -81,9 +88,10 @@ export const SettingsView: React.FC = () => {
       }
       return String(settings.shortBreakDurationMinutes);
     });
-  }, [settings.shortBreakDurationMinutes]);
+  }, [settings.shortBreakDurationMinutes, focusedField]);
 
   useEffect(() => {
+    if (focusedField === 'longBreak') return;
     setLongBreakInput((prev) => {
       const parsedPrev = parseFloat(prev);
       if (!Number.isNaN(parsedPrev) && Math.abs(parsedPrev - settings.longBreakDurationMinutes) < 1e-6) {
@@ -91,9 +99,10 @@ export const SettingsView: React.FC = () => {
       }
       return String(settings.longBreakDurationMinutes);
     });
-  }, [settings.longBreakDurationMinutes]);
+  }, [settings.longBreakDurationMinutes, focusedField]);
 
   useEffect(() => {
+    if (focusedField === 'interval') return;
     setIntervalInput((prev) => {
       const parsedPrev = parseInt(prev, 10);
       if (!Number.isNaN(parsedPrev) && parsedPrev === settings.longBreakInterval) {
@@ -101,9 +110,10 @@ export const SettingsView: React.FC = () => {
       }
       return String(settings.longBreakInterval);
     });
-  }, [settings.longBreakInterval]);
+  }, [settings.longBreakInterval, focusedField]);
 
   useEffect(() => {
+    if (focusedField === 'dailyGoal') return;
     const goal = profile.dailyGoalMinutes || 120;
     setDailyGoalInput((prev) => {
       const parsedPrev = parseInt(prev, 10);
@@ -112,7 +122,7 @@ export const SettingsView: React.FC = () => {
       }
       return String(goal);
     });
-  }, [profile.dailyGoalMinutes]);
+  }, [profile.dailyGoalMinutes, focusedField]);
 
   const showSaved = () => {
     setSavedToast(true);
@@ -202,7 +212,7 @@ export const SettingsView: React.FC = () => {
 
   const handleDailyGoalInputBlur = () => {
     const parsed = parseInt(dailyGoalInput, 10);
-    const validNum = Number.isNaN(parsed) || parsed < 1 ? 120 : Math.min(1440, parsed);
+    const validNum = Number.isNaN(parsed) || parsed < 1 ? profile.dailyGoalMinutes || 120 : Math.min(1440, parsed);
     setDailyGoalInput(String(validNum));
     if (profile.dailyGoalMinutes !== validNum) {
       updateProfile({ dailyGoalMinutes: validNum });
@@ -221,20 +231,24 @@ export const SettingsView: React.FC = () => {
       showSaved();
       return;
     }
-    const granted = await notifications.requestPermission();
+
     const currentPerm = notifications.getPermissionState();
-    setPermissionState(currentPerm);
+    if (currentPerm === 'granted') {
+      updateSettings({ notificationsEnabled: true });
+      showSaved();
+      return;
+    }
+
+    const granted = await notifications.requestPermission();
+    const updatedPerm = notifications.getPermissionState();
+    setPermissionState(updatedPerm);
     updateSettings({ notificationsEnabled: granted });
+
     if (granted) {
-      const sent = await notifications.notify(
-        'Pomodor — Focus session complete',
-        'Your focus timer has finished. Time for a break.',
-        true
-      );
-      showNotifFeedback(sent ? 'Sample timer alert sent!' : 'Enabled! Check system notification settings.');
-    } else if (currentPerm === 'denied') {
+      showNotifFeedback('Notifications enabled for this device.');
+    } else if (updatedPerm === 'denied') {
       showNotifFeedback('Notifications are blocked in your browser site settings.');
-    } else if (currentPerm === 'unsupported') {
+    } else if (updatedPerm === 'unsupported') {
       showNotifFeedback('On iPhone/iPad, use Share → Add to Home Screen to enable notifications.');
     }
     showSaved();
@@ -369,8 +383,18 @@ export const SettingsView: React.FC = () => {
                 type="text"
                 inputMode="decimal"
                 value={workInput}
+                onFocus={() => setFocusedField('work')}
                 onChange={(e) => handleDecimalDurationChange('workDurationMinutes', e.target.value, setWorkInput, 120)}
-                onBlur={() => handleDecimalDurationBlur('workDurationMinutes', workInput, setWorkInput, 120, DEFAULT_SETTINGS.workDurationMinutes)}
+                onBlur={() => {
+                  setFocusedField(null);
+                  handleDecimalDurationBlur(
+                    'workDurationMinutes',
+                    workInput,
+                    setWorkInput,
+                    120,
+                    settings.workDurationMinutes || DEFAULT_SETTINGS.workDurationMinutes
+                  );
+                }}
                 className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
               <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
@@ -387,8 +411,18 @@ export const SettingsView: React.FC = () => {
                 type="text"
                 inputMode="decimal"
                 value={shortBreakInput}
+                onFocus={() => setFocusedField('shortBreak')}
                 onChange={(e) => handleDecimalDurationChange('shortBreakDurationMinutes', e.target.value, setShortBreakInput, 60)}
-                onBlur={() => handleDecimalDurationBlur('shortBreakDurationMinutes', shortBreakInput, setShortBreakInput, 60, DEFAULT_SETTINGS.shortBreakDurationMinutes)}
+                onBlur={() => {
+                  setFocusedField(null);
+                  handleDecimalDurationBlur(
+                    'shortBreakDurationMinutes',
+                    shortBreakInput,
+                    setShortBreakInput,
+                    60,
+                    settings.shortBreakDurationMinutes || DEFAULT_SETTINGS.shortBreakDurationMinutes
+                  );
+                }}
                 className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
               <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
@@ -405,8 +439,18 @@ export const SettingsView: React.FC = () => {
                 type="text"
                 inputMode="decimal"
                 value={longBreakInput}
+                onFocus={() => setFocusedField('longBreak')}
                 onChange={(e) => handleDecimalDurationChange('longBreakDurationMinutes', e.target.value, setLongBreakInput, 60)}
-                onBlur={() => handleDecimalDurationBlur('longBreakDurationMinutes', longBreakInput, setLongBreakInput, 60, DEFAULT_SETTINGS.longBreakDurationMinutes)}
+                onBlur={() => {
+                  setFocusedField(null);
+                  handleDecimalDurationBlur(
+                    'longBreakDurationMinutes',
+                    longBreakInput,
+                    setLongBreakInput,
+                    60,
+                    settings.longBreakDurationMinutes || DEFAULT_SETTINGS.longBreakDurationMinutes
+                  );
+                }}
                 className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
               />
               <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
@@ -423,8 +467,12 @@ export const SettingsView: React.FC = () => {
               inputMode="numeric"
               pattern="[0-9]*"
               value={intervalInput}
+              onFocus={() => setFocusedField('interval')}
               onChange={(e) => handleIntervalInputChange(e.target.value)}
-              onBlur={handleIntervalInputBlur}
+              onBlur={() => {
+                setFocusedField(null);
+                handleIntervalInputBlur();
+              }}
               className="w-16 px-2.5 py-1.5 text-base md:text-sm bg-md-surface-container rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
             />
             <span className="text-xs text-md-on-surface-variant">cycles</span>
@@ -451,8 +499,12 @@ export const SettingsView: React.FC = () => {
               inputMode="numeric"
               pattern="[0-9]*"
               value={dailyGoalInput}
+              onFocus={() => setFocusedField('dailyGoal')}
               onChange={(e) => handleDailyGoalInputChange(e.target.value)}
-              onBlur={handleDailyGoalInputBlur}
+              onBlur={() => {
+                setFocusedField(null);
+                handleDailyGoalInputBlur();
+              }}
               className="w-24 px-2.5 py-1.5 text-base md:text-sm bg-md-surface-container rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
             />
             <span className="text-xs text-md-on-surface-variant">minutes ({((profile.dailyGoalMinutes || 120) / 60).toFixed(1)}h)</span>
@@ -493,6 +545,20 @@ export const SettingsView: React.FC = () => {
               }}
             />
           </div>
+
+          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
+            <div className="min-w-0 pr-4">
+              <div className="text-sm font-semibold text-md-on-surface">Keep Screen Awake</div>
+              <div className="text-xs text-md-on-surface-variant">Prevent screen from sleeping while timer is active</div>
+            </div>
+            <Switch
+              checked={settings.keepAwake}
+              onChange={(val) => {
+                updateSettings({ keepAwake: val });
+                showSaved();
+              }}
+            />
+          </div>
         </div>
       </Card>
 
@@ -516,12 +582,46 @@ export const SettingsView: React.FC = () => {
               <div className="text-sm font-semibold text-md-on-surface">Chime Alert</div>
               <div className="text-xs text-md-on-surface-variant">Play gentle acoustic sound on completion</div>
             </div>
-            <button
-              onClick={handleTestSound}
-              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0"
-            >
-              Test Chime
-            </button>
+            <div className="flex items-center gap-2.5 shrink-0">
+              <button
+                onClick={handleTestSound}
+                className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0"
+              >
+                Test Chime
+              </button>
+              <Switch
+                checked={settings.soundEnabled}
+                onChange={(val) => {
+                  updateSettings({ soundEnabled: val });
+                  showSaved();
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Sound Volume Slider */}
+          <div className="flex items-center justify-between gap-4 border-t border-md-outline-variant/15 pt-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-md-on-surface">Chime Volume</div>
+              <div className="text-xs text-md-on-surface-variant">Adjust completion bell volume</div>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.05"
+                value={settings.soundVolume ?? 0.8}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  updateSettings({ soundVolume: Math.round(val * 100) / 100 });
+                }}
+                className="w-28 md:w-36 accent-md-primary cursor-pointer"
+              />
+              <span className="text-xs font-semibold text-md-on-surface-variant w-8 text-right">
+                {Math.round((settings.soundVolume ?? 0.8) * 100)}%
+              </span>
+            </div>
           </div>
 
           {/* Desktop / Push Notifications Toggle & Test */}
