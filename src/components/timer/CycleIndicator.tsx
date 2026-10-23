@@ -124,7 +124,7 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
                   className={clsx(
                     'transition-all duration-300 rounded-full shrink-0',
                     isLongBreakCurrent
-                      ? 'w-4 h-2 bg-[#7D5260] shadow-xs ring-2 ring-[#7D5260]/20'
+                      ? 'w-4 h-2 bg-[#7FB069] shadow-xs ring-2 ring-[#7FB069]/20'
                       : 'w-1.5 h-1.5 bg-md-outline-variant/40'
                   )}
                   title={`Long Break${isLongBreakCurrent ? ' (Active)' : ''}`}

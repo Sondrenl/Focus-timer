@@ -83,8 +83,8 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
     },
     LONG_BREAK: {
       label: 'Long Break',
-      color: '#7D5260',
-      bgRing: '#FFD8E4',
+      color: '#7FB069',
+      bgRing: '#DCECD5',
     },
   }[sessionType];
 
