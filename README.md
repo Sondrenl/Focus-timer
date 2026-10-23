@@ -2,7 +2,7 @@
 
 A fast, modern Pomodoro and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and Cloudflare Workers + D1. Designed for frictionless flow state, multi-device synchronization, and deep productivity insights.
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
 ---

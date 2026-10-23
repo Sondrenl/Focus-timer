@@ -1,7 +1,7 @@
 # AI Development Declaration
 
 - **Project**: Focus Timer (Pomodor)
-- **Version**: 2.1.1
+- **Version**: 2.2.0
 - **Project Lead**: Sondre Lassen
 - **AI Collaborator**: Antigravity (Google DeepMind)
 - **Methodology**: Prompt-Driven Software Engineering
