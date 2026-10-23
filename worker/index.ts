@@ -812,7 +812,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           sound_enabled: number;
           sound_volume: number;
           notifications_enabled: number;
-          keep_awake: number;
           updated_at: string;
         }>(),
         env.DB.prepare('SELECT tag_id FROM deleted_tags WHERE user_id = ?').bind(currentUserId).all<{
@@ -869,7 +868,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             soundEnabled: Boolean(settingsRow.sound_enabled),
             soundVolume: settingsRow.sound_volume,
             notificationsEnabled: Boolean(settingsRow.notifications_enabled),
-            keepAwake: Boolean(settingsRow.keep_awake),
             updatedAt: settingsRow.updated_at,
           }
         : null;
@@ -946,7 +944,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           soundEnabled?: boolean;
           soundVolume?: number;
           notificationsEnabled?: boolean;
-          keepAwake?: boolean;
         };
       };
 
@@ -1101,8 +1098,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             `INSERT INTO user_settings (
                user_id, work_duration_minutes, short_break_duration_minutes, long_break_duration_minutes,
                long_break_interval, auto_start_breaks, auto_start_pomodoros, sound_enabled, sound_volume,
-               notifications_enabled, keep_awake, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               notifications_enabled, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
              ON CONFLICT(user_id) DO UPDATE SET
                work_duration_minutes = COALESCE(excluded.work_duration_minutes, user_settings.work_duration_minutes),
                short_break_duration_minutes = COALESCE(excluded.short_break_duration_minutes, user_settings.short_break_duration_minutes),
@@ -1113,7 +1110,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
                sound_enabled = COALESCE(excluded.sound_enabled, user_settings.sound_enabled),
                sound_volume = COALESCE(excluded.sound_volume, user_settings.sound_volume),
                notifications_enabled = COALESCE(excluded.notifications_enabled, user_settings.notifications_enabled),
-               keep_awake = COALESCE(excluded.keep_awake, user_settings.keep_awake),
                updated_at = CURRENT_TIMESTAMP`
           ).bind(
             currentUserId,
@@ -1125,8 +1121,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             s.autoStartPomodoros ? 1 : 0,
             s.soundEnabled !== false ? 1 : 0,
             s.soundVolume ?? 0.8,
-            s.notificationsEnabled ? 1 : 0,
-            s.keepAwake ? 1 : 0
+            s.notificationsEnabled ? 1 : 0
           )
         );
       }

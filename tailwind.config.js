@@ -36,7 +36,7 @@ export default {
           'surface-container-lowest': '#FFFFFF',
           'surface-container-low': '#FFFFFF',
           'surface-container': '#F9F6F0',
-          'surface-container-high': '#F3EFE7',
+          'surface-container-high': '#F8F5EE',
           'surface-container-highest': '#ECE7DC',
         }
       },

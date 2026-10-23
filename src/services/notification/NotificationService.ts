@@ -166,25 +166,62 @@ export class NotificationService {
       // Ignore vibration errors
     }
 
+    const notifTag = isManualTest ? `pomodor-test-${Date.now()}` : ACTIVE_NOTIFICATION_TAG;
     const options: NotificationOptions = {
       body,
-      icon: '/favicon.svg',
-      badge: '/favicon.svg',
-      tag: ACTIVE_NOTIFICATION_TAG,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: notifTag,
       renotify: true,
       silent: false,
       requireInteraction: true,
       vibrate: [250, 100, 250],
     } as NotificationOptions;
 
+    // 1. Direct ServiceWorkerRegistration dispatch (standard for PWA & mobile)
+    try {
+      const reg = this.cachedRegistration?.active
+        ? this.cachedRegistration
+        : await this.getActiveRegistration();
+      if (reg && reg.active && typeof reg.showNotification === 'function') {
+        if (!isManualTest) {
+          try {
+            const existing = await reg.getNotifications();
+            for (const n of existing) {
+              n.close();
+            }
+          } catch {
+            // Ignore
+          }
+        }
+        await reg.showNotification(title, options);
+        return true;
+      }
+    } catch (err) {
+      console.warn('reg.showNotification direct dispatch failed, trying fallbacks:', err);
+    }
+
+    // 2. Direct Window Notification constructor fallback (standard on desktop browsers)
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        const notif = new Notification(title, options);
+        notif.onclick = () => {
+          window.focus();
+          notif.close();
+        };
+        return true;
+      }
+    } catch (err) {
+      console.warn('new Notification failed, trying ServiceWorker postMessage:', err);
+    }
+
+    // 3. Service Worker message dispatch fallback
     const syncWorker =
       this.cachedRegistration?.active ||
       (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
         ? navigator.serviceWorker.controller
         : null);
 
-    // Delegate to the active Service Worker first: sw.js closes all existing notifications
-    // and dispatches a single fresh notification inside event.waitUntil() without double-firing.
     if (syncWorker) {
       try {
         syncWorker.postMessage({
@@ -195,38 +232,12 @@ export class NotificationService {
           isManualTest,
         });
         return true;
-      } catch {
-        // Fall through to direct registration dispatch
+      } catch (err) {
+        console.warn('syncWorker.postMessage fallback failed:', err);
       }
     }
 
-    try {
-      const reg = this.cachedRegistration?.active
-        ? this.cachedRegistration
-        : await this.getActiveRegistration();
-      if (reg && reg.active && typeof reg.showNotification === 'function') {
-        try {
-          const existing = await reg.getNotifications();
-          for (const n of existing) {
-            n.close();
-          }
-        } catch {
-          // Ignore
-        }
-        await reg.showNotification(title, options);
-        return true;
-      }
-    } catch {
-      // Fall through to native Notification constructor
-    }
-
-    try {
-      new Notification(title, options);
-      return true;
-    } catch (err) {
-      console.warn('Unable to dispatch notification:', err);
-      return false;
-    }
+    return false;
   }
 
   /**

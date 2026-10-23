@@ -131,9 +131,9 @@ async function showTimerNotification(title, body, sessionId, allowImmediateRepea
 
   return self.registration.showNotification(title, {
     body,
-    icon: '/favicon.svg',
-    badge: '/favicon.svg',
-    tag: ACTIVE_NOTIFICATION_TAG,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: allowImmediateRepeat ? ('pomodor-test-' + Date.now()) : ACTIVE_NOTIFICATION_TAG,
     renotify: true,
     silent: false,
     requireInteraction: true,

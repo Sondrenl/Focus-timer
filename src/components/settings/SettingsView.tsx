@@ -546,19 +546,6 @@ export const SettingsView: React.FC = () => {
             />
           </div>
 
-          <div className="flex items-center justify-between border-t border-md-outline-variant/15 pt-4">
-            <div className="min-w-0 pr-4">
-              <div className="text-sm font-semibold text-md-on-surface">Keep Screen Awake</div>
-              <div className="text-xs text-md-on-surface-variant">Prevent screen from sleeping while timer is active</div>
-            </div>
-            <Switch
-              checked={settings.keepAwake}
-              onChange={(val) => {
-                updateSettings({ keepAwake: val });
-                showSaved();
-              }}
-            />
-          </div>
         </div>
       </Card>
 

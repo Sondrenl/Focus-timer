@@ -370,10 +370,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => clearTimeout(timer);
   }, []);
 
-  // Manage screen wake lock when the timer is actively running.
-  // On desktop, never acquire wake lock unless explicitly requested in settings so closing the laptop lid sleeps immediately.
+  // Manage screen wake lock: keep screen awake while timer is actively running
   useEffect(() => {
-    if (status === 'RUNNING' && (IS_MOBILE || settings.keepAwake)) {
+    if (status === 'RUNNING') {
       wakeLockService.acquire();
     } else {
       wakeLockService.release();
@@ -381,7 +380,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       wakeLockService.release();
     };
-  }, [status, settings.keepAwake]);
+  }, [status]);
 
   // Persist state to localStorage on updates
   useEffect(() => {

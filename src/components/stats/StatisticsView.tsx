@@ -12,7 +12,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CalendarDays,
-  Sparkles,
 } from 'lucide-react';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { DateRangeModal } from './DateRangeModal';
@@ -82,20 +81,6 @@ export const StatisticsView: React.FC = () => {
         <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
       </div>
 
-      {/* Welcome / Empty-state Banner */}
-      {totalWorkCount === 0 && (
-        <div className="p-4 rounded-2xl bg-md-surface-container-low border border-md-primary/20 flex items-start sm:items-center gap-3 text-xs text-md-on-surface shadow-xs">
-          <div className="w-8 h-8 rounded-xl bg-md-primary/10 text-md-primary flex items-center justify-center shrink-0">
-            <Sparkles className="w-4 h-4 text-md-primary" />
-          </div>
-          <div className="flex-1">
-            <p className="font-bold text-md-on-surface">Ready to start logging focus?</p>
-            <p className="text-md-on-surface-variant text-[11px] mt-0.5 leading-relaxed">
-              Complete your first Pomodoro session to populate focus streaks, tag breakdown, and daily activity curves.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* 1. Time Period Selector & Period Navigator */}
       {/* Desktop Layout (md and up) */}
