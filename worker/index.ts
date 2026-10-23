@@ -27,6 +27,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
   `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT NOT NULL,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_user_id ON tags(user_id, id)`,
   `CREATE TABLE IF NOT EXISTS deleted_tags (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, tag_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
   `CREATE TABLE IF NOT EXISTS sessions (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),\n    duration_seconds INTEGER NOT NULL,\n    completed_at TEXT NOT NULL\n  )`,
@@ -39,6 +40,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_deleted_coffee_cups_user ON deleted_coffee_cups(user_id)`,
   `CREATE TABLE IF NOT EXISTS user_device_presence (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    device_id TEXT NOT NULL,\n    device_type TEXT NOT NULL,\n    is_visible INTEGER DEFAULT 0,\n    last_seen_ms INTEGER NOT NULL,\n    PRIMARY KEY (user_id, device_id)\n  )`,
   `CREATE INDEX IF NOT EXISTS idx_device_presence_user ON user_device_presence(user_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_device_presence ON user_device_presence(user_id, device_id)`,
 ];
 
 let isSchemaEnsured = false;
@@ -63,6 +65,8 @@ async function ensureSchema(db: D1Database): Promise<void> {
     const userIdCol = (tableInfo.results || []).find((col) => col.name === 'user_id');
     if (userIdCol && userIdCol.pk === 0) {
       await db.batch([
+        db.prepare('PRAGMA defer_foreign_keys = ON'),
+        db.prepare('DROP TABLE IF EXISTS tags_new'),
         db.prepare(`CREATE TABLE IF NOT EXISTS tags_new (
           id TEXT NOT NULL,
           user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -78,6 +82,8 @@ async function ensureSchema(db: D1Database): Promise<void> {
         db.prepare('DROP TABLE tags'),
         db.prepare('ALTER TABLE tags_new RENAME TO tags'),
         db.prepare('CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)'),
+        db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_user_id ON tags(user_id, id)'),
+        db.prepare('PRAGMA defer_foreign_keys = OFF'),
       ]);
     }
   } catch (migErr) {
