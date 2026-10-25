@@ -16,6 +16,7 @@ import { formatDurationHoursMins } from '../../utils/formatters';
 import { DateRangeModal } from './DateRangeModal';
 import { TagDistributionDonut } from './TagDistributionDonut';
 import { SmartInsightPanel } from './SmartInsightPanel';
+import { MonthActivityView } from './MonthActivityView';
 import { clsx } from 'clsx';
 
 export const StatisticsView: React.FC = () => {
@@ -61,9 +62,7 @@ export const StatisticsView: React.FC = () => {
 
   // Desktop min-width for activity breakdown horizontal scrolling
   const chartMinWidth =
-    periodType === 'month'
-      ? Math.max(activityBars.length * 28, 680)
-      : periodType === 'year' || periodType === 'all'
+    periodType === 'year' || periodType === 'all'
       ? Math.max(activityBars.length * 42, 480)
       : periodType === 'custom' && activityBars.length > 7
       ? activityBars.length * 40
@@ -445,6 +444,8 @@ export const StatisticsView: React.FC = () => {
           <div className="text-center py-10 text-xs text-md-outline">
             No activity logged in this period.
           </div>
+        ) : periodType === 'month' ? (
+          <MonthActivityView activityBars={activityBars} />
         ) : (
           <>
             {/* Desktop Horizontal Column Chart (md and up) */}
