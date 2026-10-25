@@ -469,73 +469,36 @@ export function useStatistics() {
       const eUtc = Date.UTC(eY, eM - 1, eD);
       const dayDiff = Math.max(1, Math.round((eUtc - sUtc) / 86400000) + 1);
 
-      if (dayDiff <= 14) {
-        const dayList = Array.from({ length: dayDiff }, (_, i) => {
-          const d = new Date(startDate);
-          d.setDate(startDate.getDate() + i);
-          return {
-            dateKey: toDateKey(d),
-            label: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
-            seconds: 0,
-            count: 0,
-          };
-        });
+      const dayList = Array.from({ length: dayDiff }, (_, i) => {
+        const d = new Date(startDate);
+        d.setDate(startDate.getDate() + i);
+        return {
+          date: d,
+          dateKey: toDateKey(d),
+          dayNum: d.getDate(),
+          monthShort: MONTH_NAMES[d.getMonth()].slice(0, 3),
+          seconds: 0,
+          count: 0,
+        };
+      });
 
-        filteredSessions.forEach((s) => {
-          const key = toDateKey(s.completedAt);
-          const target = dayList.find((d) => d.dateKey === key);
-          if (target) {
-            target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
-            target.count += 1;
-          }
-        });
+      filteredSessions.forEach((s) => {
+        const key = toDateKey(s.completedAt);
+        const target = dayList.find((d) => d.dateKey === key);
+        if (target) {
+          target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+          target.count += 1;
+        }
+      });
 
-        activityBars = dayList.map((item) => ({
-          key: item.dateKey,
-          label: item.label,
-          totalSeconds: item.seconds,
-          hours: Number((item.seconds / 3600).toFixed(1)),
-          sessionCount: item.count,
-        }));
-      } else {
-        // Partition custom range into up to 6 non-overlapping, contiguous chunks
-        const numChunks = Math.min(dayDiff, 6);
-        activityBars = Array.from({ length: numChunks }, (_, i) => {
-          const startDayOffset = Math.round((i * dayDiff) / numChunks);
-          const endDayOffset = Math.round(((i + 1) * dayDiff) / numChunks) - 1;
-
-          const chunkStart = new Date(startDate);
-          chunkStart.setDate(startDate.getDate() + startDayOffset);
-          chunkStart.setHours(0, 0, 0, 0);
-
-          const chunkEnd = new Date(startDate);
-          chunkEnd.setDate(startDate.getDate() + endDayOffset);
-          chunkEnd.setHours(23, 59, 59, 999);
-
-          let sec = 0;
-          let count = 0;
-          filteredSessions.forEach((s) => {
-            const t = new Date(s.completedAt).getTime();
-            if (t >= chunkStart.getTime() && t <= chunkEnd.getTime()) {
-              sec += s.durationSeconds > 0 ? s.durationSeconds : 0;
-              count += 1;
-            }
-          });
-
-          const isSingleDay = startDayOffset === endDayOffset;
-          const sLabel = `${chunkStart.getDate()} ${MONTH_NAMES[chunkStart.getMonth()].slice(0, 3)}`;
-          const eLabel = `${chunkEnd.getDate()} ${MONTH_NAMES[chunkEnd.getMonth()].slice(0, 3)}`;
-
-          return {
-            key: `chunk-${i}`,
-            label: sLabel,
-            subLabel: isSingleDay ? undefined : `to ${eLabel}`,
-            totalSeconds: sec,
-            hours: Number((sec / 3600).toFixed(1)),
-            sessionCount: count,
-          };
-        });
-      }
+      activityBars = dayList.map((item) => ({
+        key: item.dateKey,
+        label: String(item.dayNum),
+        subLabel: item.monthShort,
+        totalSeconds: item.seconds,
+        hours: Number((item.seconds / 3600).toFixed(1)),
+        sessionCount: item.count,
+      }));
     }
 
     // 4. Productivity Metric for this specific period
@@ -658,7 +621,7 @@ export function useStatistics() {
         }
       }
       productiveMetric = {
-        title: 'Most Productive Period',
+        title: 'Most Productive Day',
         value: maxSec > 0 ? bestLabel : 'N/A',
         subtext: maxSec > 0 ? `${formatDurationHoursMins(maxSec)} focused` : 'No sessions logged',
         hasData: maxSec > 0,

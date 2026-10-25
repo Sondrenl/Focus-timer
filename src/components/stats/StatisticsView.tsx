@@ -17,6 +17,7 @@ import { DateRangeModal } from './DateRangeModal';
 import { TagDistributionDonut } from './TagDistributionDonut';
 import { SmartInsightPanel } from './SmartInsightPanel';
 import { MonthActivityView } from './MonthActivityView';
+import { CustomActivityView } from './CustomActivityView';
 import { clsx } from 'clsx';
 
 export const StatisticsView: React.FC = () => {
@@ -446,6 +447,8 @@ export const StatisticsView: React.FC = () => {
           </div>
         ) : periodType === 'month' ? (
           <MonthActivityView activityBars={activityBars} />
+        ) : periodType === 'custom' ? (
+          <CustomActivityView activityBars={activityBars} />
         ) : (
           <>
             {/* Desktop Horizontal Column Chart (md and up) */}

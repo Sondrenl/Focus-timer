@@ -20,8 +20,8 @@ export interface PeerPresence {
 const DEV_FALLBACK_AUTH_SECRET = 'dev-local-secret-do-not-use-in-production';
 const DEFAULT_CLIENT_ID = '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
 
-const DESKTOP_PRESENCE_TTL_MS = 4500;
-const MOBILE_PRESENCE_TTL_MS = 6000;
+const DESKTOP_PRESENCE_TTL_MS = 25000;
+const MOBILE_PRESENCE_TTL_MS = 35000;
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
@@ -121,7 +121,9 @@ async function updateAndGetPeerPresence(
                ON CONFLICT(user_id, device_id) DO UPDATE SET
                  device_type = excluded.device_type,
                  is_visible = excluded.is_visible,
-                 last_seen_ms = excluded.last_seen_ms`
+                 last_seen_ms = excluded.last_seen_ms
+               WHERE excluded.is_visible != user_device_presence.is_visible
+                  OR (excluded.last_seen_ms - user_device_presence.last_seen_ms) >= 15000`
             )
             .bind(userId, deviceId, deviceType, isVisible, now),
         ];

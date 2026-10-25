@@ -13,6 +13,7 @@ const SHORT_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBars }) => {
   const [displayMode, setDisplayMode] = useState<'calendar' | 'weeks'>('calendar');
+  const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
   // Parse Year and Month from the first bar's key (format 'YYYY-MM-DD')
@@ -73,10 +74,11 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
   }, [activityBars]);
 
   // Currently inspected day (hovered/selected or null)
+  const activeKey = hoveredDayKey || selectedDayKey;
   const inspectedBar = useMemo(() => {
-    if (!selectedDayKey) return null;
-    return dayMap.get(selectedDayKey) || null;
-  }, [selectedDayKey, dayMap]);
+    if (!activeKey) return null;
+    return dayMap.get(activeKey) || null;
+  }, [activeKey, dayMap]);
 
   // Group days into Calendar Weeks for the 'weeks' breakdown
   const weeklyGroups = useMemo(() => {
@@ -228,7 +230,7 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
           {/* 7-Column Calendar Grid */}
           <div
             className="grid grid-cols-7 gap-1 sm:gap-2"
-            onMouseLeave={() => setSelectedDayKey(null)}
+            onMouseLeave={() => setHoveredDayKey(null)}
           >
             {/* Empty Offset Days before the 1st of the month */}
             {Array.from({ length: startingDayOfWeek }).map((_, i) => (
@@ -250,8 +252,11 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
                 <button
                   type="button"
                   key={dateKey}
-                  onMouseEnter={() => setSelectedDayKey(dateKey)}
-                  onClick={() => setSelectedDayKey(dateKey)}
+                  onMouseEnter={() => setHoveredDayKey(dateKey)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setSelectedDayKey((prev) => (prev === dateKey ? null : dateKey));
+                  }}
                   className={clsx(
                     'aspect-square sm:aspect-auto sm:min-h-[64px] p-1.5 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col justify-between items-start text-left cursor-pointer group select-none',
                     getCellIntensityStyle(sec, isSelected)

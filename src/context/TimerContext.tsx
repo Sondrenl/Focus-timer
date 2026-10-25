@@ -187,6 +187,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const passivePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSwScheduleRefreshMsRef = useRef<number>(0);
   const lastRemotePollWallMsRef = useRef<number>(0);
+  const lastCoffeeSigRef = useRef<string>('');
+  const lastTagSigRef = useRef<string>('');
   const lastTickWallMsRef = useRef<number>(Date.now());
   const isWakeSyncingRef = useRef<boolean>(false);
 
@@ -991,11 +993,25 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (result.coffeeCups && syncRemoteCoffeeCups) {
-        syncRemoteCoffeeCups(result.coffeeCups, result.deletedCoffeeCupIds);
+        const remoteCount = result.coffeeCups.length;
+        const remoteDelCount = (result.deletedCoffeeCupIds || []).length;
+        const lastRemoteId = remoteCount > 0 ? result.coffeeCups[remoteCount - 1].id : '';
+        const sig = `${remoteCount}:${remoteDelCount}:${lastRemoteId}`;
+        if (sig !== lastCoffeeSigRef.current) {
+          lastCoffeeSigRef.current = sig;
+          syncRemoteCoffeeCups(result.coffeeCups, result.deletedCoffeeCupIds);
+        }
       }
 
       if (result.tags && syncRemoteTags) {
-        syncRemoteTags(result.tags, result.deletedTagIds);
+        const remoteCount = result.tags.length;
+        const remoteDelCount = (result.deletedTagIds || []).length;
+        const lastRemoteUpdate = remoteCount > 0 ? result.tags[remoteCount - 1].updatedAt : '';
+        const sig = `${remoteCount}:${remoteDelCount}:${lastRemoteUpdate}`;
+        if (sig !== lastTagSigRef.current) {
+          lastTagSigRef.current = sig;
+          syncRemoteTags(result.tags, result.deletedTagIds);
+        }
       }
 
       if (result.lastSessionCompletedAt) {
@@ -1040,8 +1056,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // 1. Drive background cloud polling even when the phone screen is off and status is IDLE/PAUSED
     // so a locked phone in the user's pocket immediately detects when a break is started on the laptop.
+    // 1. Adaptive cloud polling: fast when timer is active, relaxed when idle/hidden to conserve battery & database bandwidth
     if (isAuthenticatedRef.current) {
-      const pollIntervalMs = statusRef.current === 'RUNNING' ? 1500 : 2000;
+      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+      let pollIntervalMs: number;
+      if (statusRef.current === 'RUNNING') {
+        pollIntervalMs = isVisible ? 3000 : 10000;
+      } else {
+        pollIntervalMs = isVisible ? 10000 : 30000;
+      }
       if (nowWall - lastRemotePollWallMsRef.current >= pollIntervalMs) {
         lastRemotePollWallMsRef.current = nowWall;
         void checkRemoteTimerRef.current();
