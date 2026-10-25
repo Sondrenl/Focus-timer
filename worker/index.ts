@@ -583,7 +583,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         ).bind(currentUserId).all<{ tag_id: string }>(),
         updateAndGetPeerPresence(env.DB, currentUserId, request, now),
         env.DB.prepare(
-          "SELECT max(completed_at) as last_completed_at FROM sessions WHERE user_id = ? AND id NOT LIKE 'sample-%' AND id NOT LIKE 'seed-%'"
+          "SELECT completed_at as last_completed_at FROM sessions WHERE user_id = ? ORDER BY completed_at DESC LIMIT 1"
         ).bind(currentUserId).first<{ last_completed_at: string | null }>(),
       ]);
 

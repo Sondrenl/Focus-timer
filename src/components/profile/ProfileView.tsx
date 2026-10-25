@@ -395,7 +395,7 @@ export const ProfileView: React.FC = () => {
             <Button
               variant="tonal"
               size="sm"
-              onClick={syncWithCloud}
+              onClick={() => syncWithCloud(true)}
               disabled={auth.isSyncing}
             >
               <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${auth.isSyncing ? 'animate-spin' : ''}`} />

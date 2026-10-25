@@ -35,7 +35,7 @@ interface AppContextValue {
   auth: AuthState;
   loginWithGoogle: (idToken: string) => Promise<void>;
   logout: () => void;
-  syncWithCloud: () => Promise<void>;
+  syncWithCloud: (force?: boolean) => Promise<void>;
 
   // Profile
   profile: UserProfile;
@@ -163,6 +163,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const lastLocalSettingsEditMsRef = useRef<number>(0);
   const lastLocalProfileEditMsRef = useRef<number>(0);
 
+  const lastSyncCompletedMsRef = useRef<number>(0);
   const isSyncingRef = useRef<boolean>(false);
   const syncPendingRef = useRef<boolean>(false);
 
@@ -260,15 +261,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Synchronize local data with Cloudflare D1
-  const syncWithCloud = useCallback(async (): Promise<void> => {
+  const syncWithCloud = useCallback(async (force = false): Promise<void> => {
     if (!authService.getStoredToken()) return;
     if (isSyncingRef.current) {
-      syncPendingRef.current = true;
+      if (force) syncPendingRef.current = true;
+      return;
+    }
+
+    const now = Date.now();
+    // Cooldown: prevent automated background syncs from running more than once every 15 seconds
+    if (!force && now - lastSyncCompletedMsRef.current < 15000) {
       return;
     }
 
     isSyncingRef.current = true;
-    const syncStartedMs = Date.now();
+    const syncStartedMs = now;
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
 
     try {
@@ -424,11 +431,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     } finally {
       isSyncingRef.current = false;
+      lastSyncCompletedMsRef.current = Date.now();
       if (syncPendingRef.current) {
         syncPendingRef.current = false;
         setTimeout(() => {
-          void syncWithCloud();
-        }, 300);
+          void syncWithCloud(true);
+        }, 1000);
       }
     }
   }, []);
@@ -668,27 +676,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activeTagId !== null && tags.length > 0) {
       const exists = tags.some((t) => t.id === activeTagId && !t.isArchived);
       if (!exists) {
-        if (auth.isAuthenticated && !auth.isSyncing) {
-          syncWithCloud().then(() => {
-            tagRepository.getAll().then((currentTags) => {
-              if (!currentTags.some((t) => t.id === activeTagId && !t.isArchived)) {
-                setActiveTagId(null);
-              }
-            });
-          });
-        } else if (!auth.isAuthenticated) {
-          setActiveTagId(null);
-        }
+        setActiveTagId(null);
       }
     }
-  }, [tags, activeTagId, auth.isAuthenticated, auth.isSyncing, syncWithCloud, setActiveTagId]);
+  }, [tags, activeTagId, setActiveTagId]);
 
-  // When switching views to Statistics, guarantee data is fresh from the cloud
+  // When switching views to Statistics, guarantee data is fresh from the cloud (only on transition into stats)
+  const prevViewRef = useRef(currentView);
   useEffect(() => {
-    if (currentView === 'stats' && auth.isAuthenticated && !auth.isSyncing) {
+    const prev = prevViewRef.current;
+    prevViewRef.current = currentView;
+    if (currentView === 'stats' && prev !== 'stats' && auth.isAuthenticated) {
       void syncWithCloud();
     }
-  }, [currentView, auth.isAuthenticated, auth.isSyncing, syncWithCloud]);
+  }, [currentView, auth.isAuthenticated, syncWithCloud]);
 
   // Profile Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {

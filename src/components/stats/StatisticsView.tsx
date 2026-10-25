@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import React, { useState } from 'react';
 import { useStatistics, TimePeriodType } from '../../hooks/useStatistics';
 import { Card } from '../ui/Card';
 import {
@@ -43,13 +42,7 @@ export const StatisticsView: React.FC = () => {
     insights,
   } = useStatistics();
 
-  const { syncWithCloud, auth } = useApp();
 
-  useEffect(() => {
-    if (auth.isAuthenticated && !auth.isSyncing) {
-      syncWithCloud().catch(() => {});
-    }
-  }, [auth.isAuthenticated]);
 
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
 
