@@ -17,6 +17,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   const strokeWidth = 24;
   const center = 100;
   const circumference = 2 * Math.PI * radius;
+  const innerRadius = radius - strokeWidth / 2; // radius of the hole inside the donut
 
   // Filter out tags with 0 seconds in this period
   const activeSlices = distribution.filter((item) => item.totalSeconds > 0);
@@ -40,6 +41,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   });
 
   const hoveredItem = activeSlices.find((item) => item.tagId === hoveredTagId);
+  const hoveredSlice = slicesWithOffsets.find((item) => item.tagId === hoveredTagId);
 
   return (
     <div className="flex flex-col md:flex-row items-center justify-around gap-6 py-2">
@@ -48,6 +50,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
         <svg
           viewBox={`0 0 ${center * 2} ${center * 2}`}
           className="w-full h-full transform -rotate-90 drop-shadow-xs"
+          onMouseLeave={() => setHoveredTagId(null)}
         >
           {/* Base Background Track Ring */}
           <circle
@@ -60,9 +63,11 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
             className="opacity-40"
           />
 
-          {/* Slices */}
+          {/* Stable Base Slices - Rock solid hit-targets without resizing jitter */}
           {slicesWithOffsets.map((slice) => {
             const isHovered = hoveredTagId === slice.tagId;
+            const isAnyHovered = Boolean(hoveredTagId);
+
             return (
               <circle
                 key={slice.tagId}
@@ -71,22 +76,50 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 r={radius}
                 fill="transparent"
                 stroke={slice.color}
-                strokeWidth={isHovered ? strokeWidth + 6 : strokeWidth}
+                strokeWidth={strokeWidth}
                 strokeDasharray={slice.strokeDasharray}
                 strokeDashoffset={slice.strokeDashoffset}
                 strokeLinecap="butt"
                 onMouseEnter={() => setHoveredTagId(slice.tagId)}
-                onMouseLeave={() => setHoveredTagId(null)}
-                className="transition-all duration-200 cursor-pointer"
+                className="cursor-pointer transition-opacity duration-200"
+                style={{
+                  opacity: isAnyHovered ? (isHovered ? 1 : 0.4) : 1,
+                }}
               />
             );
           })}
+
+          {/* Active Highlight Overlay (pointer-events-none so it never interferes with cursor hit testing) */}
+          {hoveredSlice && (
+            <circle
+              cx={center}
+              cy={center}
+              r={radius}
+              fill="transparent"
+              stroke={hoveredSlice.color}
+              strokeWidth={strokeWidth + 4}
+              strokeDasharray={hoveredSlice.strokeDasharray}
+              strokeDashoffset={hoveredSlice.strokeDashoffset}
+              strokeLinecap="butt"
+              className="pointer-events-none drop-shadow-md transition-all duration-150"
+            />
+          )}
+
+          {/* Inner hole hit target to cleanly reset hover when entering the center */}
+          <circle
+            cx={center}
+            cy={center}
+            r={innerRadius}
+            fill="transparent"
+            onMouseEnter={() => setHoveredTagId(null)}
+            className="cursor-default"
+          />
         </svg>
 
         {/* Center Text */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none px-4">
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none px-4 transition-all duration-150">
           {hoveredItem ? (
-            <>
+            <div className="flex flex-col items-center justify-center animate-in fade-in duration-150">
               <span className="text-xl font-extrabold text-md-on-surface tracking-tight truncate max-w-[120px]">
                 {hoveredItem.percentage === 0 && hoveredItem.totalSeconds > 0
                   ? '<1%'
@@ -98,38 +131,44 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
               <span className="text-[10px] text-md-outline">
                 {formatDurationHoursMins(hoveredItem.totalSeconds)}
               </span>
-            </>
+            </div>
           ) : (
-            <>
+            <div className="flex flex-col items-center justify-center animate-in fade-in duration-150">
               <span className="text-xl font-extrabold text-md-on-surface tracking-tight">
                 {formatDurationHoursMins(totalFocusSeconds)}
               </span>
               <span className="text-xs font-medium text-md-on-surface-variant mt-0.5">
                 Total Focus
               </span>
-            </>
+            </div>
           )}
         </div>
       </div>
 
       {/* 2. Legend & Tag Details List */}
-      <div className="flex-1 w-full flex flex-col gap-2.5 max-h-60 overflow-y-auto pr-1">
+      <div
+        className="flex-1 w-full flex flex-col gap-1.5 max-h-60 overflow-y-auto pr-1"
+        onMouseLeave={() => setHoveredTagId(null)}
+      >
         {activeSlices.map((item) => {
           const isHovered = hoveredTagId === item.tagId;
+          const isAnyHovered = Boolean(hoveredTagId);
+
           return (
             <div
               key={item.tagId}
               onMouseEnter={() => setHoveredTagId(item.tagId)}
-              onMouseLeave={() => setHoveredTagId(null)}
-              className={`flex items-center justify-between p-2 rounded-2xl transition-all cursor-pointer ${
+              className={`flex items-center justify-between p-2 rounded-2xl transition-all duration-150 cursor-pointer ${
                 isHovered
-                  ? 'bg-md-surface-container-high shadow-xs scale-101'
+                  ? 'bg-md-surface-container-high shadow-xs'
+                  : isAnyHovered
+                  ? 'opacity-60 hover:opacity-100 hover:bg-md-surface-container'
                   : 'hover:bg-md-surface-container'
               }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <span
-                  className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs transition-transform"
+                  className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs transition-transform duration-150"
                   style={{
                     backgroundColor: item.color,
                     transform: isHovered ? 'scale(1.2)' : 'scale(1)',

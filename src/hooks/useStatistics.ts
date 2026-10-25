@@ -13,6 +13,8 @@ import {
   formatFriendlyDate,
 } from '../utils/dates';
 import { formatDurationHoursMins } from '../utils/formatters';
+import { generatePeriodInsights, InterestingStat } from '../utils/insights';
+export type { InterestingStat };
 
 export type TimePeriodType = 'day' | 'week' | 'month' | 'year' | 'all' | 'custom';
 
@@ -935,6 +937,16 @@ export function useStatistics() {
       }
     }
 
+    const insights = generatePeriodInsights({
+      sessions: filteredSessions,
+      coffeeCups: filteredCoffee,
+      tags,
+      periodType,
+      totalFocusSeconds,
+      totalCoffeeCups,
+    });
+    const topInsight = insights.length > 0 ? insights[0] : null;
+
     return {
       periodLabel,
       totalFocusSeconds,
@@ -947,6 +959,8 @@ export function useStatistics() {
       tagDistribution,
       activityBars,
       productiveMetric,
+      insights,
+      topInsight,
     };
   }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange, isCurrentPeriod, todayKey]);
 
@@ -971,5 +985,7 @@ export function useStatistics() {
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,
+    insights: stats.insights,
+    topInsight: stats.topInsight,
   };
 }

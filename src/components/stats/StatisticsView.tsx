@@ -16,6 +16,7 @@ import {
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { DateRangeModal } from './DateRangeModal';
 import { TagDistributionDonut } from './TagDistributionDonut';
+import { SmartInsightPanel } from './SmartInsightPanel';
 import { clsx } from 'clsx';
 
 export const StatisticsView: React.FC = () => {
@@ -39,6 +40,7 @@ export const StatisticsView: React.FC = () => {
     tagDistribution,
     activityBars,
     productiveMetric,
+    insights,
   } = useStatistics();
 
   const { syncWithCloud, auth } = useApp();
@@ -280,12 +282,15 @@ export const StatisticsView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Focus Statistics Overview */}
+      {/* Smart Insight Panel */}
+      <SmartInsightPanel insights={insights} />
+
+      {/* 2. Focus Statistics */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <Clock className="w-4 h-4 text-md-primary" />
           <h3 className="text-sm font-bold text-md-on-surface tracking-wide uppercase">
-            Focus Overview
+            Focus
           </h3>
         </div>
 
@@ -340,12 +345,12 @@ export const StatisticsView: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Coffee Statistics Overview */}
+      {/* 3. Coffee Statistics */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <Coffee className="w-4 h-4 text-amber-700" />
           <h3 className="text-sm font-bold text-md-on-surface tracking-wide uppercase">
-            Coffee Overview
+            Coffee
           </h3>
         </div>
 
