@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Plus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TagFormModal } from '../tags/TagFormModal';
+import { clsx } from 'clsx';
 
 export const TagSelector: React.FC = () => {
   const { activeTags, activeTagId, setActiveTagId } = useApp();
@@ -28,7 +29,12 @@ export const TagSelector: React.FC = () => {
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-3 md:gap-2.5 min-h-[48px] md:min-h-0 px-5 py-2.5 md:px-4 md:py-2 rounded-2xl md:rounded-full bg-md-surface-container-high hover:bg-md-surface-container-highest transition-all duration-200 border border-md-outline-variant/40 md:border-md-outline-variant/30 text-sm font-semibold md:font-medium text-md-on-surface shadow-xs active:scale-95 md:active:scale-98"
+        className={clsx(
+          'flex items-center gap-3 md:gap-2.5 min-h-[48px] md:min-h-0 px-5 py-2.5 md:px-4 md:py-2 rounded-2xl md:rounded-full transition-colors duration-150 border text-sm font-semibold md:font-medium text-md-on-surface shadow-xs select-none touch-manipulation',
+          isOpen
+            ? 'bg-md-surface-container-highest border-md-primary/40'
+            : 'bg-md-surface-container-high md:hover:bg-md-surface-container-highest active:bg-md-surface-container-highest border-md-outline-variant/40 md:border-md-outline-variant/30'
+        )}
       >
         {currentTag ? (
           <>
@@ -55,7 +61,7 @@ export const TagSelector: React.FC = () => {
 
       {/* Dropdown Menu: Enlarged touch-friendly dropdown on mobile, compact on desktop */}
       {isOpen && (
-        <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30 animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30">
           <div className="text-xs font-semibold text-md-on-surface-variant px-3 py-2 md:py-1.5 uppercase tracking-wider">
             Tags
           </div>
@@ -68,7 +74,7 @@ export const TagSelector: React.FC = () => {
                 setActiveTagId(null);
                 setIsOpen(false);
               }}
-              className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm font-medium transition-colors text-left ${
+              className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm font-medium transition-colors text-left touch-manipulation select-none ${
                 activeTagId === null
                   ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
                   : 'hover:bg-md-surface-container text-md-on-surface active:bg-md-surface-container'
@@ -94,7 +100,7 @@ export const TagSelector: React.FC = () => {
                     setActiveTagId(tag.id);
                     setIsOpen(false);
                   }}
-                  className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm font-medium transition-colors text-left ${
+                  className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm font-medium transition-colors text-left touch-manipulation select-none ${
                     isSelected
                       ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
                       : 'hover:bg-md-surface-container text-md-on-surface active:bg-md-surface-container'
@@ -122,7 +128,7 @@ export const TagSelector: React.FC = () => {
                 setIsOpen(false);
                 setIsModalOpen(true);
               }}
-              className="w-full flex items-center gap-2.5 md:gap-2 min-h-[44px] md:min-h-0 px-3.5 py-2.5 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-semibold text-md-primary hover:bg-md-primary/10 active:bg-md-primary/15 transition-colors text-left"
+              className="w-full flex items-center gap-2.5 md:gap-2 min-h-[44px] md:min-h-0 px-3.5 py-2.5 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-semibold text-md-primary hover:bg-md-primary/10 active:bg-md-primary/15 transition-colors text-left touch-manipulation select-none"
             >
               <Plus className="w-4 h-4 md:w-4 md:h-4" />
               <span>Create New Tag...</span>

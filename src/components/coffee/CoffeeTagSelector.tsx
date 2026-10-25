@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Plus, Tag as TagIcon } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TagFormModal } from '../tags/TagFormModal';
+import { clsx } from 'clsx';
 
 interface CoffeeTagSelectorProps {
   selectedTagId: string | null;
@@ -42,7 +43,12 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-3 md:gap-2.5 min-h-[48px] md:min-h-0 px-5 py-2.5 md:px-3.5 md:py-1.5 rounded-2xl md:rounded-full bg-md-surface-container-high md:bg-md-surface-container hover:bg-md-surface-container-highest md:hover:bg-md-surface-container-high transition-all duration-200 border border-md-outline-variant/40 md:border-md-outline-variant/30 text-sm md:text-xs font-semibold text-md-on-surface shadow-xs active:scale-95 md:active:scale-98"
+          className={clsx(
+            'flex items-center gap-3 md:gap-2.5 min-h-[48px] md:min-h-0 px-5 py-2.5 md:px-3.5 md:py-1.5 rounded-2xl md:rounded-full transition-colors duration-150 border text-sm md:text-xs font-semibold text-md-on-surface shadow-xs select-none touch-manipulation',
+            isOpen
+              ? 'bg-md-surface-container-highest border-md-primary/40'
+              : 'bg-md-surface-container-high md:bg-md-surface-container md:hover:bg-md-surface-container-high active:bg-md-surface-container-highest border-md-outline-variant/40 md:border-md-outline-variant/30'
+          )}
         >
           {currentTag ? (
             <>
@@ -69,7 +75,7 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
 
         {/* Dropdown Menu: Enlarged touch-friendly dropdown on mobile, compact on desktop */}
         {isOpen && (
-          <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),19rem)] md:w-60 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30 animate-in fade-in zoom-in-95 duration-150">
+          <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),19rem)] md:w-60 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30">
             <div className="text-xs md:text-[11px] font-semibold text-md-on-surface-variant px-3 py-2 md:py-1 uppercase tracking-wider">
               Choose Tag for Cup
             </div>
@@ -82,7 +88,7 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
                   onSelectTagId(null);
                   setIsOpen(false);
                 }}
-                className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-medium transition-colors text-left ${
+                className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-medium transition-colors text-left touch-manipulation select-none ${
                   selectedTagId === null
                     ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
                     : 'hover:bg-md-surface-container text-md-on-surface active:bg-md-surface-container'
@@ -108,7 +114,7 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
                       onSelectTagId(tag.id);
                       setIsOpen(false);
                     }}
-                    className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-medium transition-colors text-left ${
+                    className={`w-full flex items-center justify-between min-h-[48px] md:min-h-0 px-3.5 py-3 md:px-3 md:py-2 rounded-xl text-sm md:text-xs font-medium transition-colors text-left touch-manipulation select-none ${
                       isSelected
                         ? 'bg-md-primary-container text-md-on-primary-container font-semibold'
                         : 'hover:bg-md-surface-container text-md-on-surface active:bg-md-surface-container'
@@ -136,7 +142,7 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
                   setIsOpen(false);
                   setIsModalOpen(true);
                 }}
-                className="w-full flex items-center gap-2 md:gap-1.5 min-h-[44px] md:min-h-0 px-3.5 py-2.5 md:px-3 md:py-1.5 rounded-xl text-sm md:text-xs font-semibold text-md-primary hover:bg-md-primary/10 active:bg-md-primary/15 transition-colors text-left"
+                className="w-full flex items-center gap-2 md:gap-1.5 min-h-[44px] md:min-h-0 px-3.5 py-2.5 md:px-3 md:py-1.5 rounded-xl text-sm md:text-xs font-semibold text-md-primary hover:bg-md-primary/10 active:bg-md-primary/15 transition-colors text-left touch-manipulation select-none"
               >
                 <Plus className="w-4 h-4 md:w-3.5 md:h-3.5" />
                 <span>Create New Tag...</span>
