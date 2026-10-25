@@ -258,18 +258,26 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
                     setSelectedDayKey((prev) => (prev === dateKey ? null : dateKey));
                   }}
                   className={clsx(
-                    'aspect-square sm:aspect-auto sm:min-h-[64px] p-1.5 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col justify-between items-start text-left cursor-pointer group select-none',
+                    'aspect-square sm:aspect-auto sm:min-h-[64px] p-1 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
                     getCellIntensityStyle(sec, isSelected)
                   )}
                   aria-label={`${dayNum} ${monthName}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs sm:text-sm font-bold leading-none">
+                  {/* Mobile View: Centered date number and activity indicator dot */}
+                  <div className="flex sm:hidden flex-col items-center justify-center">
+                    <span className="text-xs font-bold leading-none">
                       {dayNum}
                     </span>
                     {sec > 0 && (
-                      <span className="block sm:hidden w-1.5 h-1.5 rounded-full bg-current opacity-80" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-85 mt-1" />
                     )}
+                  </div>
+
+                  {/* Desktop View: Top-left date with bottom duration & sessions */}
+                  <div className="hidden sm:flex items-center justify-between w-full">
+                    <span className="text-sm font-bold leading-none">
+                      {dayNum}
+                    </span>
                   </div>
 
                   {sec > 0 ? (

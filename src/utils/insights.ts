@@ -447,7 +447,7 @@ export function generatePeriodInsights({
         type: 'empty-state',
         badge: 'Smart Insights',
         headline: 'No activity logged for this period',
-        description: 'Complete a Pomodoro session or log a cup of coffee to generate personalized productivity insights.',
+        description: 'Complete a session or log a cup of coffee to see insights.',
         iconName: 'sparkles',
         score: 10,
       });

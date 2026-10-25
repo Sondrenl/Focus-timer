@@ -36,15 +36,13 @@ export const StatisticsView: React.FC = () => {
     totalWorkCount,
     totalCoffeeCups,
     coffeeDailyAverage,
-    coffeeElapsedDays,
+    coffeeElapsedDays: _coffeeElapsedDays,
     coffeePeakMetric,
     tagDistribution,
     activityBars,
     productiveMetric,
     insights,
   } = useStatistics();
-
-
 
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
 
@@ -75,7 +73,6 @@ export const StatisticsView: React.FC = () => {
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
       </div>
-
 
       {/* 1. Time Period Selector & Period Navigator */}
       {/* Desktop Layout (md and up) */}
@@ -330,9 +327,6 @@ export const StatisticsView: React.FC = () => {
               <div className="text-xs font-medium text-md-on-surface-variant">
                 {productiveMetric.title}
               </div>
-              <div className="text-[11px] text-md-outline mt-0.5 truncate">
-                {productiveMetric.subtext}
-              </div>
             </div>
           </Card>
         </div>
@@ -360,9 +354,6 @@ export const StatisticsView: React.FC = () => {
               <div className="text-xs font-medium text-md-on-surface-variant">
                 {totalCoffeeCups === 1 ? 'Total Cup' : 'Total Cups'}
               </div>
-              <div className="text-[11px] text-md-outline mt-0.5 truncate">
-                {totalCoffeeCups === 1 ? '1 cup logged' : `${totalCoffeeCups} cups logged`}
-              </div>
             </div>
           </Card>
 
@@ -378,11 +369,6 @@ export const StatisticsView: React.FC = () => {
               <div className="text-xs font-medium text-md-on-surface-variant">
                 {periodType === 'day' ? 'Cups Logged' : 'Average Cups / Day'}
               </div>
-              <div className="text-[11px] text-md-outline mt-0.5 truncate">
-                {periodType === 'day'
-                  ? 'Single day view'
-                  : `Across ${coffeeElapsedDays} ${coffeeElapsedDays === 1 ? 'day' : 'days'}`}
-              </div>
             </div>
           </Card>
 
@@ -397,9 +383,6 @@ export const StatisticsView: React.FC = () => {
               </div>
               <div className="text-xs font-medium text-md-on-surface-variant">
                 {coffeePeakMetric.title}
-              </div>
-              <div className="text-[11px] text-md-outline mt-0.5 truncate">
-                {coffeePeakMetric.subtext}
               </div>
             </div>
           </Card>
