@@ -258,7 +258,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return true;
       } else {
         if (isVisible) return true;
-        return !peer.mobileActive;
+        return !peer.mobileVisible;
       }
     }
   }, []);
@@ -506,7 +506,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const targetWallClockMs = Date.now() + secToRun * 1000;
       const runId = timerRunIdRef.current || `tr-${now}-${Math.random().toString(36).substring(2, 6)}`;
 
-      // Ensure mobile silent keep-alive is running (no-op on desktop)
+      // Ensure audio pipeline is prepared and primed for completion chime
+      sound.prepareForPlayback();
       sound.startSilentKeepAlive();
 
       // If manually starting while the app is visible, clear any old notification from the shade
@@ -902,8 +903,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         } else {
           // Target time has already elapsed on the server!
-          // If it expired more than 4 seconds ago (e.g. while this laptop was asleep), complete silently.
-          const expiredLongAgo = diffMs < -4000;
+          // If it expired more than 60 seconds ago (e.g. while this laptop was asleep), complete silently.
+          const expiredLongAgo = diffMs < -60000;
           handleCompleteRef.current(expiredLongAgo);
         }
       } else if (remote.status === 'PAUSED') {
@@ -1148,6 +1149,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const handleVisibilityOrFocus = () => {
       const isHidden = document.visibilityState === 'hidden';
+
+      if (statusRef.current === 'RUNNING') {
+        sound.prepareForPlayback();
+      }
 
 
 

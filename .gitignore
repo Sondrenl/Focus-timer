@@ -40,3 +40,4 @@ Thumbs.db
 # Agent and temporary files
 .agents/
 .gemini/
+skills/
