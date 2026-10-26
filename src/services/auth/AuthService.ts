@@ -26,6 +26,8 @@ export interface RemoteTimerResult {
   peerPresence?: PeerPresence;
   serverTime?: number;
   lastSessionCompletedAt?: string | null;
+  tagsVersion?: number;
+  coffeeVersion?: number;
 }
 
 export function isMobileDevice(): boolean {
@@ -410,6 +412,9 @@ export class AuthService {
     return data;
   }
 
+  private lastPresenceSentMs = 0;
+  private lastPresenceVisible: boolean | null = null;
+
   private buildPresenceHeaders(
     token: string,
     deviceSessionId?: string,
@@ -418,10 +423,21 @@ export class AuthService {
   ): Record<string, string> {
     const isVisible =
       typeof document !== 'undefined' && document.visibilityState === 'visible' && !isClosed;
+    const now = Date.now();
+    const visibilityChanged = this.lastPresenceVisible !== isVisible;
+    const timeSinceLastPresence = now - this.lastPresenceSentMs;
+    const shouldTouchPresence = isClosed || visibilityChanged || timeSinceLastPresence >= 15000;
+
+    if (shouldTouchPresence) {
+      this.lastPresenceSentMs = now;
+      this.lastPresenceVisible = isVisible;
+    }
+
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       'X-Device-Type': isMobileDevice() ? 'mobile' : 'desktop',
       'X-Device-Visible': isVisible ? '1' : '0',
+      'X-Device-Touch': shouldTouchPresence ? '1' : '0',
     };
     if (deviceSessionId) {
       headers['X-Device-Id'] = deviceSessionId;
@@ -437,7 +453,9 @@ export class AuthService {
 
   public async fetchRemoteTimer(
     isRunning: boolean = false,
-    deviceSessionId?: string
+    deviceSessionId?: string,
+    tagsVersion?: number,
+    coffeeVersion?: number
   ): Promise<RemoteTimerResult | null> {
     const token = this.getStoredToken();
     if (!token) return null;
@@ -445,6 +463,12 @@ export class AuthService {
     try {
       const t0 = Date.now();
       const headers = this.buildPresenceHeaders(token, deviceSessionId, isRunning, false);
+      if (typeof tagsVersion === 'number' && tagsVersion > 0) {
+        headers['X-Tags-Version'] = String(tagsVersion);
+      }
+      if (typeof coffeeVersion === 'number' && coffeeVersion > 0) {
+        headers['X-Coffee-Version'] = String(coffeeVersion);
+      }
       const res = await fetch('/api/timer', { headers });
       const t1 = Date.now();
       if (!res.ok) return null;

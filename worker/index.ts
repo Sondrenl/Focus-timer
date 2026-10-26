@@ -24,29 +24,114 @@ const DESKTOP_PRESENCE_TTL_MS = 25000;
 const MOBILE_PRESENCE_TTL_MS = 35000;
 
 const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS users (\n    id TEXT PRIMARY KEY,\n    google_id TEXT UNIQUE NOT NULL,\n    email TEXT NOT NULL,\n    display_name TEXT,\n    avatar_url TEXT,\n    avatar_emoji TEXT DEFAULT '',\n    daily_goal_minutes INTEGER DEFAULT 120,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
-  `CREATE TABLE IF NOT EXISTS tags (\n    id TEXT NOT NULL,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    name TEXT NOT NULL,\n    color TEXT NOT NULL,\n    is_archived INTEGER DEFAULT 0,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, id)\n  )`,
-  `CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_user_id ON tags(user_id, id)`,
-  `CREATE TABLE IF NOT EXISTS deleted_tags (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, tag_id)\n  )`,
-  `CREATE INDEX IF NOT EXISTS idx_deleted_tags_user ON deleted_tags(user_id)`,
-  `CREATE TABLE IF NOT EXISTS sessions (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),\n    duration_seconds INTEGER NOT NULL,\n    completed_at TEXT NOT NULL\n  )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    google_id TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    avatar_url TEXT,
+    avatar_emoji TEXT DEFAULT '',
+    daily_goal_minutes INTEGER DEFAULT 120,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS tags (
+    id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    is_archived INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_tags (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL,
+    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, tag_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT,
+    session_type TEXT NOT NULL CHECK(session_type IN ('WORK', 'SHORT_BREAK', 'LONG_BREAK')),
+    duration_seconds INTEGER NOT NULL,
+    completed_at TEXT NOT NULL
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_date ON sessions(user_id, completed_at)`,
-  `CREATE TABLE IF NOT EXISTS coffee_cups (\n    id TEXT PRIMARY KEY,\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    tag_id TEXT,\n    date TEXT NOT NULL,\n    created_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_user_tag ON sessions(user_id, tag_id)`,
+  `CREATE TABLE IF NOT EXISTS coffee_cups (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tag_id TEXT,
+    date TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_created ON coffee_cups(user_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_date ON coffee_cups(user_id, date)`,
-  `CREATE TABLE IF NOT EXISTS user_settings (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    work_duration_minutes REAL DEFAULT 25,\n    short_break_duration_minutes REAL DEFAULT 5,\n    long_break_duration_minutes REAL DEFAULT 25,\n    long_break_interval INTEGER DEFAULT 4,\n    auto_start_breaks INTEGER DEFAULT 0,\n    auto_start_pomodoros INTEGER DEFAULT 0,\n    sound_enabled INTEGER DEFAULT 1,\n    sound_volume REAL DEFAULT 0.8,\n    notifications_enabled INTEGER DEFAULT 0,\n    keep_awake INTEGER DEFAULT 0,\n    updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n  )`,
-  `CREATE TABLE IF NOT EXISTS active_timers (\n    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,\n    session_type TEXT NOT NULL,\n    status TEXT NOT NULL,\n    remaining_seconds INTEGER NOT NULL,\n    total_seconds INTEGER NOT NULL,\n    target_end_time INTEGER,\n    current_cycle INTEGER NOT NULL,\n    tag_id TEXT,\n    timer_run_id TEXT,\n    updated_at_ms INTEGER NOT NULL,\n    last_heartbeat_ms INTEGER\n  )`,
-  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    cup_id TEXT NOT NULL,\n    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (user_id, cup_id)\n  )`,
-  `CREATE INDEX IF NOT EXISTS idx_deleted_coffee_cups_user ON deleted_coffee_cups(user_id)`,
-  `CREATE TABLE IF NOT EXISTS user_device_presence (\n    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    device_id TEXT NOT NULL,\n    device_type TEXT NOT NULL,\n    is_visible INTEGER DEFAULT 0,\n    last_seen_ms INTEGER NOT NULL,\n    PRIMARY KEY (user_id, device_id)\n  )`,
-  `CREATE INDEX IF NOT EXISTS idx_device_presence_user ON user_device_presence(user_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS uq_device_presence ON user_device_presence(user_id, device_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_tag ON coffee_cups(user_id, tag_id)`,
+  `CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    work_duration_minutes REAL DEFAULT 25,
+    short_break_duration_minutes REAL DEFAULT 5,
+    long_break_duration_minutes REAL DEFAULT 25,
+    long_break_interval INTEGER DEFAULT 4,
+    auto_start_breaks INTEGER DEFAULT 0,
+    auto_start_pomodoros INTEGER DEFAULT 0,
+    sound_enabled INTEGER DEFAULT 1,
+    sound_volume REAL DEFAULT 0.8,
+    notifications_enabled INTEGER DEFAULT 0,
+    keep_awake INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS active_timers (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    session_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    remaining_seconds INTEGER NOT NULL,
+    total_seconds INTEGER NOT NULL,
+    target_end_time INTEGER,
+    current_cycle INTEGER NOT NULL,
+    tag_id TEXT,
+    timer_run_id TEXT,
+    updated_at_ms INTEGER NOT NULL,
+    last_heartbeat_ms INTEGER,
+    tags_version INTEGER DEFAULT 1,
+    coffee_version INTEGER DEFAULT 1,
+    last_session_completed_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS deleted_coffee_cups (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cup_id TEXT NOT NULL,
+    deleted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, cup_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS user_device_presence (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL,
+    device_type TEXT NOT NULL,
+    is_visible INTEGER DEFAULT 0,
+    last_seen_ms INTEGER NOT NULL,
+    PRIMARY KEY (user_id, device_id)
+  )`,
 ];
 
 let isSchemaEnsured = false;
 
 async function ensureSchema(db: D1Database): Promise<void> {
   if (isSchemaEnsured) return;
+
+  try {
+    // Fast path: verify schema is already up to date without issuing DDL
+    await db.prepare('SELECT last_heartbeat_ms, tags_version, coffee_version, last_session_completed_at FROM active_timers LIMIT 1').first();
+    await db.prepare('SELECT keep_awake FROM user_settings LIMIT 1').first();
+    isSchemaEnsured = true;
+    return;
+  } catch {
+    // Fall through to run table creation and dynamic column migrations
+  }
+
   try {
     await db.batch(SCHEMA_STATEMENTS.map((sql) => db.prepare(sql)));
   } catch {
@@ -81,8 +166,6 @@ async function ensureSchema(db: D1Database): Promise<void> {
           SELECT id, user_id, name, color, is_archived, created_at, updated_at FROM tags`),
         db.prepare('DROP TABLE tags'),
         db.prepare('ALTER TABLE tags_new RENAME TO tags'),
-        db.prepare('CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)'),
-        db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_user_id ON tags(user_id, id)'),
         db.prepare('PRAGMA defer_foreign_keys = OFF'),
       ]);
     }
@@ -94,7 +177,31 @@ async function ensureSchema(db: D1Database): Promise<void> {
     await db.prepare('ALTER TABLE active_timers ADD COLUMN last_heartbeat_ms INTEGER').run();
   } catch {}
   try {
+    await db.prepare('ALTER TABLE active_timers ADD COLUMN tags_version INTEGER DEFAULT 1').run();
+  } catch {}
+  try {
+    await db.prepare('ALTER TABLE active_timers ADD COLUMN coffee_version INTEGER DEFAULT 1').run();
+  } catch {}
+  try {
+    await db.prepare('ALTER TABLE active_timers ADD COLUMN last_session_completed_at TEXT').run();
+  } catch {}
+  try {
     await db.prepare('ALTER TABLE user_settings ADD COLUMN keep_awake INTEGER DEFAULT 0').run();
+  } catch {}
+
+  // Clean up duplicate/redundant indexes and ensure performance indexes
+  try {
+    await db.batch([
+      db.prepare('DROP INDEX IF EXISTS uq_tags_user_id'),
+      db.prepare('DROP INDEX IF EXISTS idx_tags_user'),
+      db.prepare('DROP INDEX IF EXISTS idx_deleted_tags_user'),
+      db.prepare('DROP INDEX IF EXISTS idx_deleted_coffee_cups_user'),
+      db.prepare('DROP INDEX IF EXISTS uq_device_presence'),
+      db.prepare('DROP INDEX IF EXISTS idx_device_presence_user'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_sessions_user_tag ON sessions(user_id, tag_id)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_created ON coffee_cups(user_id, created_at)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_coffee_cups_user_tag ON coffee_cups(user_id, tag_id)'),
+    ]);
   } catch {}
 
   isSchemaEnsured = true;
@@ -111,16 +218,18 @@ async function updateAndGetPeerPresence(
   const deviceType = rawType === 'mobile' ? 'mobile' : 'desktop';
   const isVisible = request.headers.get('X-Device-Visible') === '1' ? 1 : 0;
   const isClosed = request.headers.get('X-Device-Closed') === '1';
+  const shouldTouch = request.headers.get('X-Device-Touch') !== '0';
 
   try {
+    const statements: D1PreparedStatement[] = [];
+
     if (deviceId) {
       if (isClosed) {
-        await db
-          .prepare('DELETE FROM user_device_presence WHERE user_id = ? AND device_id = ?')
-          .bind(userId, deviceId)
-          .run();
-      } else {
-        const statements: D1PreparedStatement[] = [
+        statements.push(
+          db.prepare('DELETE FROM user_device_presence WHERE user_id = ? AND device_id = ?').bind(userId, deviceId)
+        );
+      } else if (shouldTouch) {
+        statements.push(
           db
             .prepare(
               `INSERT INTO user_device_presence (user_id, device_id, device_type, is_visible, last_seen_ms)
@@ -132,8 +241,8 @@ async function updateAndGetPeerPresence(
                WHERE excluded.is_visible != user_device_presence.is_visible
                   OR (excluded.last_seen_ms - user_device_presence.last_seen_ms) >= 15000`
             )
-            .bind(userId, deviceId, deviceType, isVisible, now),
-        ];
+            .bind(userId, deviceId, deviceType, isVisible, now)
+        );
 
         // Prune presence records older than 1 hour occasionally (5% probability) to minimize D1 write volume
         if (Math.random() < 0.05) {
@@ -143,20 +252,17 @@ async function updateAndGetPeerPresence(
               .bind(userId, now - 3600000)
           );
         }
-
-        await db.batch(statements);
       }
     }
 
-    const rows = await db
-      .prepare('SELECT device_id, device_type, is_visible, last_seen_ms FROM user_device_presence WHERE user_id = ?')
-      .bind(userId)
-      .all<{
-        device_id: string;
-        device_type: string;
-        is_visible: number;
-        last_seen_ms: number;
-      }>();
+    statements.push(
+      db
+        .prepare('SELECT device_id, device_type, is_visible, last_seen_ms FROM user_device_presence WHERE user_id = ?')
+        .bind(userId)
+    );
+
+    const batchResults = await db.batch<{ device_id: string; device_type: string; is_visible: number; last_seen_ms: number }>(statements);
+    const rows = batchResults[batchResults.length - 1];
 
     let desktopActive = false;
     let desktopVisible = false;
@@ -218,7 +324,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers':
-      'Content-Type, Authorization, X-Timer-Heartbeat, X-Device-Id, X-Device-Type, X-Device-Visible, X-Device-Closed',
+      'Content-Type, Authorization, X-Timer-Heartbeat, X-Device-Id, X-Device-Type, X-Device-Visible, X-Device-Closed, X-Device-Touch, X-Tags-Version, X-Coffee-Version',
     'Content-Type': 'application/json',
   };
 
@@ -244,8 +350,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           dbStatus = 'error: D1 database binding missing';
         } else {
           await ensureSchema(env.DB);
-          await env.DB.prepare('SELECT count(*) FROM deleted_tags').first();
-          await env.DB.prepare('SELECT count(*) FROM active_timers').first();
+          await env.DB.prepare('SELECT 1 FROM active_timers LIMIT 1').first();
           tablesReady = true;
         }
       } catch (err) {
@@ -433,7 +538,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const nowIso = new Date().toISOString();
       const updatedAtIso = body.tag.updatedAt || nowIso;
 
-      await env.DB.batch([
+      const batchResults = await env.DB.batch([
         env.DB.prepare(
           `INSERT INTO tags (id, user_id, name, color, is_archived, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -452,18 +557,18 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           updatedAtIso
         ),
         env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ? AND tag_id = ?').bind(currentUserId, body.tag.id),
+        env.DB.prepare('UPDATE active_timers SET tags_version = COALESCE(tags_version, 1) + 1 WHERE user_id = ?').bind(currentUserId),
+        env.DB.prepare('SELECT * FROM tags WHERE user_id = ?').bind(currentUserId),
       ]);
 
-      const tagRows = await env.DB.prepare('SELECT * FROM tags WHERE user_id = ?')
-        .bind(currentUserId)
-        .all<{
-          id: string;
-          name: string;
-          color: string;
-          is_archived: number;
-          created_at: string;
-          updated_at: string;
-        }>();
+      const tagRows = batchResults[3] as D1Result<{
+        id: string;
+        name: string;
+        color: string;
+        is_archived: number;
+        created_at: string;
+        updated_at: string;
+      }>;
 
       const tags = (tagRows.results || []).map((t) => ({
         id: t.id,
@@ -494,6 +599,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         env.DB.prepare('UPDATE active_timers SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
         env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
         env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId),
+        env.DB.prepare('UPDATE active_timers SET tags_version = COALESCE(tags_version, 1) + 1 WHERE user_id = ?').bind(currentUserId),
       ]);
 
       return new Response(JSON.stringify({ success: true, deletedTagId: tagId }), { headers: corsHeaders });
@@ -523,22 +629,27 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
       }
 
-      await env.DB.prepare(
-        `INSERT INTO sessions (id, user_id, tag_id, session_type, duration_seconds, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           tag_id = excluded.tag_id,
-           session_type = excluded.session_type,
-           duration_seconds = excluded.duration_seconds,
-           completed_at = excluded.completed_at`
-      ).bind(
-        body.session.id,
-        currentUserId,
-        body.session.tagId ?? null,
-        body.session.sessionType,
-        body.session.durationSeconds,
-        body.session.completedAt
-      ).run();
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO sessions (id, user_id, tag_id, session_type, duration_seconds, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             tag_id = excluded.tag_id,
+             session_type = excluded.session_type,
+             duration_seconds = excluded.duration_seconds,
+             completed_at = excluded.completed_at`
+        ).bind(
+          body.session.id,
+          currentUserId,
+          body.session.tagId ?? null,
+          body.session.sessionType,
+          body.session.durationSeconds,
+          body.session.completedAt
+        ),
+        env.DB.prepare(
+          'UPDATE active_timers SET last_session_completed_at = ? WHERE user_id = ?'
+        ).bind(body.session.completedAt, currentUserId),
+      ]);
 
       return new Response(JSON.stringify({ success: true, serverTime: Date.now() }), { headers: corsHeaders });
     }
@@ -550,9 +661,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       }
 
       const isRunningHeartbeat = request.headers.get("X-Timer-Heartbeat") === "1";
+      const clientTagsVersion = parseInt(request.headers.get("X-Tags-Version") || "0", 10);
+      const clientCoffeeVersion = parseInt(request.headers.get("X-Coffee-Version") || "0", 10);
       const now = Date.now();
 
-      const [timerRow, coffeeRows, deletedCoffeeRows, tagRows, deletedTagRows, peerPresence, lastSessionRow] = await Promise.all([
+      const [timerRow, peerPresence] = await Promise.all([
         env.DB.prepare(
           "SELECT * FROM active_timers WHERE user_id = ?"
         ).bind(currentUserId).first<{
@@ -566,38 +679,17 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           timer_run_id: string | null;
           updated_at_ms: number;
           last_heartbeat_ms: number | null;
+          tags_version: number | null;
+          coffee_version: number | null;
+          last_session_completed_at: string | null;
         }>(),
-        env.DB.prepare(
-          "SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC"
-        ).bind(currentUserId).all<{
-          id: string;
-          tag_id: string | null;
-          date: string;
-          created_at: string;
-        }>(),
-        env.DB.prepare(
-          "SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?"
-        ).bind(currentUserId).all<{ cup_id: string }>(),
-        env.DB.prepare(
-          "SELECT * FROM tags WHERE user_id = ?"
-        ).bind(currentUserId).all<{
-          id: string;
-          name: string;
-          color: string;
-          is_archived: number;
-          created_at: string;
-          updated_at: string;
-        }>(),
-        env.DB.prepare(
-          "SELECT tag_id FROM deleted_tags WHERE user_id = ?"
-        ).bind(currentUserId).all<{ tag_id: string }>(),
         updateAndGetPeerPresence(env.DB, currentUserId, request, now),
-        env.DB.prepare(
-          "SELECT completed_at as last_completed_at FROM sessions WHERE user_id = ? ORDER BY completed_at DESC LIMIT 1"
-        ).bind(currentUserId).first<{ last_completed_at: string | null }>(),
       ]);
 
       let timer = null;
+      const tagsVersion = timerRow?.tags_version ?? 1;
+      const coffeeVersion = timerRow?.coffee_version ?? 1;
+      let lastSessionCompletedAt = timerRow?.last_session_completed_at ?? null;
 
       if (timerRow) {
         const status = timerRow.status;
@@ -625,7 +717,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               remainingSeconds = Math.max(0, Math.ceil((targetEndTime - now) / 1000));
             }
           }
-          if (isRunningHeartbeat && effectiveStatus === "RUNNING") {
+          // Throttle heartbeat writes: write at most once every 30 seconds to conserve D1 quota
+          if (isRunningHeartbeat && effectiveStatus === "RUNNING" && (now - (timerRow.last_heartbeat_ms || 0) >= 30000)) {
             await env.DB.prepare(
               "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
             ).bind(now, currentUserId).run();
@@ -645,25 +738,79 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         };
       }
 
-      const coffeeCups = (coffeeRows.results || []).map((c) => ({
-        id: c.id,
-        tagId: c.tag_id,
-        date: c.date,
-        createdAt: c.created_at,
-      }));
+      // Check if client needs tags, coffee, or session backfill
+      const needsTags = clientTagsVersion === 0 || clientTagsVersion !== tagsVersion;
+      const needsCoffee = clientCoffeeVersion === 0 || clientCoffeeVersion !== coffeeVersion;
+      const needsSessionBackfill = lastSessionCompletedAt === null;
 
-      const deletedCoffeeCupIds = (deletedCoffeeRows.results || []).map((r) => r.cup_id);
+      let coffeeCups: any[] | undefined = undefined;
+      let deletedCoffeeCupIds: string[] | undefined = undefined;
+      let tags: any[] | undefined = undefined;
+      let deletedTagIds: string[] | undefined = undefined;
 
-      const tags = (tagRows.results || []).map((t) => ({
-        id: t.id,
-        name: t.name,
-        color: t.color,
-        isArchived: Boolean(t.is_archived),
-        createdAt: t.created_at,
-        updatedAt: t.updated_at,
-      }));
+      if (needsTags || needsCoffee || needsSessionBackfill) {
+        const statements: D1PreparedStatement[] = [];
+        let tagsIdx = -1;
+        let delTagsIdx = -1;
+        let coffeeIdx = -1;
+        let delCoffeeIdx = -1;
+        let sessionIdx = -1;
 
-      const deletedTagIds = (deletedTagRows.results || []).map((r) => r.tag_id);
+        if (needsTags) {
+          tagsIdx = statements.length;
+          statements.push(env.DB.prepare("SELECT * FROM tags WHERE user_id = ?").bind(currentUserId));
+          delTagsIdx = statements.length;
+          statements.push(env.DB.prepare("SELECT tag_id FROM deleted_tags WHERE user_id = ?").bind(currentUserId));
+        }
+
+        if (needsCoffee) {
+          coffeeIdx = statements.length;
+          statements.push(env.DB.prepare("SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC").bind(currentUserId));
+          delCoffeeIdx = statements.length;
+          statements.push(env.DB.prepare("SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?").bind(currentUserId));
+        }
+
+        if (needsSessionBackfill) {
+          sessionIdx = statements.length;
+          statements.push(env.DB.prepare("SELECT completed_at as last_completed_at FROM sessions WHERE user_id = ? ORDER BY completed_at DESC LIMIT 1").bind(currentUserId));
+        }
+
+        const batchResults = await env.DB.batch(statements);
+
+        if (tagsIdx >= 0) {
+          const tagRows = batchResults[tagsIdx] as D1Result<{ id: string; name: string; color: string; is_archived: number; created_at: string; updated_at: string }>;
+          tags = (tagRows.results || []).map((t) => ({
+            id: t.id,
+            name: t.name,
+            color: t.color,
+            isArchived: Boolean(t.is_archived),
+            createdAt: t.created_at,
+            updatedAt: t.updated_at,
+          }));
+          const delTagRows = batchResults[delTagsIdx] as D1Result<{ tag_id: string }>;
+          deletedTagIds = (delTagRows.results || []).map((r) => r.tag_id);
+        }
+
+        if (coffeeIdx >= 0) {
+          const coffeeRows = batchResults[coffeeIdx] as D1Result<{ id: string; tag_id: string | null; date: string; created_at: string }>;
+          coffeeCups = (coffeeRows.results || []).map((c) => ({
+            id: c.id,
+            tagId: c.tag_id,
+            date: c.date,
+            createdAt: c.created_at,
+          }));
+          const delCoffeeRows = batchResults[delCoffeeIdx] as D1Result<{ cup_id: string }>;
+          deletedCoffeeCupIds = (delCoffeeRows.results || []).map((r) => r.cup_id);
+        }
+
+        if (sessionIdx >= 0) {
+          const sessionRow = batchResults[sessionIdx].results?.[0] as { last_completed_at: string | null } | undefined;
+          lastSessionCompletedAt = sessionRow?.last_completed_at ?? null;
+          if (lastSessionCompletedAt) {
+            await env.DB.prepare("UPDATE active_timers SET last_session_completed_at = ? WHERE user_id = ?").bind(lastSessionCompletedAt, currentUserId).run();
+          }
+        }
+      }
 
       return new Response(
         JSON.stringify({
@@ -674,7 +821,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           deletedTagIds,
           peerPresence,
           serverTime: now,
-          lastSessionCompletedAt: lastSessionRow?.last_completed_at ?? null,
+          lastSessionCompletedAt,
+          tagsVersion,
+          coffeeVersion,
         }),
         { headers: corsHeaders }
       );
@@ -759,8 +908,10 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         cupId?: string;
       };
 
+      const statements: D1PreparedStatement[] = [];
+
       if (body.action === 'ADD' && body.cup) {
-        await env.DB.batch([
+        statements.push(
           env.DB.prepare(
             `INSERT INTO coffee_cups (id, user_id, tag_id, date, created_at)
              VALUES (?, ?, ?, ?, ?)
@@ -774,18 +925,24 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             body.cup.date,
             body.cup.createdAt || new Date().toISOString()
           ),
-          env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ? AND cup_id = ?').bind(currentUserId, body.cup.id),
-        ]);
+          env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ? AND cup_id = ?').bind(currentUserId, body.cup.id)
+        );
       } else if (body.action === 'REMOVE' && body.cupId) {
-        await env.DB.batch([
+        statements.push(
           env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ? AND id = ?').bind(currentUserId, body.cupId),
-          env.DB.prepare('INSERT OR REPLACE INTO deleted_coffee_cups (user_id, cup_id) VALUES (?, ?)').bind(currentUserId, body.cupId),
-        ]);
+          env.DB.prepare('INSERT OR REPLACE INTO deleted_coffee_cups (user_id, cup_id) VALUES (?, ?)').bind(currentUserId, body.cupId)
+        );
       }
 
-      const coffeeRows = await env.DB.prepare(
-        "SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC"
-      ).bind(currentUserId).all<{ id: string; tag_id: string | null; date: string; created_at: string }>();
+      statements.push(
+        env.DB.prepare('UPDATE active_timers SET coffee_version = COALESCE(coffee_version, 1) + 1 WHERE user_id = ?').bind(currentUserId),
+        env.DB.prepare(
+          "SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC"
+        ).bind(currentUserId)
+      );
+
+      const batchResults = await env.DB.batch(statements);
+      const coffeeRows = batchResults[batchResults.length - 1] as D1Result<{ id: string; tag_id: string | null; date: string; created_at: string }>;
 
       const coffeeCups = (coffeeRows.results || []).map((c) => ({
         id: c.id,
@@ -803,56 +960,41 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders });
       }
 
-      const [userRow, tagRows, sessionRows, settingsRow, deletedTagRows, coffeeRows, deletedCoffeeRows] = await Promise.all([
-        env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId).first<{
-          id: string;
-          email: string;
-          display_name: string;
-          avatar_url: string;
-          avatar_emoji: string;
-          daily_goal_minutes: number;
-          created_at: string;
-        }>(),
-        env.DB.prepare('SELECT * FROM tags WHERE user_id = ?').bind(currentUserId).all<{
-          id: string;
-          name: string;
-          color: string;
-          is_archived: number;
-          created_at: string;
-          updated_at: string;
-        }>(),
-        env.DB.prepare("SELECT * FROM sessions WHERE user_id = ? AND id NOT LIKE 'sample-session-%' AND id NOT LIKE 'seed-session-%' ORDER BY completed_at DESC").bind(currentUserId).all<{
-          id: string;
-          tag_id: string | null;
-          session_type: string;
-          duration_seconds: number;
-          completed_at: string;
-        }>(),
-        env.DB.prepare('SELECT * FROM user_settings WHERE user_id = ?').bind(currentUserId).first<{
-          work_duration_minutes: number;
-          short_break_duration_minutes: number;
-          long_break_duration_minutes: number;
-          long_break_interval: number;
-          auto_start_breaks: number;
-          auto_start_pomodoros: number;
-          sound_enabled: number;
-          sound_volume: number;
-          notifications_enabled: number;
-          updated_at: string;
-        }>(),
-        env.DB.prepare('SELECT tag_id FROM deleted_tags WHERE user_id = ?').bind(currentUserId).all<{
-          tag_id: string;
-        }>(),
-        env.DB.prepare("SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC").bind(currentUserId).all<{
-          id: string;
-          tag_id: string | null;
-          date: string;
-          created_at: string;
-        }>(),
-        env.DB.prepare("SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?").bind(currentUserId).all<{
-          cup_id: string;
-        }>(),
+      const results = await env.DB.batch([
+        env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(currentUserId),
+        env.DB.prepare('SELECT * FROM tags WHERE user_id = ?').bind(currentUserId),
+        env.DB.prepare("SELECT * FROM sessions WHERE user_id = ? AND id NOT LIKE 'sample-session-%' AND id NOT LIKE 'seed-session-%' ORDER BY completed_at DESC").bind(currentUserId),
+        env.DB.prepare('SELECT * FROM user_settings WHERE user_id = ?').bind(currentUserId),
+        env.DB.prepare('SELECT tag_id FROM deleted_tags WHERE user_id = ?').bind(currentUserId),
+        env.DB.prepare("SELECT id, tag_id, date, created_at FROM coffee_cups WHERE user_id = ? ORDER BY created_at ASC").bind(currentUserId),
+        env.DB.prepare("SELECT cup_id FROM deleted_coffee_cups WHERE user_id = ?").bind(currentUserId),
       ]);
+
+      const userRow = (results[0].results?.[0] as any) || null;
+      const tagRows = results[1] as D1Result<{
+        id: string;
+        name: string;
+        color: string;
+        is_archived: number;
+        created_at: string;
+        updated_at: string;
+      }>;
+      const sessionRows = results[2] as D1Result<{
+        id: string;
+        tag_id: string | null;
+        session_type: string;
+        duration_seconds: number;
+        completed_at: string;
+      }>;
+      const settingsRow = (results[3].results?.[0] as any) || null;
+      const deletedTagRows = results[4] as D1Result<{ tag_id: string }>;
+      const coffeeRows = results[5] as D1Result<{
+        id: string;
+        tag_id: string | null;
+        date: string;
+        created_at: string;
+      }>;
+      const deletedCoffeeRows = results[6] as D1Result<{ cup_id: string }>;
 
       const profile = userRow
         ? {
@@ -989,29 +1131,36 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ?').bind(currentUserId),
           env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ?').bind(currentUserId),
+          env.DB.prepare('UPDATE active_timers SET last_session_completed_at = NULL WHERE user_id = ?').bind(currentUserId),
         ]);
       }
 
       const statements: D1PreparedStatement[] = [];
 
-      // 1. Process Deleted Tags (if not replacing)
+      // 1. Process Deleted Tags (if not replacing) using set-based operations
       if (body.mode !== 'replace' && Array.isArray(body.deletedTagIds) && body.deletedTagIds.length > 0) {
+        const placeholders = body.deletedTagIds.map(() => '?').join(',');
+        statements.push(
+          env.DB.prepare(`UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id IN (${placeholders})`).bind(currentUserId, ...body.deletedTagIds),
+          env.DB.prepare(`UPDATE coffee_cups SET tag_id = NULL WHERE user_id = ? AND tag_id IN (${placeholders})`).bind(currentUserId, ...body.deletedTagIds),
+          env.DB.prepare(`UPDATE active_timers SET tag_id = NULL WHERE user_id = ? AND tag_id IN (${placeholders})`).bind(currentUserId, ...body.deletedTagIds),
+          env.DB.prepare(`DELETE FROM tags WHERE user_id = ? AND id IN (${placeholders})`).bind(currentUserId, ...body.deletedTagIds)
+        );
         for (const tagId of body.deletedTagIds) {
           statements.push(
-            env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
-            env.DB.prepare('UPDATE coffee_cups SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
-            env.DB.prepare('UPDATE active_timers SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
-            env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
             env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId)
           );
         }
       }
 
-      // 1.5 Process Deleted Coffee Cups (if not replacing)
+      // 1.5 Process Deleted Coffee Cups (if not replacing) using set-based operations
       if (body.mode !== 'replace' && Array.isArray(body.deletedCoffeeCupIds) && body.deletedCoffeeCupIds.length > 0) {
+        const placeholders = body.deletedCoffeeCupIds.map(() => '?').join(',');
+        statements.push(
+          env.DB.prepare(`DELETE FROM coffee_cups WHERE user_id = ? AND id IN (${placeholders})`).bind(currentUserId, ...body.deletedCoffeeCupIds)
+        );
         for (const cupId of body.deletedCoffeeCupIds) {
           statements.push(
-            env.DB.prepare('DELETE FROM coffee_cups WHERE user_id = ? AND id = ?').bind(currentUserId, cupId),
             env.DB.prepare('INSERT OR REPLACE INTO deleted_coffee_cups (user_id, cup_id) VALUES (?, ?)').bind(currentUserId, cupId)
           );
         }
@@ -1039,9 +1188,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
       // 3. Upsert Tags (excluding any that were deleted), preserving newer cloud state via updated_at comparison
       const deletedSet = body.mode === 'replace' ? new Set<string>() : new Set(body.deletedTagIds || []);
+      const tagsToUndelete: string[] = [];
+
       if (Array.isArray(body.tags) && body.tags.length > 0) {
         for (const tag of body.tags) {
           if (deletedSet.has(tag.id)) continue;
+          tagsToUndelete.push(tag.id);
           const createdAtIso = tag.createdAt || '1970-01-01T00:00:00.000Z';
           const updatedAtIso = tag.updatedAt || createdAtIso;
           statements.push(
@@ -1063,10 +1215,16 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               tag.isArchived ? 1 : 0,
               createdAtIso,
               updatedAtIso
-            ),
-            env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tag.id)
+            )
           );
         }
+      }
+
+      if (tagsToUndelete.length > 0) {
+        const placeholders = tagsToUndelete.map(() => '?').join(',');
+        statements.push(
+          env.DB.prepare(`DELETE FROM deleted_tags WHERE user_id = ? AND tag_id IN (${placeholders})`).bind(currentUserId, ...tagsToUndelete)
+        );
       }
 
       // 4. Upsert Sessions
@@ -1097,9 +1255,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
       // 4.5 Upsert Coffee Cups
       const deletedCoffeeSet = body.mode === 'replace' ? new Set<string>() : new Set(body.deletedCoffeeCupIds || []);
+      const cupsToUndelete: string[] = [];
+
       if (Array.isArray(body.coffeeCups) && body.coffeeCups.length > 0) {
         for (const cup of body.coffeeCups) {
           if (deletedCoffeeSet.has(cup.id)) continue;
+          cupsToUndelete.push(cup.id);
           const effectiveTagId = cup.tagId && deletedSet.has(cup.tagId) ? null : cup.tagId;
           statements.push(
             env.DB.prepare(
@@ -1114,10 +1275,16 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               effectiveTagId,
               cup.date,
               cup.createdAt || new Date().toISOString()
-            ),
-            env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ? AND cup_id = ?').bind(currentUserId, cup.id)
+            )
           );
         }
+      }
+
+      if (cupsToUndelete.length > 0) {
+        const placeholders = cupsToUndelete.map(() => '?').join(',');
+        statements.push(
+          env.DB.prepare(`DELETE FROM deleted_coffee_cups WHERE user_id = ? AND cup_id IN (${placeholders})`).bind(currentUserId, ...cupsToUndelete)
+        );
       }
 
       // 5. Upsert Settings
@@ -1166,6 +1333,26 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             s.notificationsEnabled !== undefined ? (s.notificationsEnabled ? 1 : 0) : null
           )
         );
+      }
+
+      // Bump versions on active_timers for cross-device notification
+      if (body.tags?.length || body.deletedTagIds?.length) {
+        statements.push(
+          env.DB.prepare('UPDATE active_timers SET tags_version = COALESCE(tags_version, 1) + 1 WHERE user_id = ?').bind(currentUserId)
+        );
+      }
+      if (body.coffeeCups?.length || body.deletedCoffeeCupIds?.length) {
+        statements.push(
+          env.DB.prepare('UPDATE active_timers SET coffee_version = COALESCE(coffee_version, 1) + 1 WHERE user_id = ?').bind(currentUserId)
+        );
+      }
+      if (body.sessions?.length) {
+        const sorted = [...body.sessions].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+        if (sorted[0]?.completedAt) {
+          statements.push(
+            env.DB.prepare('UPDATE active_timers SET last_session_completed_at = ? WHERE user_id = ?').bind(sorted[0].completedAt, currentUserId)
+          );
+        }
       }
 
       // Execute in chunks to respect Cloudflare D1 batch limits

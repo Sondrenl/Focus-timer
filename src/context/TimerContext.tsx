@@ -189,6 +189,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const lastRemotePollWallMsRef = useRef<number>(0);
   const lastCoffeeSigRef = useRef<string>('');
   const lastTagSigRef = useRef<string>('');
+  const tagsVersionRef = useRef<number>(0);
+  const coffeeVersionRef = useRef<number>(0);
   const lastTickWallMsRef = useRef<number>(Date.now());
   const isWakeSyncingRef = useRef<boolean>(false);
 
@@ -999,10 +1001,22 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     lastRemotePollWallMsRef.current = fetchStartedWallMs;
     try {
       const isRunning = statusRef.current === 'RUNNING';
-      const result = await authService.fetchRemoteTimer(isRunning, DEVICE_SESSION_ID);
+      const result = await authService.fetchRemoteTimer(
+        isRunning,
+        DEVICE_SESSION_ID,
+        tagsVersionRef.current,
+        coffeeVersionRef.current
+      );
       if (!result) {
         isWakeSyncingRef.current = false;
         return;
+      }
+
+      if (typeof result.tagsVersion === 'number') {
+        tagsVersionRef.current = result.tagsVersion;
+      }
+      if (typeof result.coffeeVersion === 'number') {
+        coffeeVersionRef.current = result.coffeeVersion;
       }
 
       if (result.peerPresence) {
