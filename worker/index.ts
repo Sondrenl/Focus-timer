@@ -163,7 +163,7 @@ async function ensureSchema(db: D1Database): Promise<void> {
           PRIMARY KEY (user_id, id)
         )`),
         db.prepare(`INSERT OR IGNORE INTO tags_new (id, user_id, name, color, is_archived, created_at, updated_at)
-          SELECT id, user_id, name, color, is_archived, created_at, updated_at FROM tags`),
+          SELECT id, user_id, name, color, COALESCE(is_archived, 0), COALESCE(created_at, CURRENT_TIMESTAMP), COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) FROM tags`),
         db.prepare('DROP TABLE tags'),
         db.prepare('ALTER TABLE tags_new RENAME TO tags'),
         db.prepare('PRAGMA defer_foreign_keys = OFF'),
@@ -187,6 +187,23 @@ async function ensureSchema(db: D1Database): Promise<void> {
   } catch {}
   try {
     await db.prepare('ALTER TABLE user_settings ADD COLUMN keep_awake INTEGER DEFAULT 0').run();
+  } catch {}
+
+  // Backfill existing rows with safe defaults for transitioning users
+  try {
+    await db.prepare('UPDATE active_timers SET tags_version = 1 WHERE tags_version IS NULL').run();
+  } catch {}
+  try {
+    await db.prepare('UPDATE active_timers SET coffee_version = 1 WHERE coffee_version IS NULL').run();
+  } catch {}
+  try {
+    await db.prepare("UPDATE active_timers SET last_session_completed_at = '' WHERE last_session_completed_at IS NULL").run();
+  } catch {}
+  try {
+    await db.prepare('UPDATE tags SET is_archived = 0 WHERE is_archived IS NULL').run();
+  } catch {}
+  try {
+    await db.prepare("UPDATE tags SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL OR updated_at = ''").run();
   } catch {}
 
   // Clean up duplicate/redundant indexes and ensure performance indexes
@@ -805,10 +822,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
         if (sessionIdx >= 0) {
           const sessionRow = batchResults[sessionIdx].results?.[0] as { last_completed_at: string | null } | undefined;
-          lastSessionCompletedAt = sessionRow?.last_completed_at ?? null;
-          if (lastSessionCompletedAt) {
-            await env.DB.prepare("UPDATE active_timers SET last_session_completed_at = ? WHERE user_id = ?").bind(lastSessionCompletedAt, currentUserId).run();
-          }
+          const latestCompleted = sessionRow?.last_completed_at || "";
+          lastSessionCompletedAt = latestCompleted || null;
+          await env.DB.prepare("UPDATE active_timers SET last_session_completed_at = ? WHERE user_id = ?").bind(latestCompleted, currentUserId).run();
         }
       }
 
@@ -1000,43 +1016,43 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         ? {
             id: userRow.id,
             email: userRow.email,
-            displayName: userRow.display_name,
-            avatarUrl: userRow.avatar_url,
-            avatarEmoji: userRow.avatar_emoji,
-            dailyGoalMinutes: userRow.daily_goal_minutes,
-            createdAt: userRow.created_at,
+            displayName: userRow.display_name || "",
+            avatarUrl: userRow.avatar_url || "",
+            avatarEmoji: userRow.avatar_emoji || "",
+            dailyGoalMinutes: Number(userRow.daily_goal_minutes) || 120,
+            createdAt: userRow.created_at || new Date().toISOString(),
           }
         : null;
 
       const tags = (tagRows.results || []).map((t) => ({
         id: t.id,
         name: t.name,
-        color: t.color,
+        color: t.color || "#7E57C2",
         isArchived: Boolean(t.is_archived),
-        createdAt: t.created_at,
-        updatedAt: t.updated_at,
+        createdAt: t.created_at || new Date().toISOString(),
+        updatedAt: t.updated_at || t.created_at || new Date().toISOString(),
       }));
 
       const sessions = (sessionRows.results || []).map((s) => ({
         id: s.id,
-        tagId: s.tag_id,
+        tagId: s.tag_id || null,
         sessionType: s.session_type,
-        durationSeconds: s.duration_seconds,
+        durationSeconds: Number(s.duration_seconds) || 1500,
         completedAt: s.completed_at,
       }));
 
       const settings = settingsRow
         ? {
-            workDurationMinutes: settingsRow.work_duration_minutes,
-            shortBreakDurationMinutes: settingsRow.short_break_duration_minutes,
-            longBreakDurationMinutes: settingsRow.long_break_duration_minutes,
-            longBreakInterval: settingsRow.long_break_interval,
+            workDurationMinutes: Number(settingsRow.work_duration_minutes) || 25,
+            shortBreakDurationMinutes: Number(settingsRow.short_break_duration_minutes) || 5,
+            longBreakDurationMinutes: Number(settingsRow.long_break_duration_minutes) || 25,
+            longBreakInterval: Number(settingsRow.long_break_interval) || 4,
             autoStartBreaks: Boolean(settingsRow.auto_start_breaks),
             autoStartPomodoros: Boolean(settingsRow.auto_start_pomodoros),
-            soundEnabled: Boolean(settingsRow.sound_enabled),
-            soundVolume: settingsRow.sound_volume,
+            soundEnabled: settingsRow.sound_enabled !== 0 && settingsRow.sound_enabled !== false,
+            soundVolume: typeof settingsRow.sound_volume === "number" && !Number.isNaN(settingsRow.sound_volume) ? settingsRow.sound_volume : 0.8,
             notificationsEnabled: Boolean(settingsRow.notifications_enabled),
-            updatedAt: settingsRow.updated_at,
+            updatedAt: settingsRow.updated_at || new Date().toISOString(),
           }
         : null;
 
@@ -1044,9 +1060,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const deletedCoffeeCupIds = (deletedCoffeeRows.results || []).map((r) => r.cup_id);
       const coffeeCups = (coffeeRows.results || []).map((c) => ({
         id: c.id,
-        tagId: c.tag_id,
-        date: c.date,
-        createdAt: c.created_at,
+        tagId: c.tag_id || null,
+        date: c.date ? c.date.slice(0, 10) : (c.created_at ? c.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10)),
+        createdAt: c.created_at || new Date().toISOString(),
       }));
 
       return new Response(
@@ -1297,28 +1313,18 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
                long_break_interval, auto_start_breaks, auto_start_pomodoros, sound_enabled, sound_volume,
                notifications_enabled, updated_at
              ) VALUES (
-               ?,
-               COALESCE(?, 25),
-               COALESCE(?, 5),
-               COALESCE(?, 25),
-               COALESCE(?, 4),
-               COALESCE(?, 0),
-               COALESCE(?, 0),
-               COALESCE(?, 1),
-               COALESCE(?, 0.8),
-               COALESCE(?, 0),
-               CURRENT_TIMESTAMP
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
              )
              ON CONFLICT(user_id) DO UPDATE SET
-               work_duration_minutes = COALESCE(excluded.work_duration_minutes, user_settings.work_duration_minutes),
-               short_break_duration_minutes = COALESCE(excluded.short_break_duration_minutes, user_settings.short_break_duration_minutes),
-               long_break_duration_minutes = COALESCE(excluded.long_break_duration_minutes, user_settings.long_break_duration_minutes),
-               long_break_interval = COALESCE(excluded.long_break_interval, user_settings.long_break_interval),
-               auto_start_breaks = COALESCE(excluded.auto_start_breaks, user_settings.auto_start_breaks),
-               auto_start_pomodoros = COALESCE(excluded.auto_start_pomodoros, user_settings.auto_start_pomodoros),
-               sound_enabled = COALESCE(excluded.sound_enabled, user_settings.sound_enabled),
-               sound_volume = COALESCE(excluded.sound_volume, user_settings.sound_volume),
-               notifications_enabled = COALESCE(excluded.notifications_enabled, user_settings.notifications_enabled),
+               work_duration_minutes = COALESCE(excluded.work_duration_minutes, user_settings.work_duration_minutes, 25),
+               short_break_duration_minutes = COALESCE(excluded.short_break_duration_minutes, user_settings.short_break_duration_minutes, 5),
+               long_break_duration_minutes = COALESCE(excluded.long_break_duration_minutes, user_settings.long_break_duration_minutes, 25),
+               long_break_interval = COALESCE(excluded.long_break_interval, user_settings.long_break_interval, 4),
+               auto_start_breaks = COALESCE(excluded.auto_start_breaks, user_settings.auto_start_breaks, 0),
+               auto_start_pomodoros = COALESCE(excluded.auto_start_pomodoros, user_settings.auto_start_pomodoros, 0),
+               sound_enabled = COALESCE(excluded.sound_enabled, user_settings.sound_enabled, 1),
+               sound_volume = COALESCE(excluded.sound_volume, user_settings.sound_volume, 0.8),
+               notifications_enabled = COALESCE(excluded.notifications_enabled, user_settings.notifications_enabled, 0),
                updated_at = CURRENT_TIMESTAMP`
           ).bind(
             currentUserId,

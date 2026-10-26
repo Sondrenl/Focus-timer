@@ -12,7 +12,32 @@ export class CoffeeRepository implements ICoffeeRepository {
   }
 
   async getAll(): Promise<CoffeeCup[]> {
-    return this.storage.getItem<CoffeeCup[]>(COFFEE_STORAGE_KEY, []);
+    const raw = this.storage.getItem<CoffeeCup[]>(COFFEE_STORAGE_KEY, []);
+    let needsMigration = false;
+    const sanitized = raw.map((c) => {
+      let date = c.date;
+      if (!date) {
+        needsMigration = true;
+        date = c.createdAt ? c.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+      } else if (date.length > 10) {
+        needsMigration = true;
+        date = date.slice(0, 10);
+      }
+      const tagId = c.tagId || null;
+      if (c.tagId !== tagId) {
+        needsMigration = true;
+      }
+      return {
+        ...c,
+        date,
+        tagId,
+        createdAt: c.createdAt || new Date().toISOString(),
+      };
+    });
+    if (needsMigration) {
+      this.storage.setItem(COFFEE_STORAGE_KEY, sanitized);
+    }
+    return sanitized;
   }
 
   async getCupsForDate(date: string): Promise<CoffeeCup[]> {

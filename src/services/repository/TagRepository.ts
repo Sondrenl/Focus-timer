@@ -74,14 +74,24 @@ export class TagRepository implements ITagRepository {
     const raw = this.storage.getItem<Tag[]>(TAGS_STORAGE_KEY, []);
     let needsMigration = false;
     const tags = raw.map((t) => {
-      if (!t.updatedAt) {
-        needsMigration = true;
-        return {
-          ...t,
-          updatedAt: t.createdAt || EPOCH_ISO,
-        };
+      let updated = false;
+      const isArchived = Boolean(t.isArchived);
+      let updatedAt = t.updatedAt;
+      if (!updatedAt) {
+        updatedAt = t.createdAt || EPOCH_ISO;
+        updated = true;
       }
-      return t;
+      if (t.isArchived !== isArchived) {
+        updated = true;
+      }
+      if (updated) {
+        needsMigration = true;
+      }
+      return {
+        ...t,
+        isArchived,
+        updatedAt,
+      };
     });
     if (needsMigration) {
       this.storage.setItem(TAGS_STORAGE_KEY, tags);
