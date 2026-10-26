@@ -4,6 +4,7 @@
 let scheduledTimerId = null;
 let scheduledResolve = null;
 let lastNotifiedSessionId = null;
+let cachedAuthToken = null;
 const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
 
 self.addEventListener('install', () => {
@@ -60,12 +61,17 @@ async function shouldSuppressNotification(sessionType, sessionId, isMobileDevice
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000);
 
+    const headers = {
+      'Accept': 'application/json',
+    };
+    if (cachedAuthToken) {
+      headers['Authorization'] = `Bearer ${cachedAuthToken}`;
+    }
+
     const res = await fetch('/api/timer', {
       method: 'GET',
       credentials: 'include',
-      headers: {
-        'Accept': 'application/json',
-      },
+      headers,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
@@ -145,6 +151,10 @@ self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || !data.type) return;
 
+  if (data.token) {
+    cachedAuthToken = data.token;
+  }
+
   if (data.type === 'SHOW_NOTIFICATION') {
     clearExistingSchedule();
     event.waitUntil(
@@ -190,6 +200,15 @@ self.addEventListener('message', (event) => {
           }
         })
       );
+    }
+  } else if (data.type === 'MARK_SESSION_NOTIFIED') {
+    clearExistingSchedule();
+    if (data.sessionId) {
+      lastNotifiedSessionId = data.sessionId;
+    }
+  } else if (data.type === 'SET_AUTH_TOKEN') {
+    if (data.token) {
+      cachedAuthToken = data.token;
     }
   } else if (data.type === 'CANCEL_TIMER_NOTIFICATION') {
     clearExistingSchedule();

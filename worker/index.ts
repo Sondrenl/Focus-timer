@@ -90,6 +90,13 @@ async function ensureSchema(db: D1Database): Promise<void> {
     console.warn('Tags PK migration check:', migErr);
   }
 
+  try {
+    await db.prepare('ALTER TABLE active_timers ADD COLUMN last_heartbeat_ms INTEGER').run();
+  } catch {}
+  try {
+    await db.prepare('ALTER TABLE user_settings ADD COLUMN keep_awake INTEGER DEFAULT 0').run();
+  } catch {}
+
   isSchemaEnsured = true;
 }
 
@@ -484,6 +491,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       await env.DB.batch([
         env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
         env.DB.prepare('UPDATE coffee_cups SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
+        env.DB.prepare('UPDATE active_timers SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
         env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
         env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId),
       ]);
@@ -597,11 +605,27 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         const targetEndTime = timerRow.target_end_time;
         const updatedAtMs = timerRow.updated_at_ms;
 
+        let effectiveStatus = status;
+        let effectiveTargetEndTime = targetEndTime;
+        let effectiveRunId = timerRow.timer_run_id;
+
         if (status === "RUNNING") {
           if (targetEndTime !== null) {
-            remainingSeconds = Math.max(0, Math.ceil((targetEndTime - now) / 1000));
+            const overdueMs = now - targetEndTime;
+            if (overdueMs > 900000) {
+              // Timer was abandoned more than 15 minutes ago; auto-reset to IDLE
+              effectiveStatus = "IDLE";
+              effectiveTargetEndTime = null;
+              effectiveRunId = null;
+              remainingSeconds = timerRow.total_seconds;
+              await env.DB.prepare(
+                "UPDATE active_timers SET status = 'IDLE', remaining_seconds = total_seconds, target_end_time = NULL WHERE user_id = ?"
+              ).bind(currentUserId).run();
+            } else {
+              remainingSeconds = Math.max(0, Math.ceil((targetEndTime - now) / 1000));
+            }
           }
-          if (isRunningHeartbeat) {
+          if (isRunningHeartbeat && effectiveStatus === "RUNNING") {
             await env.DB.prepare(
               "UPDATE active_timers SET last_heartbeat_ms = ? WHERE user_id = ?"
             ).bind(now, currentUserId).run();
@@ -610,13 +634,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
         timer = {
           sessionType: timerRow.session_type,
-          status,
+          status: effectiveStatus,
           remainingSeconds,
           totalSeconds: timerRow.total_seconds,
-          targetEndTime,
+          targetEndTime: effectiveTargetEndTime,
           currentCycle: timerRow.current_cycle,
           activeTagId: timerRow.tag_id,
-          timerRunId: timerRow.timer_run_id,
+          timerRunId: effectiveRunId,
           updatedAtMs,
         };
       }
@@ -975,6 +999,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         for (const tagId of body.deletedTagIds) {
           statements.push(
             env.DB.prepare('UPDATE sessions SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
+            env.DB.prepare('UPDATE coffee_cups SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
+            env.DB.prepare('UPDATE active_timers SET tag_id = NULL WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tagId),
             env.DB.prepare('DELETE FROM tags WHERE user_id = ? AND id = ?').bind(currentUserId, tagId),
             env.DB.prepare('INSERT OR REPLACE INTO deleted_tags (user_id, tag_id) VALUES (?, ?)').bind(currentUserId, tagId)
           );
@@ -1037,7 +1063,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               tag.isArchived ? 1 : 0,
               createdAtIso,
               updatedAtIso
-            )
+            ),
+            env.DB.prepare('DELETE FROM deleted_tags WHERE user_id = ? AND tag_id = ?').bind(currentUserId, tag.id)
           );
         }
       }
@@ -1087,7 +1114,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
               effectiveTagId,
               cup.date,
               cup.createdAt || new Date().toISOString()
-            )
+            ),
+            env.DB.prepare('DELETE FROM deleted_coffee_cups WHERE user_id = ? AND cup_id = ?').bind(currentUserId, cup.id)
           );
         }
       }
@@ -1101,7 +1129,19 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
                user_id, work_duration_minutes, short_break_duration_minutes, long_break_duration_minutes,
                long_break_interval, auto_start_breaks, auto_start_pomodoros, sound_enabled, sound_volume,
                notifications_enabled, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             ) VALUES (
+               ?,
+               COALESCE(?, 25),
+               COALESCE(?, 5),
+               COALESCE(?, 25),
+               COALESCE(?, 4),
+               COALESCE(?, 0),
+               COALESCE(?, 0),
+               COALESCE(?, 1),
+               COALESCE(?, 0.8),
+               COALESCE(?, 0),
+               CURRENT_TIMESTAMP
+             )
              ON CONFLICT(user_id) DO UPDATE SET
                work_duration_minutes = COALESCE(excluded.work_duration_minutes, user_settings.work_duration_minutes),
                short_break_duration_minutes = COALESCE(excluded.short_break_duration_minutes, user_settings.short_break_duration_minutes),
@@ -1115,15 +1155,15 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
                updated_at = CURRENT_TIMESTAMP`
           ).bind(
             currentUserId,
-            s.workDurationMinutes ?? 25,
-            s.shortBreakDurationMinutes ?? 5,
-            s.longBreakDurationMinutes ?? 25,
-            s.longBreakInterval ?? 4,
-            s.autoStartBreaks ? 1 : 0,
-            s.autoStartPomodoros ? 1 : 0,
-            s.soundEnabled !== false ? 1 : 0,
-            s.soundVolume ?? 0.8,
-            s.notificationsEnabled ? 1 : 0
+            s.workDurationMinutes !== undefined ? s.workDurationMinutes : null,
+            s.shortBreakDurationMinutes !== undefined ? s.shortBreakDurationMinutes : null,
+            s.longBreakDurationMinutes !== undefined ? s.longBreakDurationMinutes : null,
+            s.longBreakInterval !== undefined ? s.longBreakInterval : null,
+            s.autoStartBreaks !== undefined ? (s.autoStartBreaks ? 1 : 0) : null,
+            s.autoStartPomodoros !== undefined ? (s.autoStartPomodoros ? 1 : 0) : null,
+            s.soundEnabled !== undefined ? (s.soundEnabled ? 1 : 0) : null,
+            s.soundVolume !== undefined ? s.soundVolume : null,
+            s.notificationsEnabled !== undefined ? (s.notificationsEnabled ? 1 : 0) : null
           )
         );
       }

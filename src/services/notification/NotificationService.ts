@@ -3,6 +3,7 @@ import { SessionType } from '../../types/timer';
 export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
 
 const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
+const TOKEN_KEY = 'focus_timer_auth_token';
 
 /**
  * Service to handle browser & mobile Home Screen / lock-screen notifications via Service Worker
@@ -69,6 +70,30 @@ export class NotificationService {
   hasPermission(): boolean {
     if (!this.isSupported()) return false;
     return Notification.permission === 'granted';
+  }
+
+  private getAuthToken(): string | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      return localStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  public setAuthToken(token: string | null): void {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    const syncWorker =
+      this.cachedRegistration?.active ||
+      navigator.serviceWorker?.controller;
+
+    if (syncWorker) {
+      try {
+        syncWorker.postMessage({ type: 'SET_AUTH_TOKEN', token });
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
@@ -143,6 +168,25 @@ export class NotificationService {
     }
   }
 
+  private markSessionNotifiedInWorker(sessionId?: string | null): void {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    const syncWorker =
+      this.cachedRegistration?.active ||
+      navigator.serviceWorker?.controller;
+
+    if (syncWorker) {
+      try {
+        syncWorker.postMessage({
+          type: 'MARK_SESSION_NOTIFIED',
+          sessionId: sessionId || null,
+        });
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
   async notify(
     title: string,
     body: string,
@@ -157,6 +201,11 @@ export class NotificationService {
     if (sessionRunId) {
       this.lastNotifiedSessionId = sessionRunId;
     }
+
+    // Cancel any pending scheduled timer notification in the Service Worker
+    // and notify worker so it never fires a duplicate alert for this session
+    this.cancelScheduledNotification();
+    this.markSessionNotifiedInWorker(sessionRunId);
 
     try {
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -230,6 +279,7 @@ export class NotificationService {
           body,
           sessionId: sessionRunId || null,
           isManualTest,
+          token: this.getAuthToken(),
         });
         return true;
       } catch (err) {
@@ -284,6 +334,7 @@ export class NotificationService {
       sessionId: sessionRunId || null,
       sessionType,
       isMobile,
+      token: this.getAuthToken(),
     };
 
     if (syncWorker) {

@@ -850,7 +850,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         statusRef.current === 'RUNNING' &&
         targetEndTimeRef.current !== null &&
         !isWakeSyncingRef.current &&
-        Math.abs(targetEndTimeRef.current - now) <= 3500 &&
+        Math.abs(targetEndTimeRef.current - now) <= 10000 &&
         (remote.status === 'IDLE' || remote.sessionType !== sessionTypeRef.current)
       ) {
         const completedType = sessionTypeRef.current;
@@ -903,7 +903,26 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         } else {
           // Target time has already elapsed on the server!
-          // If it expired more than 60 seconds ago (e.g. while this laptop was asleep), complete silently.
+          // If it expired more than 15 minutes ago (e.g. device was offline/sleeping for hours), reset to IDLE without recording a stale session
+          if (diffMs < -900000) {
+            const dur = getDurationForType(remote.sessionType);
+            sessionTypeRef.current = remote.sessionType;
+            totalSecondsRef.current = dur;
+            remainingSecondsRef.current = dur;
+            statusRef.current = 'IDLE';
+            setSessionType(remote.sessionType);
+            setTotalSeconds(dur);
+            setRemainingSeconds(dur);
+            setStatus('IDLE');
+            targetEndTimeRef.current = null;
+            setTargetEndTime(null);
+            timerRunIdRef.current = null;
+            notifications.cancelScheduledNotification();
+            sound.stopSilentKeepAlive(false);
+            return;
+          }
+
+          // If it expired more than 60 seconds ago (e.g. while this laptop was briefly asleep), complete silently without alert chime.
           const expiredLongAgo = diffMs < -60000;
           handleCompleteRef.current(expiredLongAgo);
         }
@@ -994,10 +1013,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (result.coffeeCups && syncRemoteCoffeeCups) {
-        const remoteCount = result.coffeeCups.length;
-        const remoteDelCount = (result.deletedCoffeeCupIds || []).length;
-        const lastRemoteId = remoteCount > 0 ? result.coffeeCups[remoteCount - 1].id : '';
-        const sig = `${remoteCount}:${remoteDelCount}:${lastRemoteId}`;
+        const delSig = (result.deletedCoffeeCupIds || []).join(',');
+        const cupsSig = result.coffeeCups.map((c) => `${c.id}:${c.tagId || ''}:${c.date}`).join('|');
+        const sig = `${cupsSig}#del#${delSig}`;
         if (sig !== lastCoffeeSigRef.current) {
           lastCoffeeSigRef.current = sig;
           syncRemoteCoffeeCups(result.coffeeCups, result.deletedCoffeeCupIds);
@@ -1005,10 +1023,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (result.tags && syncRemoteTags) {
-        const remoteCount = result.tags.length;
-        const remoteDelCount = (result.deletedTagIds || []).length;
-        const lastRemoteUpdate = remoteCount > 0 ? result.tags[remoteCount - 1].updatedAt : '';
-        const sig = `${remoteCount}:${remoteDelCount}:${lastRemoteUpdate}`;
+        const delSig = (result.deletedTagIds || []).join(',');
+        const tagsSig = result.tags
+          .map((t) => `${t.id}:${t.updatedAt || ''}:${t.isArchived ? 1 : 0}:${t.name}:${t.color}`)
+          .join('|');
+        const sig = `${tagsSig}#del#${delSig}`;
         if (sig !== lastTagSigRef.current) {
           lastTagSigRef.current = sig;
           syncRemoteTags(result.tags, result.deletedTagIds);

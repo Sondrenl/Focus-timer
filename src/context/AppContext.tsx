@@ -389,8 +389,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-') && !cloudSessionIdSet.has(s.id)
       );
 
-      const cloudCoffeeIdSet = new Set((cloudData?.coffeeCups || []).map((c) => c.id));
-      const coffeeToPush = finalCoffee.filter((c) => !cloudCoffeeIdSet.has(c.id));
+      const cloudCoffeeMap = new Map((cloudData?.coffeeCups || []).map((c) => [c.id, c]));
+      const coffeeToPush = finalCoffee.filter((c) => {
+        const cloudCup = cloudCoffeeMap.get(c.id);
+        if (!cloudCup) return true;
+        return cloudCup.tagId !== c.tagId || cloudCup.date !== c.date;
+      });
 
       const cloudDeletedTagSet = new Set(cloudData?.deletedTagIds || []);
       const deletedTagsToPush = Array.from(effectiveDeletedTagIds).filter((id) => !cloudDeletedTagSet.has(id));
@@ -472,6 +476,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
     try {
       const { user, token } = await authService.loginWithGoogle(idToken);
+      notificationService.setAuthToken(token);
       setAuth({
         isAuthenticated: true,
         user,
@@ -509,6 +514,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Sign out
   const logout = (): void => {
     authService.logout();
+    notificationService.setAuthToken(null);
     setAuth({
       isAuthenticated: false,
       user: null,
@@ -571,17 +577,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // If already logged in, verify session and trigger background sync
-      if (authService.getStoredToken()) {
+      const storedToken = authService.getStoredToken();
+      if (storedToken) {
+        notificationService.setAuthToken(storedToken);
         const verifiedUser = await authService.verifySession();
         if (verifiedUser) {
           setAuth((prev) => ({
             ...prev,
             isAuthenticated: true,
             user: verifiedUser,
-            token: authService.getStoredToken(),
+            token: storedToken,
           }));
           syncWithCloud();
         } else {
+          notificationService.setAuthToken(null);
           setAuth({
             isAuthenticated: false,
             user: null,
