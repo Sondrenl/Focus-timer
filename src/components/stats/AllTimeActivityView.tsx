@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
-import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
+import { Calendar as CalendarIcon, BarChart2, Award } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -10,16 +10,16 @@ interface AllTimeActivityViewProps {
 }
 
 export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activityBars }) => {
-  const [displayMode, setDisplayMode] = useState<'grid' | 'list'>('grid');
+  const [displayMode, setDisplayMode] = useState<'calendar' | 'list'>('calendar');
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  // Max focus seconds
+  // Max focus seconds across all items for intensity scaling
   const maxSeconds = useMemo(() => {
     return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
   }, [activityBars]);
 
-  // Peak period
+  // Peak interval
   const peakItem = useMemo(() => {
     let top: ActivityBarStat | null = null;
     for (const bar of activityBars) {
@@ -30,8 +30,8 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
     return top;
   }, [activityBars]);
 
-  // Active units count & total focus
-  const activeCount = useMemo(() => {
+  // Total active intervals count & total focus
+  const totalActiveIntervals = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
   }, [activityBars]);
 
@@ -39,6 +39,7 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
     return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
   }, [activityBars]);
 
+  // Inspected item
   const activeKey = hoveredKey || selectedKey;
   const inspectedBar = useMemo(() => {
     if (!activeKey) return null;
@@ -57,22 +58,22 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
       {/* Top Toggle & Summary Subheader */}
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs text-md-on-surface-variant font-medium">
-          <span className="font-bold text-md-on-surface">{activeCount}</span> of {activityBars.length} intervals active
+          <span className="font-bold text-md-on-surface">{totalActiveIntervals}</span> active intervals
           {totalFocusSeconds > 0 && (
             <span className="hidden sm:inline text-md-outline">
-              {' '}• {formatDurationHoursMins(totalFocusSeconds)} all-time focus
+              {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
             </span>
           )}
         </div>
 
-        {/* Grid vs List Toggle */}
+        {/* Calendar vs List Segmented Toggle */}
         <div className="inline-flex p-0.5 bg-md-surface-container rounded-xl border border-md-outline-variant/30 text-xs">
           <button
             type="button"
-            onClick={() => setDisplayMode('grid')}
+            onClick={() => setDisplayMode('calendar')}
             className={clsx(
               'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'grid'
+              displayMode === 'calendar'
                 ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                 : 'text-md-on-surface-variant hover:text-md-on-surface'
             )}
@@ -96,18 +97,11 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
         </div>
       </div>
 
-      {displayMode === 'grid' ? (
+      {displayMode === 'calendar' ? (
         <div className="flex flex-col gap-2.5">
           {/* Calendar-Style Grid */}
           <div
-            className={clsx(
-              'grid gap-2 sm:gap-3',
-              activityBars.length <= 4
-                ? 'grid-cols-2 sm:grid-cols-4'
-                : activityBars.length <= 6
-                ? 'grid-cols-3 sm:grid-cols-6'
-                : 'grid-cols-3 sm:grid-cols-4 md:grid-cols-6'
-            )}
+            className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5 sm:gap-2.5"
             onMouseLeave={() => setHoveredKey(null)}
           >
             {activityBars.map((bar) => {
@@ -124,17 +118,17 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
                     setSelectedKey((prev) => (prev === bar.key ? null : bar.key));
                   }}
                   className={clsx(
-                    'aspect-auto min-h-[76px] sm:min-h-[86px] p-2.5 rounded-2xl border transition-all duration-150 flex flex-col justify-between text-left cursor-pointer group select-none relative',
+                    'aspect-auto min-h-[72px] sm:min-h-[82px] p-2 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col justify-between text-left cursor-pointer group select-none relative',
                     getActivityIntensityStyle(sec, maxSeconds, isSelected)
                   )}
                   aria-label={`${formatItemTitle(bar)}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
                   <div className="flex items-center justify-between w-full">
-                    <span className="text-xs sm:text-sm font-bold leading-none truncate">
+                    <span className="text-xs sm:text-sm font-bold leading-none">
                       {bar.label}
                     </span>
                     {bar.subLabel && (
-                      <span className="text-[10px] opacity-75 font-mono">
+                      <span className="text-[10px] opacity-70">
                         {bar.subLabel}
                       </span>
                     )}
@@ -166,7 +160,7 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
             {inspectedBar ? (
               <>
                 <div className="font-semibold text-md-on-surface">
-                  📅 {formatItemTitle(inspectedBar)}
+                  {formatItemTitle(inspectedBar)}
                 </div>
                 <div className="font-medium text-md-on-surface-variant">
                   {inspectedBar.totalSeconds > 0 ? (
@@ -178,16 +172,19 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
                       {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'}
                     </span>
                   ) : (
-                    <span>No focus recorded in this interval</span>
+                    <span>No focus recorded</span>
                   )}
                 </div>
               </>
             ) : peakItem ? (
               <>
-                <div className="font-semibold text-md-on-surface">
-                  🏆 Peak Interval:{' '}
-                  <span className="text-md-primary font-bold">
-                    {formatItemTitle(peakItem)}
+                <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
+                  <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>
+                    Peak Interval:{' '}
+                    <span className="text-md-primary font-bold">
+                      {formatItemTitle(peakItem)}
+                    </span>
                   </span>
                 </div>
                 <div className="text-md-on-surface-variant font-medium">
@@ -203,7 +200,7 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
           </div>
         </div>
       ) : (
-        /* List Mode */
+        /* List View Mode */
         <div className="flex flex-col gap-2.5">
           {activityBars.map((bar) => {
             const widthPct = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
@@ -214,7 +211,7 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
                 key={bar.key}
                 className="flex items-center gap-3 p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
               >
-                <div className="w-24 sm:w-28 shrink-0 flex flex-col">
+                <div className="w-28 sm:w-32 shrink-0 flex flex-col">
                   <span className="text-xs font-bold text-md-on-surface truncate">
                     {formatItemTitle(bar)}
                   </span>

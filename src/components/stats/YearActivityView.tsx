@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { MONTH_NAMES } from '../../utils/dates';
-import { Calendar as CalendarIcon, PieChart } from 'lucide-react';
+import { Calendar as CalendarIcon, PieChart, Award } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -225,7 +225,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
             {inspectedBar ? (
               <>
                 <div className="font-semibold text-md-on-surface">
-                  📅 {getFullMonthName(inspectedBar.key)}
+                  {getFullMonthName(inspectedBar.key)}
                 </div>
                 <div className="font-medium text-md-on-surface-variant">
                   {inspectedBar.totalSeconds > 0 ? (
@@ -243,10 +243,13 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
               </>
             ) : peakMonth ? (
               <>
-                <div className="font-semibold text-md-on-surface">
-                  🏆 Peak Month:{' '}
-                  <span className="text-md-primary font-bold">
-                    {getFullMonthName(peakMonth.key)}
+                <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
+                  <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>
+                    Peak Month:{' '}
+                    <span className="text-md-primary font-bold">
+                      {getFullMonthName(peakMonth.key)}
+                    </span>
                   </span>
                 </div>
                 <div className="text-md-on-surface-variant font-medium">

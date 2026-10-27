@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
-import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
+import { Calendar as CalendarIcon, BarChart2, Award } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -205,7 +205,7 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
             {inspectedBar ? (
               <>
                 <div className="font-semibold text-md-on-surface">
-                  📅 {formatInspectedDate(inspectedBar.key)}
+                  {formatInspectedDate(inspectedBar.key)}
                 </div>
                 <div className="font-medium text-md-on-surface-variant">
                   {inspectedBar.totalSeconds > 0 ? (
@@ -223,10 +223,13 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
               </>
             ) : peakDay ? (
               <>
-                <div className="font-semibold text-md-on-surface">
-                  🏆 Peak Day:{' '}
-                  <span className="text-md-primary font-bold">
-                    {formatInspectedDate(peakDay.key)}
+                <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
+                  <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>
+                    Peak Day:{' '}
+                    <span className="text-md-primary font-bold">
+                      {formatInspectedDate(peakDay.key)}
+                    </span>
                   </span>
                 </div>
                 <div className="text-md-on-surface-variant font-medium">
