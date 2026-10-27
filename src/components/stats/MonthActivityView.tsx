@@ -4,6 +4,7 @@ import { formatDurationHoursMins } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { getActivityIntensityStyle } from './activityUtils';
 
 interface MonthActivityViewProps {
   activityBars: ActivityBarStat[];
@@ -136,36 +137,6 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
     return Math.max(1, ...weeklyGroups.map((w) => w.totalSeconds));
   }, [weeklyGroups]);
 
-  // Color intensity styling for calendar cells
-  const getCellIntensityStyle = (seconds: number, isSelected: boolean) => {
-    if (seconds === 0) {
-      return isSelected
-        ? 'bg-md-surface-container-high border-md-primary/50 text-md-on-surface'
-        : 'bg-md-surface-container/30 border-transparent text-md-on-surface-variant/60 hover:bg-md-surface-container/60 hover:border-md-outline-variant/30';
-    }
-
-    const ratio = seconds / maxDaySeconds;
-
-    if (ratio >= 0.75) {
-      return isSelected
-        ? 'bg-md-primary text-md-on-primary border-md-primary ring-2 ring-md-primary/40 font-bold shadow-xs'
-        : 'bg-md-primary text-md-on-primary border-transparent font-bold hover:brightness-105 shadow-xs';
-    }
-    if (ratio >= 0.45) {
-      return isSelected
-        ? 'bg-md-primary/60 text-white border-md-primary ring-2 ring-md-primary/40 font-bold'
-        : 'bg-md-primary/50 text-white border-transparent font-bold hover:bg-md-primary/60';
-    }
-    if (ratio >= 0.2) {
-      return isSelected
-        ? 'bg-md-primary/30 text-md-on-surface border-md-primary ring-2 ring-md-primary/40 font-semibold'
-        : 'bg-md-primary/25 text-md-on-surface border-transparent font-semibold hover:bg-md-primary/35';
-    }
-    return isSelected
-      ? 'bg-md-primary/15 text-md-on-surface border-md-primary ring-2 ring-md-primary/40 font-medium'
-      : 'bg-md-primary/15 text-md-on-surface border-transparent font-medium hover:bg-md-primary/20';
-  };
-
   const formatInspectedDate = (dateKey: string) => {
     const [y, m, d] = dateKey.split('-').map(Number);
     const dateObj = new Date(y, m - 1, d);
@@ -259,7 +230,7 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
                   }}
                   className={clsx(
                     'aspect-square sm:aspect-auto sm:min-h-[64px] p-1 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
-                    getCellIntensityStyle(sec, isSelected)
+                    getActivityIntensityStyle(sec, maxDaySeconds, isSelected)
                   )}
                   aria-label={`${dayNum} ${monthName}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >

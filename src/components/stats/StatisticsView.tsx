@@ -16,7 +16,11 @@ import { formatDurationHoursMins } from '../../utils/formatters';
 import { DateRangeModal } from './DateRangeModal';
 import { TagDistributionDonut } from './TagDistributionDonut';
 import { SmartInsightPanel } from './SmartInsightPanel';
+import { DayActivityView } from './DayActivityView';
+import { WeekActivityView } from './WeekActivityView';
 import { MonthActivityView } from './MonthActivityView';
+import { YearActivityView } from './YearActivityView';
+import { AllTimeActivityView } from './AllTimeActivityView';
 import { CustomActivityView } from './CustomActivityView';
 import { clsx } from 'clsx';
 
@@ -46,9 +50,6 @@ export const StatisticsView: React.FC = () => {
 
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
 
-  // Maximum seconds for scaling bar charts
-  const maxSeconds = Math.max(1, ...activityBars.map((b) => b.totalSeconds));
-
   // Custom placed on the far right as requested
   const periodOptions: { type: TimePeriodType; label: string }[] = [
     { type: 'day', label: 'Day' },
@@ -58,14 +59,6 @@ export const StatisticsView: React.FC = () => {
     { type: 'all', label: 'All Time' },
     { type: 'custom', label: 'Custom' },
   ];
-
-  // Desktop min-width for activity breakdown horizontal scrolling
-  const chartMinWidth =
-    periodType === 'year' || periodType === 'all'
-      ? Math.max(activityBars.length * 42, 480)
-      : periodType === 'custom' && activityBars.length > 7
-      ? activityBars.length * 40
-      : undefined;
 
   return (
     <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6">
@@ -413,7 +406,7 @@ export const StatisticsView: React.FC = () => {
         )}
       </Card>
 
-      {/* 5. Activity Bar Chart */}
+      {/* 5. Activity Breakdown - Calendar-Style Interface */}
       <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2.5">
@@ -424,113 +417,18 @@ export const StatisticsView: React.FC = () => {
           </div>
         </div>
 
-        {activityBars.length === 0 ? (
-          <div className="text-center py-10 text-xs text-md-outline">
-            No activity logged in this period.
-          </div>
+        {periodType === 'day' ? (
+          <DayActivityView activityBars={activityBars} />
+        ) : periodType === 'week' ? (
+          <WeekActivityView activityBars={activityBars} />
         ) : periodType === 'month' ? (
           <MonthActivityView activityBars={activityBars} />
-        ) : periodType === 'custom' ? (
-          <CustomActivityView activityBars={activityBars} />
+        ) : periodType === 'year' ? (
+          <YearActivityView activityBars={activityBars} />
+        ) : periodType === 'all' ? (
+          <AllTimeActivityView activityBars={activityBars} />
         ) : (
-          <>
-            {/* Desktop Horizontal Column Chart (md and up) */}
-            <div className="hidden md:block w-full overflow-x-auto pb-2 scrollbar-thin">
-              <div
-                className="grid gap-2 md:gap-3 items-end h-44 pt-4 pb-2 border-b border-md-outline-variant/30"
-                style={{
-                  gridTemplateColumns: `repeat(${activityBars.length}, minmax(0, 1fr))`,
-                  minWidth: chartMinWidth ? `${chartMinWidth}px` : undefined,
-                }}
-              >
-                {activityBars.map((bar) => {
-                  const heightPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
-                  const hasHours = bar.totalSeconds > 0;
-                  const tooltipText = `${bar.label}${bar.subLabel ? ' ' + bar.subLabel : ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`;
-
-                  return (
-                    <div key={bar.key} className="flex flex-col items-center gap-1.5 h-full justify-end group">
-                      <span className="text-[10px] md:text-xs font-semibold text-md-on-surface opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                        {formatDurationHoursMins(bar.totalSeconds)}
-                      </span>
-                      <div className="w-full max-w-[42px] min-w-[12px] bg-md-surface-container rounded-t-xl h-full flex items-end overflow-hidden">
-                        <div
-                          className={`w-full rounded-t-xl transition-all duration-500 ease-out ${
-                            hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
-                          }`}
-                          style={{ height: `${Math.max(hasHours ? 8 : 0, heightPercent)}%` }}
-                          title={tooltipText}
-                        />
-                      </div>
-                      <div className="flex flex-col items-center text-center w-full min-w-0">
-                        <span className="text-[11px] font-semibold text-md-on-surface-variant group-hover:text-md-on-surface truncate w-full px-0.5">
-                          {bar.label}
-                        </span>
-                        {bar.subLabel && (
-                          <span className="text-[9px] text-md-outline truncate w-full px-0.5">
-                            {bar.subLabel}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Mobile Vertical Stack Layout (< md only) */}
-            <div className="flex md:hidden flex-col gap-2.5">
-              {activityBars.map((bar) => {
-                const widthPercent = maxSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxSeconds) * 100)) : 0;
-                const hasHours = bar.totalSeconds > 0;
-                const tooltipText = `${bar.label}${bar.subLabel ? ' ' + bar.subLabel : ''}: ${formatDurationHoursMins(bar.totalSeconds)} (${bar.sessionCount} sessions)`;
-
-                return (
-                  <div
-                    key={bar.key}
-                    className="flex items-center gap-3 p-2.5 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-colors group"
-                  >
-                    <div className="w-16 shrink-0 flex flex-col">
-                      <span className="text-xs font-bold text-md-on-surface truncate">
-                        {bar.label}
-                      </span>
-                      {bar.subLabel && (
-                        <span className="text-[11px] text-md-outline truncate">
-                          {bar.subLabel}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
-                      <div
-                        className={`h-full rounded-lg transition-all duration-500 ease-out ${
-                          hasHours ? 'bg-md-primary group-hover:bg-[#584192]' : 'bg-transparent'
-                        }`}
-                        style={{ width: `${Math.max(hasHours ? 6 : 0, widthPercent)}%` }}
-                        title={tooltipText}
-                      />
-                    </div>
-
-                    <div className="w-20 shrink-0 text-right flex flex-col items-end">
-                      <span
-                        className={clsx(
-                          'text-xs font-bold tabular-nums',
-                          hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                        )}
-                      >
-                        {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
-                      </span>
-                      {bar.sessionCount > 0 && (
-                        <span className="text-[10px] text-md-on-surface-variant">
-                          {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
+          <CustomActivityView activityBars={activityBars} />
         )}
       </Card>
 

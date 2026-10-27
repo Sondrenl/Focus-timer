@@ -273,47 +273,28 @@ export function useStatistics() {
     let activityBars: ActivityBarStat[] = [];
 
     if (periodType === 'day') {
-      if (filteredSessions.length === 0) {
-        activityBars = [];
-      } else {
-        const sessionHours = filteredSessions.map((s) => new Date(s.completedAt).getHours());
-        let minHour = Math.min(...sessionHours);
-        let maxHour = Math.max(...sessionHours);
+      const hoursArray = Array.from({ length: 24 }, (_, i) => ({
+        hour: i,
+        seconds: 0,
+        count: 0,
+      }));
 
-        // If minHour === maxHour (single active hour), pad by 1 hour on each side for clear visual context
-        if (minHour === maxHour) {
-          minHour = Math.max(0, minHour - 1);
-          maxHour = Math.min(23, maxHour + 1);
+      filteredSessions.forEach((s) => {
+        const d = new Date(s.completedAt);
+        const h = d.getHours();
+        if (hoursArray[h]) {
+          hoursArray[h].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+          hoursArray[h].count += 1;
         }
+      });
 
-        const hoursCount = maxHour - minHour + 1;
-        const hoursArray = Array.from({ length: hoursCount }, (_, i) => {
-          const hour = minHour + i;
-          return {
-            hour,
-            seconds: 0,
-            count: 0,
-          };
-        });
-
-        filteredSessions.forEach((s) => {
-          const d = new Date(s.completedAt);
-          const h = d.getHours();
-          const target = hoursArray.find((item) => item.hour === h);
-          if (target) {
-            target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
-            target.count += 1;
-          }
-        });
-
-        activityBars = hoursArray.map((item) => ({
-          key: `hour-${item.hour}`,
-          label: `${item.hour.toString().padStart(2, '0')}:00`,
-          totalSeconds: item.seconds,
-          hours: Number((item.seconds / 3600).toFixed(1)),
-          sessionCount: item.count,
-        }));
-      }
+      activityBars = hoursArray.map((item) => ({
+        key: `hour-${item.hour}`,
+        label: `${item.hour.toString().padStart(2, '0')}:00`,
+        totalSeconds: item.seconds,
+        hours: Number((item.seconds / 3600).toFixed(1)),
+        sessionCount: item.count,
+      }));
     } else if (periodType === 'week') {
       const days = Array.from({ length: 7 }, (_, i) => {
         const d = new Date(startDate);
@@ -398,68 +379,64 @@ export function useStatistics() {
         sessionCount: item.count,
       }));
     } else if (periodType === 'all') {
-      if (filteredSessions.length === 0) {
-        activityBars = [];
-      } else {
-        const sessionYears = Array.from(
-          new Set(filteredSessions.map((s) => new Date(s.completedAt).getFullYear()))
-        ).sort((a, b) => a - b);
+      const sessionYears = Array.from(
+        new Set(filteredSessions.map((s) => new Date(s.completedAt).getFullYear()))
+      ).sort((a, b) => a - b);
 
-        if (sessionYears.length <= 1) {
-          const yr = sessionYears[0] || new Date().getFullYear();
-          const months = Array.from({ length: 12 }, (_, i) => ({
-            monthIdx: i,
-            label: MONTH_NAMES[i].slice(0, 3),
-            subLabel: `${yr}`,
+      if (sessionYears.length <= 1) {
+        const yr = sessionYears[0] || new Date().getFullYear();
+        const months = Array.from({ length: 12 }, (_, i) => ({
+          monthIdx: i,
+          label: MONTH_NAMES[i].slice(0, 3),
+          subLabel: `${yr}`,
+          seconds: 0,
+          count: 0,
+        }));
+
+        filteredSessions.forEach((s) => {
+          const m = new Date(s.completedAt).getMonth();
+          if (months[m]) {
+            months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+            months[m].count += 1;
+          }
+        });
+
+        activityBars = months.map((item) => ({
+          key: `all-month-${item.monthIdx}`,
+          label: item.label,
+          subLabel: item.subLabel,
+          totalSeconds: item.seconds,
+          hours: Number((item.seconds / 3600).toFixed(1)),
+          sessionCount: item.count,
+        }));
+      } else {
+        const minYear = sessionYears[0];
+        const maxYear = sessionYears[sessionYears.length - 1];
+        const yearStats: { year: number; seconds: number; count: number }[] = [];
+        for (let y = minYear; y <= maxYear; y++) {
+          yearStats.push({
+            year: y,
             seconds: 0,
             count: 0,
-          }));
-
-          filteredSessions.forEach((s) => {
-            const m = new Date(s.completedAt).getMonth();
-            if (months[m]) {
-              months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
-              months[m].count += 1;
-            }
           });
-
-          activityBars = months.map((item) => ({
-            key: `all-month-${item.monthIdx}`,
-            label: item.label,
-            subLabel: item.subLabel,
-            totalSeconds: item.seconds,
-            hours: Number((item.seconds / 3600).toFixed(1)),
-            sessionCount: item.count,
-          }));
-        } else {
-          const minYear = sessionYears[0];
-          const maxYear = sessionYears[sessionYears.length - 1];
-          const yearStats: { year: number; seconds: number; count: number }[] = [];
-          for (let y = minYear; y <= maxYear; y++) {
-            yearStats.push({
-              year: y,
-              seconds: 0,
-              count: 0,
-            });
-          }
-
-          filteredSessions.forEach((s) => {
-            const y = new Date(s.completedAt).getFullYear();
-            const target = yearStats.find((item) => item.year === y);
-            if (target) {
-              target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
-              target.count += 1;
-            }
-          });
-
-          activityBars = yearStats.map((item) => ({
-            key: `year-${item.year}`,
-            label: `${item.year}`,
-            totalSeconds: item.seconds,
-            hours: Number((item.seconds / 3600).toFixed(1)),
-            sessionCount: item.count,
-          }));
         }
+
+        filteredSessions.forEach((s) => {
+          const y = new Date(s.completedAt).getFullYear();
+          const target = yearStats.find((item) => item.year === y);
+          if (target) {
+            target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+            target.count += 1;
+          }
+        });
+
+        activityBars = yearStats.map((item) => ({
+          key: `year-${item.year}`,
+          label: `${item.year}`,
+          totalSeconds: item.seconds,
+          hours: Number((item.seconds / 3600).toFixed(1)),
+          sessionCount: item.count,
+        }));
       }
     } else {
       // 'custom' date range: Exact UTC day count to eliminate DST offsets
