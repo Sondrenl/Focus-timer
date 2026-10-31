@@ -25,10 +25,11 @@ export const getActive = query({
         activeTagId: null,
         timerRunId: null,
         updatedAtMs: Date.now(),
+        peerPresence: null,
       };
     }
 
-    // If RUNNING and targetEndTime is in the past, calculate dynamically or mark completed
+    // Dynamic remaining seconds calculation for sub-second precision
     let computedRemaining = timer.remainingSeconds;
     if (timer.status === "RUNNING" && timer.targetEndTime) {
       computedRemaining = Math.max(0, Math.round((timer.targetEndTime - Date.now()) / 1000));
@@ -44,6 +45,7 @@ export const getActive = query({
       activeTagId: timer.tagId ?? null,
       timerRunId: timer.timerRunId ?? null,
       updatedAtMs: timer.updatedAtMs,
+      peerPresence: timer.peerPresence ?? null,
     };
   },
 });
@@ -78,7 +80,7 @@ export const start = mutation({
       }
     }
 
-    // Schedule server-side timer completion callback
+    // Schedule authoritative server-side completion trigger
     const scheduledCompletionId = await ctx.scheduler.runAfter(
       args.durationSeconds * 1000,
       internal.timer.onTimerCompleted,
@@ -128,9 +130,7 @@ export const pause = mutation({
     if (existing.scheduledCompletionId) {
       try {
         await ctx.scheduler.cancel(existing.scheduledCompletionId);
-      } catch (err) {
-        console.warn("Could not cancel scheduled completion:", err);
-      }
+      } catch (err) {}
     }
 
     const updates = {
@@ -243,6 +243,46 @@ export const reset = mutation({
   },
 });
 
+export const updatePresence = mutation({
+  args: {
+    isMobile: v.boolean(),
+    isVisible: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx, true);
+    const existing = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+
+    if (!existing) return null;
+
+    const currentPresence = existing.peerPresence ?? {
+      desktopActive: false,
+      desktopVisible: false,
+      mobileActive: false,
+      mobileVisible: false,
+      lastSeenMs: 0,
+    };
+
+    const now = Date.now();
+    const updatedPresence = {
+      ...currentPresence,
+      desktopActive: args.isMobile ? currentPresence.desktopActive : true,
+      desktopVisible: args.isMobile ? currentPresence.desktopVisible : args.isVisible,
+      mobileActive: args.isMobile ? true : currentPresence.mobileActive,
+      mobileVisible: args.isMobile ? args.isVisible : currentPresence.mobileVisible,
+      lastSeenMs: now,
+    };
+
+    await ctx.db.patch(existing._id, {
+      peerPresence: updatedPresence,
+    });
+
+    return updatedPresence;
+  },
+});
+
 export const onTimerCompleted = internalMutation({
   args: {
     userId: v.id("users"),
@@ -260,17 +300,61 @@ export const onTimerCompleted = internalMutation({
     }
 
     const now = new Date().toISOString();
+    const date = now.slice(0, 10);
 
-    // 1. Record completed session automatically in database
+    // 1. Record completed session in sessions table
     await ctx.db.insert("sessions", {
       userId: args.userId,
       tagId: timer.tagId,
       sessionType: timer.sessionType,
       durationSeconds: timer.totalSeconds,
       completedAt: now,
+      date,
     });
 
-    // 2. Mark timer as COMPLETED
+    // 2. Maintain daily aggregate stats
+    const isWork = timer.sessionType === "WORK";
+    const isShortBreak = timer.sessionType === "SHORT_BREAK";
+    const isLongBreak = timer.sessionType === "LONG_BREAK";
+
+    const daily = await ctx.db
+      .query("daily_stats")
+      .withIndex("by_user_date", (q) =>
+        q.eq("userId", args.userId).eq("date", date)
+      )
+      .first();
+
+    if (daily) {
+      const tagSeconds = { ...(daily.tagSeconds ?? {}) };
+      if (isWork && timer.tagId) {
+        tagSeconds[timer.tagId] = (tagSeconds[timer.tagId] ?? 0) + timer.totalSeconds;
+      }
+      await ctx.db.patch(daily._id, {
+        workSeconds: daily.workSeconds + (isWork ? timer.totalSeconds : 0),
+        workSessionsCount: daily.workSessionsCount + (isWork ? 1 : 0),
+        shortBreakSeconds: daily.shortBreakSeconds + (isShortBreak ? timer.totalSeconds : 0),
+        longBreakSeconds: daily.longBreakSeconds + (isLongBreak ? timer.totalSeconds : 0),
+        tagSeconds,
+      });
+    } else {
+      const tagSeconds: Record<string, number> = {};
+      if (isWork && timer.tagId) {
+        tagSeconds[timer.tagId] = timer.totalSeconds;
+      }
+      await ctx.db.insert("daily_stats", {
+        userId: args.userId,
+        date,
+        workSeconds: isWork ? timer.totalSeconds : 0,
+        workSessionsCount: isWork ? 1 : 0,
+        shortBreakSeconds: isShortBreak ? timer.totalSeconds : 0,
+        longBreakSeconds: isLongBreak ? timer.totalSeconds : 0,
+        coffeeCount: 0,
+        tagSeconds,
+        tagCoffee: {},
+      });
+    }
+
+    // 3. Mark active timer as COMPLETED
     await ctx.db.patch(timer._id, {
       status: "COMPLETED" as const,
       remainingSeconds: 0,

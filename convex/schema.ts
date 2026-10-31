@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  // 1. Unified User Document: Profile + Preferences combined
   users: defineTable({
     tokenIdentifier: v.string(),
     email: v.string(),
@@ -10,56 +11,23 @@ export default defineSchema({
     avatarEmoji: v.string(),
     dailyGoalMinutes: v.number(),
     createdAt: v.string(),
+    // Embedded preferences: single atomic query on app boot
+    settings: v.object({
+      workDurationMinutes: v.number(),
+      shortBreakDurationMinutes: v.number(),
+      longBreakDurationMinutes: v.number(),
+      longBreakInterval: v.number(),
+      autoStartBreaks: v.boolean(),
+      autoStartPomodoros: v.boolean(),
+      soundVolume: v.number(),
+      soundEnabled: v.boolean(),
+      notificationsEnabled: v.boolean(),
+      keepAwake: v.boolean(),
+      updatedAt: v.string(),
+    }),
   }).index("by_token", ["tokenIdentifier"]),
 
-  user_settings: defineTable({
-    userId: v.id("users"),
-    workDurationMinutes: v.number(),
-    shortBreakDurationMinutes: v.number(),
-    longBreakDurationMinutes: v.number(),
-    longBreakInterval: v.number(),
-    autoStartBreaks: v.boolean(),
-    autoStartPomodoros: v.boolean(),
-    soundVolume: v.number(),
-    soundEnabled: v.boolean(),
-    notificationsEnabled: v.boolean(),
-    keepAwake: v.boolean(),
-    updatedAt: v.string(),
-  }).index("by_user", ["userId"]),
-
-  tags: defineTable({
-    userId: v.id("users"),
-    name: v.string(),
-    color: v.string(),
-    isArchived: v.boolean(),
-    createdAt: v.string(),
-    updatedAt: v.optional(v.string()),
-  }).index("by_user", ["userId"]),
-
-  sessions: defineTable({
-    userId: v.id("users"),
-    tagId: v.optional(v.string()),
-    sessionType: v.union(
-      v.literal("WORK"),
-      v.literal("SHORT_BREAK"),
-      v.literal("LONG_BREAK")
-    ),
-    durationSeconds: v.number(),
-    completedAt: v.string(),
-  })
-    .index("by_user", ["userId"])
-    .index("by_user_date", ["userId", "completedAt"]),
-
-  coffee_cups: defineTable({
-    userId: v.id("users"),
-    tagId: v.optional(v.string()),
-    date: v.string(),
-    createdAt: v.string(),
-    timestamp: v.number(),
-  })
-    .index("by_user", ["userId"])
-    .index("by_user_date", ["userId", "date"]),
-
+  // 2. Active Timer: Dedicated for sub-50ms reactive isolation + peer presence
   active_timers: defineTable({
     userId: v.id("users"),
     sessionType: v.union(
@@ -75,21 +43,72 @@ export default defineSchema({
     ),
     remainingSeconds: v.number(),
     totalSeconds: v.number(),
-    targetEndTime: v.optional(v.number()),
+    targetEndTime: v.optional(v.number()), // Server anchor timestamp in ms
     currentCycle: v.number(),
     tagId: v.optional(v.string()),
     timerRunId: v.optional(v.string()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
+    // Multi-device peer presence embedded directly into timer state
+    peerPresence: v.optional(
+      v.object({
+        desktopActive: v.boolean(),
+        desktopVisible: v.boolean(),
+        mobileActive: v.boolean(),
+        mobileVisible: v.boolean(),
+        lastSeenMs: v.number(),
+      })
+    ),
   }).index("by_user", ["userId"]),
 
-  device_presence: defineTable({
+  // 3. Tags: Independent entities referenced by tagId
+  tags: defineTable({
     userId: v.id("users"),
-    deviceId: v.string(),
-    deviceType: v.string(),
-    isVisible: v.boolean(),
-    lastSeenMs: v.number(),
+    name: v.string(),
+    color: v.string(),
+    isArchived: v.boolean(),
+    createdAt: v.string(),
+    updatedAt: v.optional(v.string()),
+  }).index("by_user", ["userId"]),
+
+  // 4. Completed Sessions: Historical log
+  sessions: defineTable({
+    userId: v.id("users"),
+    tagId: v.optional(v.string()),
+    sessionType: v.union(
+      v.literal("WORK"),
+      v.literal("SHORT_BREAK"),
+      v.literal("LONG_BREAK")
+    ),
+    durationSeconds: v.number(),
+    completedAt: v.string(),
+    date: v.string(), // "YYYY-MM-DD" for fast indexed date-range queries
   })
     .index("by_user", ["userId"])
-    .index("by_user_device", ["userId", "deviceId"]),
+    .index("by_user_completed", ["userId", "completedAt"])
+    .index("by_user_date", ["userId", "date"]),
+
+  // 5. Coffee Log: Individual timestamped cups
+  coffee_cups: defineTable({
+    userId: v.id("users"),
+    tagId: v.optional(v.string()),
+    date: v.string(), // "YYYY-MM-DD"
+    createdAt: v.string(),
+    timestamp: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_date", ["userId", "date"]),
+
+  // 6. Pre-computed Daily Aggregates for Instant Analytics (Day, Week, Month, Year)
+  daily_stats: defineTable({
+    userId: v.id("users"),
+    date: v.string(), // "YYYY-MM-DD"
+    workSeconds: v.number(),
+    workSessionsCount: v.number(),
+    shortBreakSeconds: v.number(),
+    longBreakSeconds: v.number(),
+    coffeeCount: v.number(),
+    tagSeconds: v.record(v.string(), v.number()), // tagId -> total work seconds
+    tagCoffee: v.record(v.string(), v.number()),  // tagId -> coffee count
+  }).index("by_user_date", ["userId", "date"]),
 });

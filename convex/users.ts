@@ -2,11 +2,16 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { getAuthenticatedUser, requireUser, DEFAULT_SETTINGS } from "./authHelper";
 
-export const getProfile = query({
+/**
+ * Returns the currently authenticated user with their embedded preferences.
+ * Provides complete profile and settings in a single atomic query.
+ */
+export const current = query({
   args: {},
   handler: async (ctx) => {
     const user = await getAuthenticatedUser(ctx);
     if (!user) return null;
+
     return {
       id: user._id,
       email: user.email,
@@ -15,6 +20,7 @@ export const getProfile = query({
       avatarEmoji: user.avatarEmoji,
       dailyGoalMinutes: user.dailyGoalMinutes,
       createdAt: user.createdAt,
+      settings: user.settings,
     };
   },
 });
@@ -28,27 +34,12 @@ export const updateProfile = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const updates: Record<string, any> = {};
-    if (args.displayName !== undefined) updates.displayName = args.displayName;
+    if (args.displayName !== undefined) updates.displayName = args.displayName.trim();
     if (args.avatarEmoji !== undefined) updates.avatarEmoji = args.avatarEmoji;
     if (args.dailyGoalMinutes !== undefined) updates.dailyGoalMinutes = args.dailyGoalMinutes;
 
     await ctx.db.patch(user._id, updates);
     return await ctx.db.get(user._id);
-  },
-});
-
-export const getSettings = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getAuthenticatedUser(ctx);
-    if (!user) return DEFAULT_SETTINGS;
-
-    const settings = await ctx.db
-      .query("user_settings")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
-    return settings ?? DEFAULT_SETTINGS;
   },
 });
 
@@ -67,30 +58,22 @@ export const updateSettings = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
-    const existing = await ctx.db
-      .query("user_settings")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
     const now = new Date().toISOString();
+
     const cleanUpdates = Object.fromEntries(
       Object.entries(args).filter(([_, val]) => val !== undefined)
     );
 
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        ...cleanUpdates,
-        updatedAt: now,
-      });
-      return await ctx.db.get(existing._id);
-    } else {
-      const id = await ctx.db.insert("user_settings", {
-        userId: user._id,
-        ...DEFAULT_SETTINGS,
-        ...cleanUpdates,
-        updatedAt: now,
-      });
-      return await ctx.db.get(id);
-    }
+    const mergedSettings = {
+      ...(user.settings ?? DEFAULT_SETTINGS),
+      ...cleanUpdates,
+      updatedAt: now,
+    };
+
+    await ctx.db.patch(user._id, {
+      settings: mergedSettings,
+    });
+
+    return mergedSettings;
   },
 });

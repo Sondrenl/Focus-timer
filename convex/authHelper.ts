@@ -47,12 +47,10 @@ export async function getAuthenticatedUser(
       avatarEmoji: "",
       dailyGoalMinutes: 120,
       createdAt: now,
-    });
-
-    await mutationDb.insert("user_settings", {
-      userId,
-      ...DEFAULT_SETTINGS,
-      updatedAt: now,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        updatedAt: now,
+      },
     });
 
     return await mutationDb.get(userId);
