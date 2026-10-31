@@ -51,27 +51,23 @@ export const importBackup = mutation({
 
     // 2. Ingest sessions
     for (const session of args.sessions) {
-      const date = session.completedAt.slice(0, 10);
       await ctx.db.insert("sessions", {
         userId: user._id,
         tagId: session.tagId,
         sessionType: session.sessionType,
         durationSeconds: session.durationSeconds,
         completedAt: session.completedAt,
-        date,
       });
     }
 
     // 3. Ingest coffee cups
     if (args.coffeeCups) {
       for (const cup of args.coffeeCups) {
-        const createdAt = cup.createdAt ?? now;
         await ctx.db.insert("coffee_cups", {
           userId: user._id,
           date: cup.date,
           tagId: cup.tagId,
-          createdAt,
-          timestamp: new Date(createdAt).getTime(),
+          createdAt: cup.createdAt ?? now,
         });
       }
     }

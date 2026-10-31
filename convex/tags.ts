@@ -58,6 +58,7 @@ export const update = mutation({
     id: v.id("tags"),
     name: v.optional(v.string()),
     color: v.optional(v.string()),
+    isArchived: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -71,43 +72,10 @@ export const update = mutation({
     };
     if (args.name !== undefined) updates.name = args.name.trim();
     if (args.color !== undefined) updates.color = args.color.trim();
+    if (args.isArchived !== undefined) updates.isArchived = args.isArchived;
 
     await ctx.db.patch(args.id, updates);
     return await ctx.db.get(args.id);
-  },
-});
-
-export const archive = mutation({
-  args: { id: v.id("tags") },
-  handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
-    const tag = await ctx.db.get(args.id);
-    if (!tag || tag.userId !== user._id) {
-      throw new Error("Tag not found or unauthorized");
-    }
-
-    await ctx.db.patch(args.id, {
-      isArchived: true,
-      updatedAt: new Date().toISOString(),
-    });
-    return true;
-  },
-});
-
-export const unarchive = mutation({
-  args: { id: v.id("tags") },
-  handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
-    const tag = await ctx.db.get(args.id);
-    if (!tag || tag.userId !== user._id) {
-      throw new Error("Tag not found or unauthorized");
-    }
-
-    await ctx.db.patch(args.id, {
-      isArchived: false,
-      updatedAt: new Date().toISOString(),
-    });
-    return true;
   },
 });
 

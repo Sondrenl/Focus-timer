@@ -1,7 +1,21 @@
 import { v } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
+
+async function cancelScheduledJob(
+  ctx: MutationCtx,
+  jobId: Id<"_scheduled_functions"> | undefined
+) {
+  if (jobId) {
+    try {
+      await ctx.scheduler.cancel(jobId);
+    } catch {
+      // Ignore if already completed or expired
+    }
+  }
+}
 
 export const getActive = query({
   args: {},
@@ -29,15 +43,23 @@ export const getActive = query({
       };
     }
 
-    // Dynamic remaining seconds calculation for sub-second precision
+    // Dynamic remaining seconds calculation
     let computedRemaining = timer.remainingSeconds;
+    let computedStatus = timer.status;
+
     if (timer.status === "RUNNING" && timer.targetEndTime) {
-      computedRemaining = Math.max(0, Math.round((timer.targetEndTime - Date.now()) / 1000));
+      const diffSeconds = Math.round((timer.targetEndTime - Date.now()) / 1000);
+      if (diffSeconds <= 0) {
+        computedRemaining = 0;
+        computedStatus = "COMPLETED" as const;
+      } else {
+        computedRemaining = diffSeconds;
+      }
     }
 
     return {
       sessionType: timer.sessionType,
-      status: timer.status,
+      status: computedStatus,
       remainingSeconds: computedRemaining,
       totalSeconds: timer.totalSeconds,
       targetEndTime: timer.targetEndTime ?? null,
@@ -72,13 +94,7 @@ export const start = mutation({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .first();
 
-    if (existing?.scheduledCompletionId) {
-      try {
-        await ctx.scheduler.cancel(existing.scheduledCompletionId);
-      } catch (err) {
-        console.warn("Could not cancel prior scheduled completion:", err);
-      }
-    }
+    await cancelScheduledJob(ctx, existing?.scheduledCompletionId);
 
     // Schedule authoritative server-side completion trigger
     const scheduledCompletionId = await ctx.scheduler.runAfter(
@@ -127,11 +143,7 @@ export const pause = mutation({
 
     if (!existing) return null;
 
-    if (existing.scheduledCompletionId) {
-      try {
-        await ctx.scheduler.cancel(existing.scheduledCompletionId);
-      } catch (err) {}
-    }
+    await cancelScheduledJob(ctx, existing.scheduledCompletionId);
 
     const updates = {
       status: "PAUSED" as const,
@@ -159,11 +171,7 @@ export const resume = mutation({
 
     if (!existing) return null;
 
-    if (existing.scheduledCompletionId) {
-      try {
-        await ctx.scheduler.cancel(existing.scheduledCompletionId);
-      } catch (err) {}
-    }
+    await cancelScheduledJob(ctx, existing.scheduledCompletionId);
 
     const durationSeconds = Math.max(1, args.remainingSeconds);
     const now = Date.now();
@@ -211,11 +219,7 @@ export const reset = mutation({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .first();
 
-    if (existing?.scheduledCompletionId) {
-      try {
-        await ctx.scheduler.cancel(existing.scheduledCompletionId);
-      } catch (err) {}
-    }
+    await cancelScheduledJob(ctx, existing?.scheduledCompletionId);
 
     const resetPayload = {
       sessionType: args.sessionType,
@@ -294,13 +298,10 @@ export const onTimerCompleted = internalMutation({
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .first();
 
-    // Verify this is still the active run (prevent race conditions)
+    // Verify this is still the active run
     if (!timer || timer.timerRunId !== args.timerRunId || timer.status !== "RUNNING") {
       return;
     }
-
-    const now = new Date().toISOString();
-    const date = now.slice(0, 10);
 
     // 1. Record completed session in sessions table
     await ctx.db.insert("sessions", {
@@ -308,8 +309,7 @@ export const onTimerCompleted = internalMutation({
       tagId: timer.tagId,
       sessionType: timer.sessionType,
       durationSeconds: timer.totalSeconds,
-      completedAt: now,
-      date,
+      completedAt: new Date().toISOString(),
     });
 
     // 2. Mark active timer as COMPLETED

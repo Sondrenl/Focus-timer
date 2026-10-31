@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-  // 1. Unified User Document: Profile + Preferences combined
+  // 1. User: Profile + Embedded Preferences (Single atomic query on boot)
   users: defineTable({
     tokenIdentifier: v.string(),
     email: v.string(),
@@ -26,7 +26,7 @@ export default defineSchema({
     }),
   }).index("by_token", ["tokenIdentifier"]),
 
-  // 2. Active Timer: Dedicated for sub-50ms reactive isolation + peer presence
+  // 2. Active Timer: Dedicated for sub-50ms sync & peer presence
   active_timers: defineTable({
     userId: v.id("users"),
     sessionType: v.union(
@@ -59,7 +59,7 @@ export default defineSchema({
     ),
   }).index("by_user", ["userId"]),
 
-  // 3. Tags: Independent entities referenced by tagId
+  // 3. Tags: User project tags
   tags: defineTable({
     userId: v.id("users"),
     name: v.string(),
@@ -69,7 +69,7 @@ export default defineSchema({
     updatedAt: v.optional(v.string()),
   }).index("by_user", ["userId"]),
 
-  // 4. Completed Sessions: Historical log
+  // 4. Completed Sessions: Historical log with ISO timestamps
   sessions: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
@@ -79,20 +79,17 @@ export default defineSchema({
       v.literal("LONG_BREAK")
     ),
     durationSeconds: v.number(),
-    completedAt: v.string(), // ISO string with time for peak hour analytics
-    date: v.string(),        // "YYYY-MM-DD" for fast indexed date range lookups
+    completedAt: v.string(), // Lexicographically sortable ISO-8601 string
   })
     .index("by_user", ["userId"])
-    .index("by_user_date", ["userId", "date"])
     .index("by_user_completed", ["userId", "completedAt"]),
 
-  // 5. Coffee Log: Individual timestamped cups
+  // 5. Coffee Log: Individual cups with ISO timestamps
   coffee_cups: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
-    date: v.string(),        // "YYYY-MM-DD"
-    createdAt: v.string(),
-    timestamp: v.number(),
+    date: v.string(), // "YYYY-MM-DD" used for fast day grouping
+    createdAt: v.string(), // ISO-8601 timestamp
   })
     .index("by_user", ["userId"])
     .index("by_user_date", ["userId", "date"]),

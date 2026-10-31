@@ -2,40 +2,35 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
 
-export const listToday = query({
-  args: { date: v.string() }, // YYYY-MM-DD
-  handler: async (ctx, args) => {
-    const user = await getAuthenticatedUser(ctx);
-    if (!user) return [];
-
-    const cups = await ctx.db
-      .query("coffee_cups")
-      .withIndex("by_user_date", (q) =>
-        q.eq("userId", user._id).eq("date", args.date)
-      )
-      .collect();
-
-    return cups.map((c) => ({
-      id: c._id,
-      date: c.date,
-      tagId: c.tagId ?? null,
-      createdAt: c.createdAt,
-    }));
+/**
+ * Returns coffee cups. Optionally filters by date (e.g. today "YYYY-MM-DD")
+ * or returns recent cups up to an optional limit.
+ */
+export const list = query({
+  args: {
+    date: v.optional(v.string()), // Optional filter by "YYYY-MM-DD"
+    limit: v.optional(v.number()),
   },
-});
-
-export const listAll = query({
-  args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const user = await getAuthenticatedUser(ctx);
     if (!user) return [];
 
-    const limit = args.limit ?? 500;
-    const cups = await ctx.db
-      .query("coffee_cups")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .order("desc")
-      .take(limit);
+    let cups;
+    if (args.date) {
+      cups = await ctx.db
+        .query("coffee_cups")
+        .withIndex("by_user_date", (q) =>
+          q.eq("userId", user._id).eq("date", args.date!)
+        )
+        .collect();
+    } else {
+      const limit = args.limit ?? 500;
+      cups = await ctx.db
+        .query("coffee_cups")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .order("desc")
+        .take(limit);
+    }
 
     return cups.map((c) => ({
       id: c._id,
@@ -61,7 +56,6 @@ export const addCup = mutation({
       date: args.date,
       tagId: args.tagId,
       createdAt: now,
-      timestamp: Date.now(),
     });
 
     return {
