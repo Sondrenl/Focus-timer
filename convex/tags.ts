@@ -13,6 +13,7 @@ export const list = query({
 
 export const create = mutation({
   args: {
+    id: v.optional(v.string()),
     name: v.string(),
     color: v.string(),
   },
@@ -21,7 +22,7 @@ export const create = mutation({
     const now = new Date().toISOString();
 
     const newTag = {
-      id: `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: args.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: args.name.trim(),
       color: args.color.trim(),
       isArchived: false,
@@ -30,8 +31,9 @@ export const create = mutation({
     };
 
     const currentTags = user.tags ?? DEFAULT_TAGS;
+    const filtered = currentTags.filter((t) => t.id !== newTag.id);
     await ctx.db.patch(user._id, {
-      tags: [...currentTags, newTag],
+      tags: [...filtered, newTag],
     });
 
     return newTag;
@@ -47,44 +49,60 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    const currentTags = user.tags ?? DEFAULT_TAGS;
     const now = new Date().toISOString();
+    const currentTags = user.tags ?? DEFAULT_TAGS;
 
-    const tagIndex = currentTags.findIndex((t) => t.id === args.id);
-    if (tagIndex === -1) {
-      throw new Error("Tag not found");
+    let found = false;
+    const updatedTags = currentTags.map((tag) => {
+      if (tag.id === args.id) {
+        found = true;
+        return {
+          ...tag,
+          name: args.name !== undefined ? args.name.trim() : tag.name,
+          color: args.color !== undefined ? args.color.trim() : tag.color,
+          isArchived: args.isArchived !== undefined ? args.isArchived : tag.isArchived,
+          updatedAt: now,
+        };
+      }
+      return tag;
+    });
+
+    if (!found) {
+      throw new Error(`Tag with ID "${args.id}" not found.`);
     }
-
-    const updatedTag = {
-      ...currentTags[tagIndex],
-      ...(args.name !== undefined ? { name: args.name.trim() } : {}),
-      ...(args.color !== undefined ? { color: args.color.trim() } : {}),
-      ...(args.isArchived !== undefined ? { isArchived: args.isArchived } : {}),
-      updatedAt: now,
-    };
-
-    const updatedTags = [...currentTags];
-    updatedTags[tagIndex] = updatedTag;
 
     await ctx.db.patch(user._id, {
       tags: updatedTags,
     });
 
-    return updatedTag;
+    return updatedTags.find((t) => t.id === args.id);
   },
 });
 
 export const remove = mutation({
-  args: { id: v.string() },
+  args: {
+    id: v.string(),
+  },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     const currentTags = user.tags ?? DEFAULT_TAGS;
-
     const filtered = currentTags.filter((t) => t.id !== args.id);
+
     await ctx.db.patch(user._id, {
       tags: filtered,
     });
 
     return true;
+  },
+});
+
+export const resetToDefaults = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const user = await requireUser(ctx);
+    await ctx.db.patch(user._id, {
+      tags: DEFAULT_TAGS,
+    });
+    return DEFAULT_TAGS;
   },
 });

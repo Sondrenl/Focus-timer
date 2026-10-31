@@ -219,6 +219,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mutations: convexMutations,
   } = useConvexSync(auth.isAuthenticated);
 
+  const hasMigratedLocalToConvexRef = useRef<boolean>(false);
+
+  // Background migration of local offline data to Convex upon first login/load
+  useEffect(() => {
+    if (!auth.isAuthenticated || !isConvexConfigured) {
+      hasMigratedLocalToConvexRef.current = false;
+      return;
+    }
+
+    if (hasMigratedLocalToConvexRef.current) return;
+    if (convexUser === undefined || convexSessions === undefined || convexCoffee === undefined) {
+      return;
+    }
+
+    hasMigratedLocalToConvexRef.current = true;
+
+    (async () => {
+      try {
+        const [localSessions, localCoffee, localTags] = await Promise.all([
+          sessionRepository.getAll(),
+          coffeeRepository.getAll(),
+          tagRepository.getAll(),
+        ]);
+
+        if (Array.isArray(convexSessions)) {
+          const remoteCompletedTimes = new Set(convexSessions.map((s) => s.completedAt));
+          const missingSessions = localSessions.filter(
+            (s) =>
+              !s.id.startsWith('seed-session-') &&
+              !s.id.startsWith('sample-session-') &&
+              !remoteCompletedTimes.has(s.completedAt)
+          );
+          for (const s of missingSessions) {
+            convexMutations.recordSession({
+              tagId: s.tagId || undefined,
+              sessionType: s.sessionType,
+              durationSeconds: s.durationSeconds,
+              completedAt: s.completedAt,
+            }).catch(console.warn);
+          }
+        }
+
+        if (Array.isArray(convexCoffee)) {
+          const remoteCupTimes = new Set(convexCoffee.map((c) => c.createdAt));
+          const missingCups = localCoffee.filter((c) => !remoteCupTimes.has(c.createdAt));
+          for (const c of missingCups) {
+            convexMutations.addCup({
+              date: c.date,
+              tagId: c.tagId || undefined,
+              createdAt: c.createdAt,
+            }).catch(console.warn);
+          }
+        }
+
+        if (convexUser?.tags) {
+          const remoteTagIds = new Set(convexUser.tags.map((t) => t.id));
+          const missingTags = localTags.filter((t) => !remoteTagIds.has(t.id));
+          for (const t of missingTags) {
+            convexMutations.createTag({
+              id: t.id,
+              name: t.name,
+              color: t.color,
+            }).catch(console.warn);
+          }
+        }
+      } catch (err) {
+        console.warn('Initial local-to-Convex migration check failed', err);
+      }
+    })();
+  }, [auth.isAuthenticated, isConvexConfigured, convexUser, convexSessions, convexCoffee, convexMutations]);
+
   // Reactive adoption of Convex state (only for authenticated cloud users)
   useEffect(() => {
     if (!auth.isAuthenticated || !convexUser) return;
@@ -325,7 +396,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Synchronize local data with Cloudflare D1
   const syncWithCloud = useCallback(async (force = false): Promise<void> => {
     if (isConvexConfigured) {
-      // In Convex, reactive WebSocket subscriptions maintain live state automatically
+      if (auth.isAuthenticated) {
+        setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
+        setTimeout(() => {
+          setAuth((prev) => ({
+            ...prev,
+            isSyncing: false,
+            lastSyncedAt: new Date().toISOString(),
+          }));
+        }, 350);
+      }
       return;
     }
 
@@ -783,6 +863,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (isConvexConfigured) {
       convexMutations.createTag({
+        id: created.id,
         name: input.name,
         color: input.color,
       }).catch(console.warn);
@@ -926,7 +1007,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       broadcastCoffeeCups(updated);
 
       if (isConvexConfigured) {
-        convexMutations.removeCup({ id: removedCup.id as any }).catch(console.warn);
+        convexMutations.removeCup({
+          id: removedCup.id,
+          date: today,
+          tagId: tagId || undefined,
+        }).catch(console.warn);
       } else if (auth.isAuthenticated) {
         authService.removeCoffeeCupRemote(removedCup.id);
       }
@@ -1129,6 +1214,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (isConvexConfigured) {
         convexMutations.clearSessions({}).catch(console.warn);
         convexMutations.clearCoffee({}).catch(console.warn);
+        convexMutations.resetTags({}).catch(console.warn);
         convexMutations.updateSettings(defaultSettings).catch(console.warn);
         convexMutations.updateProfile(defaultProfile).catch(console.warn);
       }

@@ -454,7 +454,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       wakeLockService.release();
       if (e.persisted) return;
 
-      if (isAuthenticatedRef.current) {
+      if (isConvexConfigured && isAuthenticatedRef.current) {
+        convexTimerMutationsRef.current.updatePresence({
+          isMobile: IS_MOBILE,
+          isVisible: false,
+        }).catch(() => {});
+      } else if (isAuthenticatedRef.current) {
         authService.reportDeviceClosed(DEVICE_SESSION_ID);
       }
     };
@@ -463,7 +468,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [authService]);
+  }, [authService, isConvexConfigured]);
 
   // Keep audio silent keep-alive running while timer is active
   useEffect(() => {
@@ -962,7 +967,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const sleepGapMs = nowWall - lastTickWallMsRef.current;
         lastTickWallMsRef.current = nowWall;
 
-        if (!IS_MOBILE && sleepGapMs > 4500 && isAuthenticatedRef.current) {
+        if (!IS_MOBILE && sleepGapMs > 4500 && isAuthenticatedRef.current && !isConvexConfigured) {
           isWakeSyncingRef.current = true;
           return;
         }

@@ -28,6 +28,7 @@ export function useConvexSync(isAuthenticated: boolean) {
   const createTagMutation = useMutation(api.tags.create);
   const updateTagMutation = useMutation(api.tags.update);
   const removeTagMutation = useMutation(api.tags.remove);
+  const resetTagsMutation = useMutation(api.tags.resetToDefaults);
   const recordSessionMutation = useMutation(api.sessions.record);
   const clearSessionsMutation = useMutation(api.sessions.clear);
   const addCupMutation = useMutation(api.coffee.addCup);
@@ -48,6 +49,7 @@ export function useConvexSync(isAuthenticated: boolean) {
       createTag: createTagMutation,
       updateTag: updateTagMutation,
       removeTag: removeTagMutation,
+      resetTags: resetTagsMutation,
       recordSession: recordSessionMutation,
       clearSessions: clearSessionsMutation,
       addCup: addCupMutation,
@@ -61,6 +63,7 @@ export function useConvexSync(isAuthenticated: boolean) {
       createTagMutation,
       updateTagMutation,
       removeTagMutation,
+      resetTagsMutation,
       recordSessionMutation,
       clearSessionsMutation,
       addCupMutation,

@@ -43,7 +43,7 @@ export const list = query({
 
 export const addCup = mutation({
   args: {
-    date: v.string(), // YYYY-MM-DD
+    date: v.string(), // "YYYY-MM-DD"
     tagId: v.optional(v.string()),
     createdAt: v.optional(v.string()),
   },
@@ -68,16 +68,44 @@ export const addCup = mutation({
 });
 
 export const removeCup = mutation({
-  args: { id: v.id("coffee_cups") },
+  args: {
+    id: v.optional(v.string()),
+    date: v.optional(v.string()),
+    tagId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    const cup = await ctx.db.get(args.id);
-    if (!cup || cup.userId !== user._id) {
-      throw new Error("Coffee cup not found or unauthorized");
+
+    // 1. If an ID is provided, try to find and delete by ID
+    if (args.id) {
+      try {
+        const cup = await ctx.db.get(args.id as any);
+        if (cup && "userId" in cup && cup.userId === user._id) {
+          await ctx.db.delete(cup._id);
+          return true;
+        }
+      } catch {
+        // Not a valid Convex ID format, fall through to date/tag matching
+      }
     }
 
-    await ctx.db.delete(args.id);
-    return true;
+    // 2. Fallback to deleting latest matching cup for date/tag
+    const date = args.date ?? new Date().toISOString().slice(0, 10);
+    const cups = await ctx.db
+      .query("coffee_cups")
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id).eq("date", date))
+      .collect();
+
+    const target = args.tagId
+      ? cups.reverse().find((c) => c.tagId === args.tagId)
+      : cups.reverse().find((c) => !c.tagId) ?? cups[cups.length - 1];
+
+    if (target) {
+      await ctx.db.delete(target._id);
+      return true;
+    }
+
+    return false;
   },
 });
 
@@ -94,6 +122,6 @@ export const clear = mutation({
       await ctx.db.delete(cup._id);
     }
 
-    return true;
+    return cups.length;
   },
 });

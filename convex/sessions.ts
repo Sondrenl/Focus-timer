@@ -64,6 +64,23 @@ export const record = mutation({
     const user = await requireUser(ctx, true);
     const completedAt = args.completedAt ?? new Date().toISOString();
 
+    const existing = await ctx.db
+      .query("sessions")
+      .withIndex("by_user_completed", (q) =>
+        q.eq("userId", user._id).eq("completedAt", completedAt)
+      )
+      .first();
+
+    if (existing) {
+      return {
+        id: existing._id,
+        tagId: existing.tagId ?? null,
+        sessionType: existing.sessionType,
+        durationSeconds: existing.durationSeconds,
+        completedAt: existing.completedAt,
+      };
+    }
+
     const sessionId = await ctx.db.insert("sessions", {
       userId: user._id,
       tagId: args.tagId,
