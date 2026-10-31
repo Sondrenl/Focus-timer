@@ -84,7 +84,7 @@ export const start = mutation({
     tagId: v.optional(v.string()),
     timerRunId: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
     const now = Date.now();
     const targetEndTime = now + args.durationSeconds * 1000;
@@ -134,7 +134,7 @@ export const pause = mutation({
   args: {
     remainingSeconds: v.number(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx);
     const existing = await ctx.db
       .query("active_timers")
@@ -162,7 +162,7 @@ export const resume = mutation({
   args: {
     remainingSeconds: v.number(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx);
     const existing = await ctx.db
       .query("active_timers")
@@ -212,7 +212,7 @@ export const reset = mutation({
     currentCycle: v.number(),
     tagId: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
     const existing = await ctx.db
       .query("active_timers")
@@ -252,7 +252,7 @@ export const updatePresence = mutation({
     isMobile: v.boolean(),
     isVisible: v.boolean(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
     const existing = await ctx.db
       .query("active_timers")
@@ -292,7 +292,7 @@ export const onTimerCompleted = internalMutation({
     userId: v.id("users"),
     timerRunId: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const timer = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
