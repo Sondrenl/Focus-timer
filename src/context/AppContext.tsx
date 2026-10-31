@@ -528,11 +528,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
+const parseGoogleJwt = (token: string): any => {
+  try {
+    const base64Url = token.split('.')[1];
+    if (!base64Url) return null;
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    return JSON.parse(jsonPayload);
+  } catch {
+    return null;
+  }
+};
+
   // Google Sign In
   const loginWithGoogle = async (idToken: string): Promise<void> => {
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
     try {
-      const { user, token } = await authService.loginWithGoogle(idToken);
+      let user: UserProfile;
+      let token: string = idToken;
+
+      if (isConvexConfigured) {
+        const payload = parseGoogleJwt(idToken);
+        if (!payload || !payload.sub) {
+          throw new Error('Invalid Google identity token');
+        }
+
+        user = {
+          id: payload.sub,
+          email: payload.email || '',
+          displayName: payload.name || payload.email?.split('@')[0] || 'Focus Practitioner',
+          avatarUrl: payload.picture,
+          avatarEmoji: '',
+          dailyGoalMinutes: profileRef.current.dailyGoalMinutes || 120,
+          createdAt: profileRef.current.createdAt || new Date().toISOString(),
+        };
+
+        try {
+          localStorage.setItem('focus_timer_auth_token', idToken);
+          localStorage.setItem('focus_timer_user_profile', JSON.stringify(user));
+        } catch (e) {
+          console.warn('Could not persist auth to localStorage', e);
+        }
+
+        setAuthToken(idToken);
+      } else {
+        const result = await authService.loginWithGoogle(idToken);
+        user = result.user;
+        token = result.token;
+      }
+
       notificationService.setAuthToken(token);
       setAuth({
         isAuthenticated: true,
@@ -543,25 +592,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncError: null,
       });
 
-      if (isConvexConfigured) {
-        setAuthToken(idToken);
-      }
-
       // Update local profile with Google identity and auto-activate Google avatar
       const updatedProfile: UserProfile = {
         ...profileRef.current,
         id: user.id,
         email: user.email,
         avatarUrl: user.avatarUrl,
-        avatarEmoji: '', // Switch to Google account photo
+        avatarEmoji: '',
         displayName: user.displayName || profileRef.current.displayName,
       };
       profileRef.current = updatedProfile;
       await profileRepository.save(updatedProfile);
       setProfile(updatedProfile);
 
-      // Perform initial cloud sync
-      await syncWithCloud();
+      if (!isConvexConfigured) {
+        await syncWithCloud();
+      }
     } catch (err) {
       setAuth((prev) => ({
         ...prev,
@@ -645,12 +691,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (storedToken) {
         notificationService.setAuthToken(storedToken);
         if (isConvexConfigured) {
-          setAuthToken(storedToken);
-          setAuth((prev) => ({
-            ...prev,
-            isAuthenticated: true,
-            token: storedToken,
-          }));
+          const payload = parseGoogleJwt(storedToken);
+          if (payload && payload.sub && (!payload.exp || payload.exp * 1000 > Date.now())) {
+            setAuthToken(storedToken);
+            const verifiedUser: UserProfile = {
+              id: payload.sub,
+              email: payload.email || '',
+              displayName: payload.name || payload.email?.split('@')[0] || 'Focus Practitioner',
+              avatarUrl: payload.picture,
+              avatarEmoji: '',
+              dailyGoalMinutes: profileRef.current.dailyGoalMinutes || 120,
+              createdAt: profileRef.current.createdAt || new Date().toISOString(),
+            };
+            setAuth({
+              isAuthenticated: true,
+              user: verifiedUser,
+              token: storedToken,
+              isSyncing: false,
+              lastSyncedAt: null,
+              syncError: null,
+            });
+          } else {
+            logout();
+          }
         } else {
           const verifiedUser = await authService.verifySession();
           if (verifiedUser) {
