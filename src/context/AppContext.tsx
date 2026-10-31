@@ -200,46 +200,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     convexSessions,
     setAuthToken,
     mutations: convexMutations,
-  } = useConvexSync();
+  } = useConvexSync(auth.isAuthenticated);
 
-  // Reactive adoption of Convex state
+  // Reactive adoption of Convex state (only for authenticated cloud users)
   useEffect(() => {
-    if (convexUser) {
-      if (convexUser.tags) {
-        setTags(convexUser.tags as Tag[]);
-        tagRepository.saveAll(convexUser.tags as Tag[]);
-      }
-      if (convexUser.settings) {
-        setSettings(convexUser.settings);
-        settingsRepository.save(convexUser.settings);
-      }
-      const updatedProfile: UserProfile = {
-        ...profileRef.current,
-        id: convexUser.id,
-        email: convexUser.email,
-        displayName: convexUser.displayName,
-        avatarUrl: convexUser.avatarUrl,
-        avatarEmoji: convexUser.avatarEmoji,
-        dailyGoalMinutes: convexUser.dailyGoalMinutes,
-      };
-      setProfile(updatedProfile);
-      profileRepository.save(updatedProfile);
+    if (!auth.isAuthenticated || !convexUser) return;
+    if (convexUser.tags && convexUser.tags.length > 0) {
+      setTags(convexUser.tags as Tag[]);
+      tagRepository.saveAll(convexUser.tags as Tag[]);
     }
-  }, [convexUser]);
-
-  useEffect(() => {
-    if (convexCoffee) {
-      setCoffeeCups(convexCoffee as CoffeeCup[]);
-      coffeeRepository.saveAll(convexCoffee as CoffeeCup[]);
+    if (convexUser.settings) {
+      setSettings(convexUser.settings);
+      settingsRepository.save(convexUser.settings);
     }
-  }, [convexCoffee]);
+    const updatedProfile: UserProfile = {
+      ...profileRef.current,
+      id: convexUser.id,
+      email: convexUser.email,
+      displayName: convexUser.displayName,
+      avatarUrl: convexUser.avatarUrl,
+      avatarEmoji: convexUser.avatarEmoji,
+      dailyGoalMinutes: convexUser.dailyGoalMinutes,
+    };
+    setProfile(updatedProfile);
+    profileRepository.save(updatedProfile);
+  }, [convexUser, auth.isAuthenticated]);
 
   useEffect(() => {
-    if (convexSessions) {
-      setSessions(convexSessions as CompletedSession[]);
-      sessionRepository.saveAll(convexSessions as CompletedSession[]);
-    }
-  }, [convexSessions]);
+    if (!auth.isAuthenticated || !Array.isArray(convexCoffee)) return;
+    setCoffeeCups(convexCoffee as CoffeeCup[]);
+    coffeeRepository.saveAll(convexCoffee as CoffeeCup[]);
+  }, [convexCoffee, auth.isAuthenticated]);
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || !Array.isArray(convexSessions)) return;
+    setSessions(convexSessions as CompletedSession[]);
+    sessionRepository.saveAll(convexSessions as CompletedSession[]);
+  }, [convexSessions, auth.isAuthenticated]);
 
   // Synchronize remote tags (including archive state) received from real-time polling or background sync
   const syncRemoteTags = useCallback(async (remoteTags: Tag[], remoteDeletedIds?: string[]) => {
@@ -649,32 +646,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notificationService.setAuthToken(storedToken);
         if (isConvexConfigured) {
           setAuthToken(storedToken);
-        }
-        const verifiedUser = await authService.verifySession();
-        if (verifiedUser) {
           setAuth((prev) => ({
             ...prev,
             isAuthenticated: true,
-            user: verifiedUser,
             token: storedToken,
           }));
-          syncWithCloud();
         } else {
-          notificationService.setAuthToken(null);
-          setAuth({
-            isAuthenticated: false,
-            user: null,
-            token: null,
-            isSyncing: false,
-            lastSyncedAt: null,
-            syncError: null,
-          });
+          const verifiedUser = await authService.verifySession();
+          if (verifiedUser) {
+            setAuth((prev) => ({
+              ...prev,
+              isAuthenticated: true,
+              user: verifiedUser,
+              token: storedToken,
+            }));
+            syncWithCloud();
+          } else {
+            notificationService.setAuthToken(null);
+            setAuth({
+              isAuthenticated: false,
+              user: null,
+              token: null,
+              isSyncing: false,
+              lastSyncedAt: null,
+              syncError: null,
+            });
+          }
         }
       }
     }
 
     init();
-  }, [setActiveTagId, syncWithCloud, isConvexConfigured, setAuthToken]);
+  }, []);
 
   // Profile Operations: save locally and push directly to cloud
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {

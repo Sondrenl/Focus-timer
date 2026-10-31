@@ -107,7 +107,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   } = useApp();
 
   const authService = AuthService.getInstance();
-  const { isConvexConfigured, remoteTimer, mutations: convexTimerMutations } = useConvexTimer();
+  const { isConvexConfigured, remoteTimer, mutations: convexTimerMutations } = useConvexTimer(auth.isAuthenticated);
+  const convexTimerMutationsRef = useRef(convexTimerMutations);
+  convexTimerMutationsRef.current = convexTimerMutations;
 
   // Retrieve initial duration configured in user preferences
   const getDurationForType = useCallback(
@@ -363,9 +365,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       broadcastTimerState(payload);
 
-      if (isConvexConfigured) {
+      if (isConvexConfigured && isAuthenticatedRef.current) {
         if (payload.status === 'RUNNING') {
-          convexTimerMutations.startTimer({
+          convexTimerMutationsRef.current.startTimer({
             sessionType: payload.sessionType,
             durationSeconds: payload.totalSeconds,
             currentCycle: payload.currentCycle,
@@ -373,11 +375,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             timerRunId: payload.timerRunId || `run-${Date.now()}`,
           }).catch(console.warn);
         } else if (payload.status === 'PAUSED') {
-          convexTimerMutations.pauseTimer({
+          convexTimerMutationsRef.current.pauseTimer({
             remainingSeconds: payload.remainingSeconds,
           }).catch(console.warn);
         } else if (payload.status === 'IDLE') {
-          convexTimerMutations.resetTimer({
+          convexTimerMutationsRef.current.resetTimer({
             sessionType: payload.sessionType,
             durationSeconds: payload.totalSeconds,
             currentCycle: payload.currentCycle,
@@ -398,7 +400,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
       }
     },
-    [authService, isConvexConfigured, convexTimerMutations]
+    [authService, isConvexConfigured]
   );
 
   // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
@@ -941,8 +943,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sound.prepareForPlayback();
       }
 
-      if (isConvexConfigured) {
-        convexTimerMutations.updatePresence({
+      if (isConvexConfigured && isAuthenticatedRef.current) {
+        convexTimerMutationsRef.current.updatePresence({
           isMobile: IS_MOBILE,
           isVisible: !isHidden,
         }).catch(() => {});
@@ -1011,7 +1013,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
-  }, [sound, syncScheduledNotification, syncWithCloud, authService, isConvexConfigured, convexTimerMutations]);
+  }, [sound, syncScheduledNotification, syncWithCloud, authService, isConvexConfigured]);
 
   // Main-thread backup countdown timer
   useEffect(() => {

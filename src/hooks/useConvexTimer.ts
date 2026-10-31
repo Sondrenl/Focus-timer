@@ -1,11 +1,14 @@
+import { useMemo } from 'react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { isConvexConfigured } from '../services/convex/ConvexClient';
 
-export function useConvexTimer() {
+export function useConvexTimer(isAuthenticated: boolean) {
+  const shouldQuery = isConvexConfigured && isAuthenticated;
+
   const remoteTimer = useQuery(
     api.timer.getActive,
-    isConvexConfigured ? {} : 'skip'
+    shouldQuery ? {} : 'skip'
   );
 
   const startTimerMutation = useMutation(api.timer.start);
@@ -14,15 +17,26 @@ export function useConvexTimer() {
   const resetTimerMutation = useMutation(api.timer.reset);
   const updatePresenceMutation = useMutation(api.timer.updatePresence);
 
-  return {
-    isConvexConfigured,
-    remoteTimer,
-    mutations: {
+  const mutations = useMemo(
+    () => ({
       startTimer: startTimerMutation,
       pauseTimer: pauseTimerMutation,
       resumeTimer: resumeTimerMutation,
       resetTimer: resetTimerMutation,
       updatePresence: updatePresenceMutation,
-    },
+    }),
+    [
+      startTimerMutation,
+      pauseTimerMutation,
+      resumeTimerMutation,
+      resetTimerMutation,
+      updatePresenceMutation,
+    ]
+  );
+
+  return {
+    isConvexConfigured,
+    remoteTimer,
+    mutations,
   };
 }

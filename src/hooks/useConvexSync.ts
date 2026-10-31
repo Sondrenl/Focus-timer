@@ -1,22 +1,25 @@
+import { useCallback, useMemo } from 'react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { isConvexConfigured, convexClient } from '../services/convex/ConvexClient';
 
-export function useConvexSync() {
-  // Only query Convex if Convex URL is configured
+export function useConvexSync(isAuthenticated: boolean) {
+  const shouldQuery = isConvexConfigured && isAuthenticated;
+
+  // Only query Convex if Convex URL is configured and user is authenticated
   const convexUser = useQuery(
     api.users.current,
-    isConvexConfigured ? {} : 'skip'
+    shouldQuery ? {} : 'skip'
   );
 
   const convexCoffee = useQuery(
     api.coffee.list,
-    isConvexConfigured ? {} : 'skip'
+    shouldQuery ? {} : 'skip'
   );
 
   const convexSessions = useQuery(
     api.sessions.list,
-    isConvexConfigured ? {} : 'skip'
+    shouldQuery ? {} : 'skip'
   );
 
   // Mutations
@@ -32,19 +35,14 @@ export function useConvexSync() {
   const clearCoffeeMutation = useMutation(api.coffee.clear);
   const importBackupMutation = useMutation(api.migrations.importBackup);
 
-  const setAuthToken = (token: string | null) => {
+  const setAuthToken = useCallback((token: string | null) => {
     if (isConvexConfigured) {
       convexClient.setAuth(async () => token);
     }
-  };
+  }, []);
 
-  return {
-    isConvexConfigured,
-    convexUser,
-    convexCoffee,
-    convexSessions,
-    setAuthToken,
-    mutations: {
+  const mutations = useMemo(
+    () => ({
       updateProfile: updateProfileMutation,
       updateSettings: updateSettingsMutation,
       createTag: createTagMutation,
@@ -56,6 +54,28 @@ export function useConvexSync() {
       removeCup: removeCupMutation,
       clearCoffee: clearCoffeeMutation,
       importBackup: importBackupMutation,
-    },
+    }),
+    [
+      updateProfileMutation,
+      updateSettingsMutation,
+      createTagMutation,
+      updateTagMutation,
+      removeTagMutation,
+      recordSessionMutation,
+      clearSessionsMutation,
+      addCupMutation,
+      removeCupMutation,
+      clearCoffeeMutation,
+      importBackupMutation,
+    ]
+  );
+
+  return {
+    isConvexConfigured,
+    convexUser,
+    convexCoffee,
+    convexSessions,
+    setAuthToken,
+    mutations,
   };
 }
