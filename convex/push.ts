@@ -71,7 +71,7 @@ export const listSubscriptions = query({
 
     return await ctx.db
       .query("push_subscriptions")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .withIndex("by_user_device", (q) => q.eq("userId", user._id))
       .collect();
   },
 });

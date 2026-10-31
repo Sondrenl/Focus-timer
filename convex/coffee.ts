@@ -27,7 +27,7 @@ export const list = query({
       const limit = args.limit ?? 500;
       cups = await ctx.db
         .query("coffee_cups")
-        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
         .order("desc")
         .take(limit);
     }
@@ -87,7 +87,7 @@ export const clear = mutation({
     const user = await requireUser(ctx);
     const cups = await ctx.db
       .query("coffee_cups")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
       .collect();
 
     for (const cup of cups) {

@@ -88,7 +88,7 @@ export const clear = mutation({
     const user = await requireUser(ctx);
     const sessions = await ctx.db
       .query("sessions")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
       .collect();
 
     for (const session of sessions) {

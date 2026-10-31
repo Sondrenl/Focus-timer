@@ -69,7 +69,8 @@ export default defineSchema({
     ),
   }).index("by_user", ["userId"]),
 
-  // 3. Completed Sessions: Historical log with ISO timestamps
+  // 3. Completed Sessions: Historical log
+  // Compound index on ["userId", "completedAt"] covers both userId-only queries and date-range queries
   sessions: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
@@ -80,21 +81,19 @@ export default defineSchema({
     ),
     durationSeconds: v.number(),
     completedAt: v.string(), // Lexicographically sortable ISO-8601 string
-  })
-    .index("by_user", ["userId"])
-    .index("by_user_completed", ["userId", "completedAt"]),
+  }).index("by_user_completed", ["userId", "completedAt"]),
 
   // 4. Coffee Log: Individual timestamped cups
+  // Compound index on ["userId", "date"] covers both userId-only queries and date queries
   coffee_cups: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
     date: v.string(), // "YYYY-MM-DD"
     createdAt: v.string(), // ISO-8601
-  })
-    .index("by_user", ["userId"])
-    .index("by_user_date", ["userId", "date"]),
+  }).index("by_user_date", ["userId", "date"]),
 
   // 5. Multi-Device Push Subscriptions (For background lock-screen notifications)
+  // Compound index on ["userId", "deviceId"] covers both userId-only queries and specific device lookups
   push_subscriptions: defineTable({
     userId: v.id("users"),
     deviceId: v.string(),
@@ -103,7 +102,5 @@ export default defineSchema({
     auth: v.string(),
     userAgent: v.optional(v.string()),
     updatedAt: v.string(),
-  })
-    .index("by_user", ["userId"])
-    .index("by_user_device", ["userId", "deviceId"]),
+  }).index("by_user_device", ["userId", "deviceId"]),
 });

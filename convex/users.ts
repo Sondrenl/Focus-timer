@@ -48,7 +48,7 @@ export const updateSettings = mutation({
   args: {
     workDurationMinutes: v.optional(v.number()),
     shortBreakDurationMinutes: v.optional(v.number()),
-    longBreakDurationMinutes: v.number(),
+    longBreakDurationMinutes: v.optional(v.number()),
     longBreakInterval: v.optional(v.number()),
     autoStartBreaks: v.optional(v.boolean()),
     autoStartPomodoros: v.optional(v.boolean()),
