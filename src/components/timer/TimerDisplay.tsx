@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
 import { useApp } from '../../context/AppContext';
-import { useTimer } from '../../hooks/useTimer';
+import { useTimer } from '../../context/TimerContext';
 
 interface TimerDisplayProps {
   remainingSeconds: number;

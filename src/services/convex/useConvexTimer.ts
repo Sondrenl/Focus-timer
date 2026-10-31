@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery, useMutation } from 'convex/react';
-import { api } from '../../convex/_generated/api';
-import { isConvexConfigured } from '../services/convex/ConvexClient';
+import { api } from '../../../convex/_generated/api';
+import { isConvexConfigured } from './ConvexClient';
 
 export function useConvexTimer(isAuthenticated: boolean) {
   const shouldQuery = isConvexConfigured && isAuthenticated;

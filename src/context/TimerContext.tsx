@@ -6,7 +6,7 @@ import { triggerCompletionConfetti } from '../utils/confetti';
 import { AuthService, RemoteTimerState, PeerPresence, isMobileDevice } from '../services/auth/AuthService';
 import { broadcastTimerState, subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
-import { useConvexTimer } from '../hooks/useConvexTimer';
+import { useConvexTimer } from '../services/convex/useConvexTimer';
 
 const WORKER_SCRIPT = `
   let timerId = null;

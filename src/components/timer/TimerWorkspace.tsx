@@ -3,7 +3,7 @@ import { TagSelector } from './TagSelector';
 import { TimerDisplay } from './TimerDisplay';
 import { TimerControls } from './TimerControls';
 import { CycleIndicator } from './CycleIndicator';
-import { useTimer } from '../../hooks/useTimer';
+import { useTimer } from '../../context/TimerContext';
 
 interface TimerWorkspaceProps {
   isActiveView?: boolean;

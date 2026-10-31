@@ -13,7 +13,7 @@ import { ProfileRepository } from '../services/repository/ProfileRepository';
 import { AuthService } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
-import { useConvexSync } from '../hooks/useConvexSync';
+import { useConvexSync } from '../services/convex/useConvexSync';
 import {
   broadcastCoffeeCups,
   subscribeCoffeeCups,
