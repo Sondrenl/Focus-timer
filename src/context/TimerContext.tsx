@@ -4,8 +4,9 @@ import { UserSettings } from '../types/settings';
 import { useApp } from './AppContext';
 import { triggerCompletionConfetti } from '../utils/confetti';
 import { AuthService, RemoteTimerState, PeerPresence, isMobileDevice } from '../services/auth/AuthService';
-import { broadcastTimerState, subscribeTimerState, subscribeReset, hasActivePeerTabs, TAB_ID } from '../services/timer/TimerBroadcast';
+import { broadcastTimerState, subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
+import { useConvexTimer } from '../hooks/useConvexTimer';
 
 const WORKER_SCRIPT = `
   let timerId = null;
@@ -41,13 +42,14 @@ const getOrCreateDeviceId = (): string => {
     }
     return id;
   } catch {
-    return 'default-device';
+    return `dev-${Date.now()}`;
   }
 };
 
 const DEVICE_ID = getOrCreateDeviceId();
-const DEVICE_SESSION_ID = `${DEVICE_ID}:${TAB_ID}`;
 const IS_MOBILE = isMobileDevice();
+
+export const DEVICE_SESSION_ID = `${DEVICE_ID}_${TAB_ID}`;
 
 interface SavedTimerState {
   sessionType: SessionType;
@@ -56,12 +58,12 @@ interface SavedTimerState {
   remainingSeconds: number;
   totalSeconds: number;
   targetEndTime: number | null;
-  timerRunId?: string | null;
-  updatedAtMs?: number;
-  activeTagId?: string | null;
-  deviceId?: string;
-  tabId?: string;
-  lastActiveAtMs?: number;
+  timerRunId: string | null;
+  updatedAtMs: number;
+  activeTagId: string | null;
+  deviceId: string;
+  tabId: string;
+  lastActiveAtMs: number;
   wasHidden?: boolean;
 }
 
@@ -74,119 +76,137 @@ export interface TimerContextValue {
   targetEndTime: number | null;
   currentCycle: number;
   maxCycles: number;
+  activeTagId: string | null;
+  start: () => void;
+  pause: () => void;
+  reset: () => void;
+  skip: () => void;
+  switchSessionType: (type: SessionType) => void;
   toggleStartPause: () => void;
   resetTimer: () => void;
   skipInterval: () => void;
   setSessionTypeManually: (type: SessionType) => void;
+  peerPresence: PeerPresence;
 }
 
 const TimerContext = createContext<TimerContextValue | null>(null);
 
 export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { auth, settings, activeTagId, setActiveTagId, recordSession, sound, notifications, syncRemoteCoffeeCups, syncRemoteTags, sessions, syncWithCloud } = useApp();
-  const authService = AuthService.getInstance();
+  const {
+    settings,
+    activeTagId,
+    setActiveTagId,
+    recordSession,
+    sound,
+    notifications,
+    auth,
+    syncWithCloud,
+    syncRemoteTags,
+    syncRemoteCoffeeCups,
+    sessions,
+  } = useApp();
 
-  // Helper to determine target duration in seconds for given session type
+  const authService = AuthService.getInstance();
+  const { isConvexConfigured, remoteTimer, mutations: convexTimerMutations } = useConvexTimer();
+
+  // Retrieve initial duration configured in user preferences
   const getDurationForType = useCallback(
     (type: SessionType): number => {
       switch (type) {
         case 'WORK':
-          return Math.max(1, Math.round(settings.workDurationMinutes * 60));
+          return Math.round(settings.workDurationMinutes * 60);
         case 'SHORT_BREAK':
-          return Math.max(1, Math.round(settings.shortBreakDurationMinutes * 60));
+          return Math.round(settings.shortBreakDurationMinutes * 60);
         case 'LONG_BREAK':
-          return Math.max(1, Math.round(settings.longBreakDurationMinutes * 60));
+          return Math.round(settings.longBreakDurationMinutes * 60);
       }
     },
-    [settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes]
+    [settings]
   );
 
-  // Restore saved state from localStorage if available
-  const initialSaved = useRef<SavedTimerState | null>(null);
+  // Initialize timer state from storage or default to 25 minutes WORK
+  const [initialState] = useState<SavedTimerState>(() => {
+    const defaultSec = Math.round(settings.workDurationMinutes * 60);
+    const fallback: SavedTimerState = {
+      sessionType: 'WORK',
+      status: 'IDLE',
+      currentCycle: 1,
+      remainingSeconds: defaultSec,
+      totalSeconds: defaultSec,
+      targetEndTime: null,
+      timerRunId: null,
+      updatedAtMs: Date.now(),
+      activeTagId: null,
+      deviceId: DEVICE_ID,
+      tabId: TAB_ID,
+      lastActiveAtMs: Date.now(),
+      wasHidden: false,
+    };
 
-  if (initialSaved.current === null && typeof window !== 'undefined') {
+    if (typeof window === 'undefined') return fallback;
+
     try {
-      const raw = localStorage.getItem(TIMER_STORAGE_KEY);
-      if (raw) {
-        const parsed: SavedTimerState = JSON.parse(raw);
-        initialSaved.current = parsed;
+      const stored = localStorage.getItem(TIMER_STORAGE_KEY);
+      if (!stored) return fallback;
+      const parsed = JSON.parse(stored) as SavedTimerState;
+
+      // Handle running timers across tab restarts or browser crashes
+      if (parsed.status === 'RUNNING' && parsed.targetEndTime) {
+        const now = Date.now();
+        const diffMs = parsed.targetEndTime - now;
+        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+
+        if (diffSec <= 0) {
+          // If session expired more than 15 minutes ago while closed, reset to IDLE without recording stale session
+          if (diffMs < -900000) {
+            return {
+              ...parsed,
+              status: 'IDLE',
+              targetEndTime: null,
+              timerRunId: null,
+              remainingSeconds: parsed.totalSeconds,
+            };
+          }
+          // Expired while closed, preserve state so mount effect can record and alert
+          return {
+            ...parsed,
+            remainingSeconds: 0,
+          };
+        }
+
+        return {
+          ...parsed,
+          remainingSeconds: diffSec,
+        };
       }
-      sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
+
+      return parsed;
     } catch {
-      initialSaved.current = null;
+      return fallback;
     }
-  }
-
-  const [sessionType, setSessionType] = useState<SessionType>(() => {
-    return initialSaved.current?.sessionType ?? 'WORK';
   });
 
-  const [currentCycle, setCurrentCycle] = useState<number>(() => {
-    return initialSaved.current?.currentCycle ?? 1;
-  });
+  const [sessionType, setSessionType] = useState<SessionType>(initialState.sessionType);
+  const [status, setStatus] = useState<TimerStatus>(initialState.status);
+  const [currentCycle, setCurrentCycle] = useState<number>(initialState.currentCycle);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(initialState.remainingSeconds);
+  const [totalSeconds, setTotalSeconds] = useState<number>(initialState.totalSeconds);
+  const [targetEndTime, setTargetEndTime] = useState<number | null>(initialState.targetEndTime);
 
-  const [totalSeconds, setTotalSeconds] = useState<number>(() => {
-    if (initialSaved.current?.totalSeconds) {
-      return initialSaved.current.totalSeconds;
-    }
-    return getDurationForType(initialSaved.current?.sessionType ?? 'WORK');
-  });
+  // Synchronization refs for high-frequency ticks and remote cloud alignment
+  const targetEndTimeRef = useRef<number | null>(initialState.targetEndTime);
+  targetEndTimeRef.current = targetEndTime;
 
-  const [remainingSeconds, setRemainingSeconds] = useState<number>(() => {
-    if (initialSaved.current) {
-      if (initialSaved.current.status === 'RUNNING' && initialSaved.current.targetEndTime) {
-        const diffSec = Math.ceil((initialSaved.current.targetEndTime - authService.getServerNow()) / 1000);
-        if (diffSec > 0) {
-          return diffSec;
-        }
-        return getDurationForType(initialSaved.current.sessionType);
-      }
-      if (initialSaved.current.remainingSeconds > 0) {
-        return initialSaved.current.remainingSeconds;
-      }
-    }
-    return getDurationForType(initialSaved.current?.sessionType ?? 'WORK');
-  });
-
-  const [status, setStatus] = useState<TimerStatus>(() => {
-    if (initialSaved.current) {
-      if (initialSaved.current.status === 'RUNNING' && initialSaved.current.targetEndTime) {
-        if (initialSaved.current.targetEndTime > authService.getServerNow()) {
-          return 'RUNNING';
-        }
-      } else if (initialSaved.current.status === 'PAUSED') {
-        return 'PAUSED';
-      }
-    }
-    return 'IDLE';
-  });
-
-  const initialTargetEndTime =
-    initialSaved.current?.status === 'RUNNING' &&
-    initialSaved.current.targetEndTime &&
-    initialSaved.current.targetEndTime > authService.getServerNow()
-      ? initialSaved.current.targetEndTime
-      : null;
-
-  const targetEndTimeRef = useRef<number | null>(initialTargetEndTime);
-  const [targetEndTime, setTargetEndTime] = useState<number | null>(() => initialTargetEndTime);
-
-  const timerRunIdRef = useRef<string | null>(initialSaved.current?.timerRunId ?? null);
-
-  // Initialize with saved timestamp or 0 (NOT Date.now()) so any fresh remote timer/tag state is accepted on mount
-  const localUpdatedAtRef = useRef<number>(initialSaved.current?.updatedAtMs ?? 0);
-  const lastCompletedAtRef = useRef<number>(0);
-  const lastAlertedRunIdRef = useRef<string | null>(null);
+  const localUpdatedAtRef = useRef<number>(initialState.updatedAtMs || Date.now());
   const lastLocalActionWallMsRef = useRef<number>(0);
-  const pendingPushCountRef = useRef<number>(0);
+  const timerRunIdRef = useRef<string | null>(initialState.timerRunId || null);
   const isApplyingRemoteRef = useRef<boolean>(false);
-  const isCompletingRef = useRef<boolean>(false);
   const isInitialMountDoneRef = useRef<boolean>(false);
-  const prevActiveTagIdRef = useRef<string | null>(activeTagId);
-  const workerRef = useRef<Worker | null>(null);
+  const lastRemotePollWallMsRef = useRef<number>(Date.now());
+  const pendingPushCountRef = useRef<number>(0);
   const passivePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSwScheduleRefreshMsRef = useRef<number>(0);
-  const lastRemotePollWallMsRef = useRef<number>(0);
+  const prevActiveTagIdRef = useRef<string | null>(activeTagId);
+
   const lastCoffeeSigRef = useRef<string>('');
   const lastTagSigRef = useRef<string>('');
   const tagsVersionRef = useRef<number>(0);
@@ -233,16 +253,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   /**
    * Determines whether THIS device should play the completion chime and show the notification:
-   * - On Mobile (Phone):
-   *   - If the phone screen is visible: always alert.
-   *   - If the phone screen is off / in the background:
-   *     - For Focus (WORK): if a Desktop (laptop) client is actively awake, suppress the phone alert
-   *       so only the laptop chimes/notifies.
-   *     - For Breaks (SHORT_BREAK / LONG_BREAK): if the laptop is both awake AND visible, let the laptop alert;
-   *       if the user closed the laptop lid (or hid the timer) to take a break, the phone chimes and notifies!
-   * - On Desktop (Laptop):
-   *   - For Focus (WORK): always alert when awake.
-   *   - For Breaks: alert if visible, or if no mobile client is connected in the background.
    */
   const shouldThisDeviceAlert = useCallback((type: SessionType): boolean => {
     const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
@@ -251,82 +261,86 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (IS_MOBILE) {
       if (isVisible) return true;
       if (type === 'WORK') {
+        if (peer.desktopActive && !peer.desktopVisible) {
+          return true;
+        }
         return !peer.desktopActive;
       } else {
-        return !(peer.desktopActive && peer.desktopVisible);
+        if (peer.desktopActive && peer.desktopVisible) {
+          return false;
+        }
+        return true;
       }
     } else {
       if (type === 'WORK') {
         return true;
       } else {
         if (isVisible) return true;
-        return !peer.mobileVisible;
+        return !peer.mobileActive;
       }
     }
   }, []);
 
-  /**
-   * Keeps the Service Worker backup notification armed ONLY on the device responsible for alerting.
-   */
+  const lastAlertWallMsRef = useRef<number>(0);
+  const lastAlertRunIdRef = useRef<string | null>(null);
+
   const syncScheduledNotification = useCallback(() => {
-    if (
-      statusRef.current !== 'RUNNING' ||
-      targetEndTimeRef.current === null ||
-      !settingsRef.current.notificationsEnabled ||
-      !notifications.hasPermission()
-    ) {
+    if (typeof window === 'undefined') return;
+    if (statusRef.current !== 'RUNNING' || !targetEndTimeRef.current) {
       notifications.cancelScheduledNotification();
       return;
     }
 
-    const now = authService.getServerNow();
-    const diffMs = Math.max(0, targetEndTimeRef.current - now);
-    if (diffMs > 0) {
-      lastSwScheduleRefreshMsRef.current = Date.now();
+    const currentType = sessionTypeRef.current;
+    const shouldAlert = shouldThisDeviceAlert(currentType);
+    const runId = timerRunIdRef.current;
+
+    if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
       notifications.scheduleTimerNotification(
-        Date.now() + diffMs,
-        sessionTypeRef.current,
-        true,
-        timerRunIdRef.current
+        targetEndTimeRef.current,
+        currentType,
+        shouldAlert,
+        runId
       );
+    } else {
+      notifications.cancelScheduledNotification();
     }
-  }, [authService, notifications]);
+  }, [notifications, shouldThisDeviceAlert]);
 
-  /**
-   * Dispatches the completion notification and chime once per completed runId if this device should alert.
-   */
   const dispatchCompletionAlert = useCallback(
-    (completedType: SessionType, completedRunId: string) => {
-      if (lastAlertedRunIdRef.current === completedRunId) {
+    (completedSessionType: SessionType, runId?: string | null) => {
+      const now = Date.now();
+      const currentRunId = runId || timerRunIdRef.current;
+
+      if (currentRunId && lastAlertRunIdRef.current === currentRunId) {
         return;
       }
 
-      if (!shouldThisDeviceAlert(completedType)) {
-        notifications.cancelScheduledNotification();
+      if (now - lastAlertWallMsRef.current < 4000) {
         return;
       }
 
-      lastAlertedRunIdRef.current = completedRunId;
+      lastAlertWallMsRef.current = now;
+      lastAlertRunIdRef.current = currentRunId || null;
+
       const currentSettings = settingsRef.current;
+      const willAlert = shouldThisDeviceAlert(completedSessionType);
+
+      if (!willAlert) {
+        return;
+      }
 
       if (currentSettings.notificationsEnabled) {
-        if (completedType === 'WORK') {
-          void notifications.notify(
-            'Pomodor \u2014 Focus session complete',
-            'Your focus timer has finished. Time for a break.',
-            false,
-            completedRunId
-          );
-        } else {
-          void notifications.notify(
-            'Pomodor \u2014 Break session complete',
-            'Your break timer has finished. Time for a focus session.',
-            false,
-            completedRunId
-          );
-        }
-      } else {
-        notifications.cancelScheduledNotification();
+        const title =
+          completedSessionType === 'WORK'
+            ? 'Focus interval completed! 🎉'
+            : 'Break finished! Ready to focus? ⚡';
+        const body =
+          completedSessionType === 'WORK'
+            ? 'Great job maintaining deep flow state. Time for a well-deserved break.'
+            : 'Your break has concluded. Ready to start your next interval?';
+
+        notifications.notify(title, body, false, currentRunId);
       }
 
       if (currentSettings.soundEnabled) {
@@ -349,7 +363,28 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       broadcastTimerState(payload);
 
-      if (isAuthenticatedRef.current) {
+      if (isConvexConfigured) {
+        if (payload.status === 'RUNNING') {
+          convexTimerMutations.startTimer({
+            sessionType: payload.sessionType,
+            durationSeconds: payload.totalSeconds,
+            currentCycle: payload.currentCycle,
+            tagId: payload.activeTagId || undefined,
+            timerRunId: payload.timerRunId || `run-${Date.now()}`,
+          }).catch(console.warn);
+        } else if (payload.status === 'PAUSED') {
+          convexTimerMutations.pauseTimer({
+            remainingSeconds: payload.remainingSeconds,
+          }).catch(console.warn);
+        } else if (payload.status === 'IDLE') {
+          convexTimerMutations.resetTimer({
+            sessionType: payload.sessionType,
+            durationSeconds: payload.totalSeconds,
+            currentCycle: payload.currentCycle,
+            tagId: payload.activeTagId || undefined,
+          }).catch(console.warn);
+        }
+      } else if (isAuthenticatedRef.current) {
         pendingPushCountRef.current += 1;
         authService
           .pushRemoteTimer(payload, DEVICE_SESSION_ID, false)
@@ -363,7 +398,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
       }
     },
-    [authService]
+    [authService, isConvexConfigured, convexTimerMutations]
   );
 
   // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
@@ -415,367 +450,137 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const handlePageHide = (e: PageTransitionEvent) => {
       wakeLockService.release();
-
-      // If entering bfcache, do not tear down
       if (e.persisted) return;
 
-      // Immediately inform the cloud that this tab/device is closed so peer devices know right away
       if (isAuthenticatedRef.current) {
         authService.reportDeviceClosed(DEVICE_SESSION_ID);
       }
-
-      if (hasActivePeerTabs()) return;
-
-      sound.stopKeepAliveForUnload();
     };
 
     window.addEventListener('pagehide', handlePageHide);
-    return () => window.removeEventListener('pagehide', handlePageHide);
-  }, [authService, sound]);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [authService]);
 
-  // Handle duration settings changes when timer is IDLE
+  // Keep audio silent keep-alive running while timer is active
   useEffect(() => {
-    if (status === 'IDLE') {
-      const newDuration = getDurationForType(sessionType);
-      const changed = totalSecondsRef.current !== newDuration || remainingSecondsRef.current !== newDuration;
-      totalSecondsRef.current = newDuration;
-      remainingSecondsRef.current = newDuration;
-      setTotalSeconds(newDuration);
-      setRemainingSeconds(newDuration);
+    if (status === 'RUNNING') {
+      sound.startSilentKeepAlive();
+    } else {
+      sound.stopSilentKeepAlive(false);
+    }
+    return () => {
+      sound.stopSilentKeepAlive(false);
+    };
+  }, [status, sound]);
 
-      if (changed && isInitialMountDoneRef.current) {
-        const now = authService.getServerNow();
+  // Completion handler callback
+  const handleComplete = useCallback(
+    (silent = false) => {
+      const completedType = sessionTypeRef.current;
+      const currentRunId = timerRunIdRef.current;
+      const currentRemaining = remainingSecondsRef.current;
+      const currentTotal = totalSecondsRef.current;
+
+      const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, currentRemaining));
+
+      sound.stopSilentKeepAlive(true);
+      wakeLockService.release();
+      notifications.cancelScheduledNotification();
+
+      if (!silent) {
+        dispatchCompletionAlert(completedType, currentRunId);
+        triggerCompletionConfetti();
+      }
+
+      void recordSession({
+        tagId: activeTagIdRef.current,
+        sessionType: completedType,
+        durationSeconds: elapsedSeconds,
+        completedAt: new Date().toISOString(),
+      });
+
+      let nextType: SessionType;
+      let nextCycle = currentCycleRef.current;
+
+      if (completedType === 'WORK') {
+        if (currentCycleRef.current >= settingsRef.current.longBreakInterval) {
+          nextType = 'LONG_BREAK';
+          nextCycle = 1;
+        } else {
+          nextType = 'SHORT_BREAK';
+          nextCycle = currentCycleRef.current + 1;
+        }
+      } else {
+        nextType = 'WORK';
+      }
+
+      const nextDuration = getDurationForType(nextType);
+      const shouldAutoStart =
+        nextType === 'WORK'
+          ? settingsRef.current.autoStartPomodoros
+          : settingsRef.current.autoStartBreaks;
+
+      const now = Date.now();
+      sessionTypeRef.current = nextType;
+      currentCycleRef.current = nextCycle;
+      totalSecondsRef.current = nextDuration;
+      targetEndTimeRef.current = shouldAutoStart ? now + nextDuration * 1000 : null;
+
+      setSessionType(nextType);
+      setCurrentCycle(nextCycle);
+      setTotalSeconds(nextDuration);
+      setTargetEndTime(shouldAutoStart ? now + nextDuration * 1000 : null);
+
+      if (shouldAutoStart) {
+        const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        timerRunIdRef.current = newRunId;
+        statusRef.current = 'RUNNING';
+        remainingSecondsRef.current = nextDuration;
+        setStatus('RUNNING');
+        setRemainingSeconds(nextDuration);
+
         publishLocalTimerState({
-          sessionType: sessionTypeRef.current,
+          sessionType: nextType,
+          status: 'RUNNING',
+          remainingSeconds: nextDuration,
+          totalSeconds: nextDuration,
+          targetEndTime: now + nextDuration * 1000,
+          currentCycle: nextCycle,
+          activeTagId: activeTagIdRef.current,
+          timerRunId: newRunId,
+          updatedAtMs: now,
+        });
+
+        syncScheduledNotification();
+      } else {
+        timerRunIdRef.current = null;
+        statusRef.current = 'IDLE';
+        remainingSecondsRef.current = nextDuration;
+        setStatus('IDLE');
+        setRemainingSeconds(nextDuration);
+
+        publishLocalTimerState({
+          sessionType: nextType,
           status: 'IDLE',
-          remainingSeconds: newDuration,
-          totalSeconds: newDuration,
+          remainingSeconds: nextDuration,
+          totalSeconds: nextDuration,
           targetEndTime: null,
-          currentCycle: currentCycleRef.current,
+          currentCycle: nextCycle,
           activeTagId: activeTagIdRef.current,
           timerRunId: null,
           updatedAtMs: now,
         });
       }
-    }
-  }, [sessionType, settings.workDurationMinutes, settings.shortBreakDurationMinutes, settings.longBreakDurationMinutes, status, getDurationForType, authService, publishLocalTimerState]);
-
-  // Handle activeTagId changes: sync tag selection across tabs and cloud
-  useEffect(() => {
-    if (isApplyingRemoteRef.current) {
-      prevActiveTagIdRef.current = activeTagId;
-      return;
-    }
-    if (prevActiveTagIdRef.current === activeTagId) return;
-
-    prevActiveTagIdRef.current = activeTagId;
-
-    // Ignore initial tag hydration on mount so a newly opened tab doesn't overwrite a running remote timer
-    if (!isInitialMountDoneRef.current && statusRef.current === 'IDLE') {
-      return;
-    }
-
-    const now = authService.getServerNow();
-    const currentRemaining = targetEndTimeRef.current !== null
-      ? Math.max(0, Math.ceil((targetEndTimeRef.current - now) / 1000))
-      : remainingSecondsRef.current;
-
-    const payload: RemoteTimerState = {
-      sessionType: sessionTypeRef.current,
-      status: statusRef.current,
-      remainingSeconds: currentRemaining,
-      totalSeconds: totalSecondsRef.current,
-      targetEndTime: targetEndTimeRef.current,
-      currentCycle: currentCycleRef.current,
-      activeTagId,
-      timerRunId: timerRunIdRef.current,
-      updatedAtMs: now,
-    };
-
-    publishLocalTimerState(payload);
-  }, [activeTagId, authService, publishLocalTimerState]);
-
-  // Start timer helper
-  const startTimer = useCallback(
-    (overrideSec?: number) => {
-      isCompletingRef.current = false;
-      isWakeSyncingRef.current = false;
-      lastTickWallMsRef.current = Date.now();
-
-      const secToRun = overrideSec !== undefined ? overrideSec : remainingSecondsRef.current;
-      const now = authService.getServerNow();
-      const target = now + secToRun * 1000;
-      const targetWallClockMs = Date.now() + secToRun * 1000;
-      const runId = timerRunIdRef.current || `tr-${now}-${Math.random().toString(36).substring(2, 6)}`;
-
-      // Ensure audio pipeline is prepared and primed for completion chime
-      sound.prepareForPlayback();
-      sound.startSilentKeepAlive();
-
-      // If manually starting while the app is visible, clear any old notification from the shade
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        notifications.clearActiveNotifications();
-      }
-
-      timerRunIdRef.current = runId;
-      targetEndTimeRef.current = target;
-      statusRef.current = 'RUNNING';
-      setTargetEndTime(target);
-      setStatus('RUNNING');
-
-      // Schedule backup lock-screen notification via Service Worker if this device should alert
-      lastSwScheduleRefreshMsRef.current = Date.now();
-      if (settingsRef.current.notificationsEnabled) {
-        if (notifications.hasPermission()) {
-          notifications.scheduleTimerNotification(targetWallClockMs, sessionTypeRef.current, true, runId);
-        } else {
-          notifications.requestPermission().then((granted) => {
-            if (granted && statusRef.current === 'RUNNING') {
-              notifications.scheduleTimerNotification(
-                targetWallClockMs,
-                sessionTypeRef.current,
-                true,
-                timerRunIdRef.current
-              );
-            }
-          });
-        }
-      }
-
-      const payload: RemoteTimerState = {
-        sessionType: sessionTypeRef.current,
-        status: 'RUNNING',
-        remainingSeconds: secToRun,
-        totalSeconds: totalSecondsRef.current,
-        targetEndTime: target,
-        currentCycle: currentCycleRef.current,
-        activeTagId: activeTagIdRef.current,
-        timerRunId: runId,
-        updatedAtMs: now,
-      };
-
-      publishLocalTimerState(payload);
-    },
-    [authService, publishLocalTimerState, sound, notifications, shouldThisDeviceAlert]
-  );
-
-  // Pause timer helper
-  const pauseTimer = useCallback(() => {
-    isCompletingRef.current = false;
-    isWakeSyncingRef.current = false;
-    sound.stopSilentKeepAlive(true);
-    notifications.cancelScheduledNotification();
-
-    const now = authService.getServerNow();
-    const exactRemaining = targetEndTimeRef.current !== null
-      ? Math.max(0, Math.ceil((targetEndTimeRef.current - now) / 1000))
-      : remainingSecondsRef.current;
-
-    targetEndTimeRef.current = null;
-    statusRef.current = 'PAUSED';
-    remainingSecondsRef.current = exactRemaining;
-    setTargetEndTime(null);
-    setRemainingSeconds(exactRemaining);
-    setStatus('PAUSED');
-
-    const payload: RemoteTimerState = {
-      sessionType: sessionTypeRef.current,
-      status: 'PAUSED',
-      remainingSeconds: exactRemaining,
-      totalSeconds: totalSecondsRef.current,
-      targetEndTime: null,
-      currentCycle: currentCycleRef.current,
-      activeTagId: activeTagIdRef.current,
-      timerRunId: timerRunIdRef.current,
-      updatedAtMs: now,
-    };
-
-    publishLocalTimerState(payload);
-  }, [authService, publishLocalTimerState, sound, notifications]);
-
-  // Reset timer helper
-  const resetTimer = useCallback(() => {
-    isCompletingRef.current = false;
-    isWakeSyncingRef.current = false;
-    sound.stopSilentKeepAlive(true);
-    notifications.cancelScheduledNotification();
-
-    const now = authService.getServerNow();
-    targetEndTimeRef.current = null;
-    statusRef.current = 'IDLE';
-    setTargetEndTime(null);
-    timerRunIdRef.current = null;
-
-    const dur = getDurationForType(sessionTypeRef.current);
-    remainingSecondsRef.current = dur;
-    totalSecondsRef.current = dur;
-    setRemainingSeconds(dur);
-    setTotalSeconds(dur);
-    setStatus('IDLE');
-
-    const payload: RemoteTimerState = {
-      sessionType: sessionTypeRef.current,
-      status: 'IDLE',
-      remainingSeconds: dur,
-      totalSeconds: dur,
-      targetEndTime: null,
-      currentCycle: currentCycleRef.current,
-      activeTagId: activeTagIdRef.current,
-      timerRunId: null,
-      updatedAtMs: now,
-    };
-
-    publishLocalTimerState(payload);
-  }, [getDurationForType, authService, publishLocalTimerState, sound, notifications]);
-
-  // Handle completion
-  const handleComplete = useCallback(
-    (suppressAlertOverride: boolean = false) => {
-      if (isCompletingRef.current) return;
-      isCompletingRef.current = true;
-      isWakeSyncingRef.current = false;
-      setTimeout(() => {
-        isCompletingRef.current = false;
-      }, 1500);
-
-      targetEndTimeRef.current = null;
-      setTargetEndTime(null);
-
-      const now = authService.getServerNow();
-      lastCompletedAtRef.current = Date.now();
-      lastLocalActionWallMsRef.current = Date.now();
-      localUpdatedAtRef.current = now;
-
-      const currentType = sessionTypeRef.current;
-      const cycle = currentCycleRef.current;
-      const currentSettings = settingsRef.current;
-      const currentTag = activeTagIdRef.current;
-      const currentTotalSec = totalSecondsRef.current;
-      const completedRunId = timerRunIdRef.current || `${currentType.toLowerCase()}-${now}`;
-
-      const shouldAlert = !suppressAlertOverride && shouldThisDeviceAlert(currentType);
-
-      if (shouldAlert) {
-        dispatchCompletionAlert(currentType, completedRunId);
-      } else {
-        notifications.cancelScheduledNotification();
-      }
-
-      const publishCompletionState = (payload: RemoteTimerState) => {
-        if (shouldAlert) {
-          publishLocalTimerState(payload);
-        } else {
-          // Passive follower device: update local tabs immediately and delay cloud push by 1.2s
-          // so the active alerting device's completion push lands first without race conditions.
-          broadcastTimerState(payload);
-          if (passivePushTimerRef.current) {
-            clearTimeout(passivePushTimerRef.current);
-          }
-          passivePushTimerRef.current = setTimeout(() => {
-            passivePushTimerRef.current = null;
-            if (isAuthenticatedRef.current && localUpdatedAtRef.current <= payload.updatedAtMs) {
-              publishLocalTimerState(payload);
-            }
-          }, 1200);
-        }
-      };
-
-      if (currentType === 'WORK') {
-        if (shouldAlert) {
-          triggerCompletionConfetti();
-        }
-
-        const runId = timerRunIdRef.current;
-        const sessionId = runId
-          ? `session-run-${runId}`
-          : `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-
-        recordSession({
-          id: sessionId,
-          tagId: currentTag,
-          sessionType: 'WORK',
-          durationSeconds: currentTotalSec,
-          completedAt: new Date().toISOString(),
-        });
-
-        timerRunIdRef.current = null;
-
-        const isLongBreak = cycle >= currentSettings.longBreakInterval;
-        const nextType: SessionType = isLongBreak ? 'LONG_BREAK' : 'SHORT_BREAK';
-        const dur = isLongBreak
-          ? Math.max(1, Math.round(currentSettings.longBreakDurationMinutes * 60))
-          : Math.max(1, Math.round(currentSettings.shortBreakDurationMinutes * 60));
-
-        sessionTypeRef.current = nextType;
-        totalSecondsRef.current = dur;
-        remainingSecondsRef.current = dur;
-        setSessionType(nextType);
-        setTotalSeconds(dur);
-        setRemainingSeconds(dur);
-
-        if (currentSettings.autoStartBreaks) {
-          startTimer(dur);
-        } else {
-          sound.stopSilentKeepAlive(false);
-          statusRef.current = 'IDLE';
-          setStatus('IDLE');
-          const payload: RemoteTimerState = {
-            sessionType: nextType,
-            status: 'IDLE',
-            remainingSeconds: dur,
-            totalSeconds: dur,
-            targetEndTime: null,
-            currentCycle: cycle,
-            activeTagId: currentTag,
-            timerRunId: null,
-            updatedAtMs: now,
-          };
-          publishCompletionState(payload);
-        }
-      } else {
-        // Break session finished -> Advance to WORK session!
-        const dur = Math.max(1, Math.round(currentSettings.workDurationMinutes * 60));
-        const nextCycle = currentType === 'SHORT_BREAK' ? cycle + 1 : 1;
-
-        sessionTypeRef.current = 'WORK';
-        totalSecondsRef.current = dur;
-        remainingSecondsRef.current = dur;
-        currentCycleRef.current = nextCycle;
-        setSessionType('WORK');
-        setTotalSeconds(dur);
-        setRemainingSeconds(dur);
-        setCurrentCycle(nextCycle);
-        timerRunIdRef.current = null;
-
-        if (currentSettings.autoStartPomodoros) {
-          startTimer(dur);
-        } else {
-          sound.stopSilentKeepAlive(false);
-          statusRef.current = 'IDLE';
-          setStatus('IDLE');
-          const payload: RemoteTimerState = {
-            sessionType: 'WORK',
-            status: 'IDLE',
-            remainingSeconds: dur,
-            totalSeconds: dur,
-            targetEndTime: null,
-            currentCycle: nextCycle,
-            activeTagId: currentTag,
-            timerRunId: null,
-            updatedAtMs: now,
-          };
-          publishCompletionState(payload);
-        }
-      }
     },
     [
+      getDurationForType,
       recordSession,
       sound,
       notifications,
-      startTimer,
-      authService,
       publishLocalTimerState,
-      shouldThisDeviceAlert,
+      syncScheduledNotification,
       dispatchCompletionAlert,
     ]
   );
@@ -783,56 +588,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const handleCompleteRef = useRef(handleComplete);
   handleCompleteRef.current = handleComplete;
 
-  // Core function to safely apply incoming remote/broadcast timer state
+  // Method to apply authoritative remote timer state
   const applyRemoteState = useCallback(
     (remote: RemoteTimerState) => {
-      // 1. Guard against dead/expired idle states (never adopt an idle timer with 0 seconds remaining)
-      if (remote.status === 'IDLE' && remote.remainingSeconds <= 0) {
-        return;
-      }
-
-      // 2. Guard against resurrecting an expired session:
-      // If we just finished a session locally (within 10 seconds), reject any stale remote
-      // state belonging to the session that just finished.
-      const isRecentCompletion = Date.now() - lastCompletedAtRef.current < 10000;
-      if (isRecentCompletion) {
-        const curType = sessionTypeRef.current;
-        if (remote.sessionType === 'WORK' && (curType === 'SHORT_BREAK' || curType === 'LONG_BREAK')) {
-          return;
-        }
-        if ((remote.sessionType === 'SHORT_BREAK' || remote.sessionType === 'LONG_BREAK') && curType === 'WORK') {
-          return;
-        }
-      }
-
-      // 3. If both local and remote are already RUNNING the exact same targetEndTime & sessionType,
-      // avoid resetting the running timer or flickering state, but keep SW notification synced with peer presence.
-      if (
-        statusRef.current === 'RUNNING' &&
-        remote.status === 'RUNNING' &&
-        remote.targetEndTime !== null &&
-        targetEndTimeRef.current === remote.targetEndTime &&
-        sessionTypeRef.current === remote.sessionType
-      ) {
-        localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
-        syncScheduledNotification();
-        if (remote.activeTagId !== undefined && remote.activeTagId !== activeTagIdRef.current && setActiveTagId) {
-          isApplyingRemoteRef.current = true;
-          prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
-        }
-        return;
-      }
-
-      // 4. Freshness check
+      const nowMs = Date.now();
+      const isRecentCompletion = nowMs - lastAlertWallMsRef.current < 4000;
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
 
-      // 5. Adoption check: Only adopt active remote if:
-      // - We are currently IDLE and not in the middle of a recent session completion transition
-      // - Remote state is at least as fresh as our local updated timestamp (never adopt older state!)
       const isAdoptingActiveRemote =
         !isRecentCompletion &&
         statusRef.current === 'IDLE' &&
@@ -845,9 +607,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const now = authService.getServerNow();
 
-      // If this device was actively RUNNING and within 3.5s of targetEndTime (not waking from sleep)
-      // when a peer device pushed the post-completion transition, ensure this device still fires its alert
-      // if it is the designated alerting device!
       if (
         statusRef.current === 'RUNNING' &&
         targetEndTimeRef.current !== null &&
@@ -864,13 +623,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isApplyingRemoteRef.current = true;
       localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
 
-      // If remote is RUNNING and targetEndTime is provided
       if (remote.status === 'RUNNING' && remote.targetEndTime) {
         const diffMs = remote.targetEndTime - now;
         const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
         if (diffSec > 0) {
-          // Ensure mobile silent keep-alive is active when adopting a remote running timer (e.g. break started on laptop)
           sound.startSilentKeepAlive();
 
           sessionTypeRef.current = remote.sessionType;
@@ -904,8 +661,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             notifications.cancelScheduledNotification();
           }
         } else {
-          // Target time has already elapsed on the server!
-          // If it expired more than 15 minutes ago (e.g. device was offline/sleeping for hours), reset to IDLE without recording a stale session
           if (diffMs < -900000) {
             const dur = getDurationForType(remote.sessionType);
             sessionTypeRef.current = remote.sessionType;
@@ -924,7 +679,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             return;
           }
 
-          // If it expired more than 60 seconds ago (e.g. while this laptop was briefly asleep), complete silently without alert chime.
           const expiredLongAgo = diffMs < -60000;
           handleCompleteRef.current(expiredLongAgo);
         }
@@ -950,7 +704,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setRemainingSeconds(remote.remainingSeconds);
         setStatus('PAUSED');
       } else {
-        // IDLE: always use current configured duration for this sessionType so remote IDLE polls never overwrite duration settings
         const nextStatus: TimerStatus = remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
         const configuredDur = getDurationForType(remote.sessionType);
         sessionTypeRef.current = remote.sessionType;
@@ -991,8 +744,35 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ]
   );
 
+  // Adopt live Convex WebSocket timer updates instantly
+  useEffect(() => {
+    if (!isConvexConfigured || !remoteTimer || isApplyingRemoteRef.current) return;
+    if (remoteTimer.peerPresence) {
+      peerPresenceRef.current = remoteTimer.peerPresence;
+    }
+    if (remoteTimer.updatedAtMs > localUpdatedAtRef.current) {
+      applyRemoteState({
+        sessionType: remoteTimer.sessionType,
+        status: remoteTimer.status,
+        remainingSeconds: remoteTimer.remainingSeconds,
+        totalSeconds: remoteTimer.totalSeconds,
+        targetEndTime: remoteTimer.targetEndTime ?? null,
+        currentCycle: remoteTimer.currentCycle,
+        activeTagId: remoteTimer.activeTagId ?? null,
+        timerRunId: remoteTimer.timerRunId ?? null,
+        updatedAtMs: remoteTimer.updatedAtMs,
+      });
+    }
+  }, [remoteTimer, isConvexConfigured, applyRemoteState]);
+
   // Cross-device timer sync engine: fetches from Cloudflare D1 with active device presence headers
   const checkRemoteTimer = useCallback(async () => {
+    if (isConvexConfigured) {
+      // In Convex, remote updates are pushed reactively over WebSockets.
+      // Zero HTTP polling needed!
+      return;
+    }
+
     if (!isAuthenticatedRef.current || isApplyingRemoteRef.current || pendingPushCountRef.current > 0) {
       return;
     }
@@ -1038,9 +818,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (result.tags && syncRemoteTags) {
         const delSig = (result.deletedTagIds || []).join(',');
-        const tagsSig = result.tags
-          .map((t) => `${t.id}:${t.updatedAt || ''}:${t.isArchived ? 1 : 0}:${t.name}:${t.color}`)
-          .join('|');
+        const tagsSig = result.tags.map((t) => `${t.id}:${t.name}:${t.color}:${t.isArchived}:${t.updatedAt || ''}`).join('|');
         const sig = `${tagsSig}#del#${delSig}`;
         if (sig !== lastTagSigRef.current) {
           lastTagSigRef.current = sig;
@@ -1048,135 +826,111 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      if (result.lastSessionCompletedAt) {
-        const latestLocalCompletedAt =
-          sessionsRef.current.length > 0
-            ? sessionsRef.current[sessionsRef.current.length - 1].completedAt
-            : null;
-
-        if (!latestLocalCompletedAt || result.lastSessionCompletedAt > latestLocalCompletedAt) {
-          if (result.lastSessionCompletedAt !== lastKnownCloudSessionCompletedAtRef.current) {
-            lastKnownCloudSessionCompletedAtRef.current = result.lastSessionCompletedAt;
-            void syncWithCloud();
-          }
+      if (
+        result.lastSessionCompletedAt &&
+        result.lastSessionCompletedAt !== lastKnownCloudSessionCompletedAtRef.current
+      ) {
+        lastKnownCloudSessionCompletedAtRef.current = result.lastSessionCompletedAt;
+        const alreadyHasSession = sessionsRef.current.some(
+          (s) => s.completedAt === result.lastSessionCompletedAt
+        );
+        if (!alreadyHasSession) {
+          void syncWithCloud();
         }
       }
 
-      // Discard stale timer payload if a local timer action occurred while this GET was in flight
       if (
         result.timer &&
-        pendingPushCountRef.current === 0 &&
-        fetchStartedWallMs >= lastLocalActionWallMsRef.current &&
+        result.timer.updatedAtMs > localUpdatedAtRef.current &&
         !isApplyingRemoteRef.current
       ) {
         applyRemoteState(result.timer);
-      } else {
-        isWakeSyncingRef.current = false;
       }
-    } catch (err) {
+    } catch {
       isWakeSyncingRef.current = false;
-      console.warn('Error checking remote timer', err);
     }
-  }, [authService, applyRemoteState, syncRemoteCoffeeCups, syncRemoteTags, syncScheduledNotification, syncWithCloud]);
+  }, [authService, applyRemoteState, syncScheduledNotification, syncRemoteCoffeeCups, syncRemoteTags, syncWithCloud, isConvexConfigured]);
 
   const checkRemoteTimerRef = useRef(checkRemoteTimer);
   checkRemoteTimerRef.current = checkRemoteTimer;
 
-  // Shared tick handler used by both the persistent Web Worker and backup interval
-  const processTimerTick = useCallback(() => {
+  // Main countdown tick execution
+  const executeTick = useCallback(() => {
+    const currentStatus = statusRef.current;
     const nowWall = Date.now();
     const sleepGapMs = nowWall - lastTickWallMsRef.current;
     lastTickWallMsRef.current = nowWall;
 
-    // 1. Drive background cloud polling even when the phone screen is off and status is IDLE/PAUSED
-    // so a locked phone in the user's pocket immediately detects when a break is started on the laptop.
-    // 1. Adaptive cloud polling: fast when timer is active, relaxed when idle/hidden to conserve battery & database bandwidth
-    if (isAuthenticatedRef.current) {
-      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+    if (isAuthenticatedRef.current && !isConvexConfigured) {
       let pollIntervalMs: number;
-      if (statusRef.current === 'RUNNING') {
+      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+      if (currentStatus === 'RUNNING') {
         pollIntervalMs = isVisible ? 3000 : 10000;
       } else {
         pollIntervalMs = isVisible ? 10000 : 30000;
       }
       if (nowWall - lastRemotePollWallMsRef.current >= pollIntervalMs) {
-        lastRemotePollWallMsRef.current = nowWall;
         void checkRemoteTimerRef.current();
       }
-    }
 
-    // 2. Process active countdown
-    if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
-      // If this device just woke up from OS sleep (e.g. opening the laptop lid after a break),
-      // sync with the cloud first before firing local completion so we don't chime late!
       if (!IS_MOBILE && sleepGapMs > 4500 && isAuthenticatedRef.current) {
         isWakeSyncingRef.current = true;
         void checkRemoteTimerRef.current();
         return;
       }
+    }
 
-      if (isWakeSyncingRef.current) {
-        return;
-      }
+    if (currentStatus !== 'RUNNING' || targetEndTimeRef.current === null) {
+      return;
+    }
 
-      const now = authService.getServerNow();
-      const diffMs = targetEndTimeRef.current - now;
-      const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+    const now = authService.getServerNow();
+    const target = targetEndTimeRef.current;
+    const diffMs = target - now;
+    const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
-      if (diffSec <= 0) {
-        handleCompleteRef.current();
-        return;
-      }
+    if (diffSec <= 0) {
+      handleCompleteRef.current();
+      return;
+    }
 
+    if (diffSec !== remainingSecondsRef.current) {
       remainingSecondsRef.current = diffSec;
       setRemainingSeconds(diffSec);
-
-      // Renew or cancel Service Worker scheduled notification every 8s while running
-      if (nowWall - lastSwScheduleRefreshMsRef.current >= 8000) {
-        lastSwScheduleRefreshMsRef.current = nowWall;
-        syncScheduledNotification();
-      }
     }
-  }, [authService, syncScheduledNotification]);
+  }, [authService, isConvexConfigured]);
 
-  const processTimerTickRef = useRef(processTimerTick);
-  processTimerTickRef.current = processTimerTick;
-
-  // Persistent Web Worker initialization (stays running across IDLE/RUNNING so background polling never freezes)
+  // Persistent Web Worker initialization
   useEffect(() => {
-    let blobUrl: string | null = null;
+    let worker: Worker | null = null;
+    let fallbackInterval: ReturnType<typeof setInterval> | null = null;
+
     try {
       const blob = new Blob([WORKER_SCRIPT], { type: 'application/javascript' });
-      blobUrl = URL.createObjectURL(blob);
-      const worker = new Worker(blobUrl);
-      workerRef.current = worker;
+      const workerUrl = URL.createObjectURL(blob);
+      worker = new Worker(workerUrl);
 
       worker.onmessage = (e) => {
         if (e.data === 'TICK') {
-          processTimerTickRef.current();
+          executeTick();
         }
       };
 
       worker.postMessage('START');
-    } catch (err) {
-      console.warn('Web Worker initialization failed:', err);
+    } catch {
+      fallbackInterval = setInterval(executeTick, 250);
     }
 
     return () => {
-      if (passivePushTimerRef.current) {
-        clearTimeout(passivePushTimerRef.current);
-        passivePushTimerRef.current = null;
+      if (worker) {
+        worker.postMessage('STOP');
+        worker.terminate();
       }
-      if (workerRef.current) {
-        workerRef.current.postMessage('STOP');
-        workerRef.current.terminate();
-        workerRef.current = null;
-      }
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
+      if (fallbackInterval) {
+        clearInterval(fallbackInterval);
       }
     };
-  }, []);
+  }, [executeTick]);
 
   // Visibility, pageshow, and focus sync listeners
   useEffect(() => {
@@ -1187,11 +941,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sound.prepareForPlayback();
       }
 
-
-
-      // Immediately report visibility transitions (including closing the laptop lid -> hidden!)
-      // to the cloud so peer devices know within milliseconds whether the laptop screen is open or closed.
-      if (isAuthenticatedRef.current) {
+      if (isConvexConfigured) {
+        convexTimerMutations.updatePresence({
+          isMobile: IS_MOBILE,
+          isVisible: !isHidden,
+        }).catch(() => {});
+      } else if (isAuthenticatedRef.current) {
         void checkRemoteTimerRef.current();
         const nowMs = Date.now();
         if (nowMs - lastVisibilitySyncMsRef.current > 20000) {
@@ -1222,13 +977,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         remainingSecondsRef.current = diffSec;
         setRemainingSeconds(diffSec);
 
-        // Update Service Worker scheduled notification based on current visibility & peer presence
         syncScheduledNotification();
 
-        // Persist visibility and latest remaining time snapshot
         const stateToSave: SavedTimerState = {
           sessionType: sessionTypeRef.current,
-          status: 'RUNNING',
+          status: statusRef.current,
           currentCycle: currentCycleRef.current,
           remainingSeconds: diffSec,
           totalSeconds: totalSecondsRef.current,
@@ -1244,201 +997,266 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         try {
           localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
         } catch {
-          // Ignore storage error
+          // Storage errors ignored
         }
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
-    window.addEventListener('focus', handleVisibilityOrFocus);
     window.addEventListener('pageshow', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-      window.removeEventListener('focus', handleVisibilityOrFocus);
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
     };
-  }, [authService, sound, syncScheduledNotification, syncWithCloud]);
+  }, [sound, syncScheduledNotification, syncWithCloud, authService, isConvexConfigured, convexTimerMutations]);
 
-  // Backup main-thread interval (safeguards countdown & polling if Web Worker is unavailable)
+  // Main-thread backup countdown timer
   useEffect(() => {
-    const interval = setInterval(() => {
-      processTimerTickRef.current();
-    }, 500);
-    return () => clearInterval(interval);
-  }, []);
+    const backupInterval = setInterval(executeTick, 1000);
+    return () => clearInterval(backupInterval);
+  }, [executeTick]);
 
-  // Handle expired saved timer on mount
+  // Multi-tab BroadcastChannel listener
   useEffect(() => {
-    if (
-      initialSaved.current?.status === 'RUNNING' &&
-      initialSaved.current.targetEndTime &&
-      initialSaved.current.targetEndTime <= authService.getServerNow()
-    ) {
-      if (auth.isAuthenticated) {
-        isWakeSyncingRef.current = true;
-        void checkRemoteTimer();
-      } else {
-        handleCompleteRef.current();
+    const unsubscribeState = subscribeTimerState((incoming) => {
+      if (incoming.updatedAtMs > localUpdatedAtRef.current && !isApplyingRemoteRef.current) {
+        applyRemoteState(incoming);
       }
-    }
-  }, [auth.isAuthenticated, authService, checkRemoteTimer]);
+    });
 
-  // Skip interval helper
-  const skipInterval = useCallback(() => {
-    isCompletingRef.current = false;
-    isWakeSyncingRef.current = false;
-    sound.stopSilentKeepAlive(true);
+    const unsubscribeReset = subscribeReset((scope) => {
+      const defaultDuration = getDurationForType('WORK');
+      sessionTypeRef.current = 'WORK';
+      statusRef.current = 'IDLE';
+      currentCycleRef.current = 1;
+      totalSecondsRef.current = defaultDuration;
+      remainingSecondsRef.current = defaultDuration;
+      targetEndTimeRef.current = null;
+      timerRunIdRef.current = null;
+      localUpdatedAtRef.current = Date.now();
+
+      setSessionType('WORK');
+      setStatus('IDLE');
+      setCurrentCycle(1);
+      setTotalSeconds(defaultDuration);
+      setRemainingSeconds(defaultDuration);
+      setTargetEndTime(null);
+
+      sound.stopSilentKeepAlive(false);
+      wakeLockService.release();
+      notifications.cancelScheduledNotification();
+
+      if (scope === 'factory-reset') {
+        prevActiveTagIdRef.current = null;
+      }
+    });
+
+    return () => {
+      unsubscribeState();
+      unsubscribeReset();
+    };
+  }, [getDurationForType, sound, notifications, applyRemoteState]);
+
+  // Action: Start timer
+  const start = useCallback(() => {
+    if (statusRef.current === 'RUNNING') return;
+
+    sound.prepareForPlayback();
+    wakeLockService.acquire();
+
+    const duration = remainingSecondsRef.current;
+    const now = Date.now();
+    const calculatedTargetEnd = now + duration * 1000;
+    const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+    targetEndTimeRef.current = calculatedTargetEnd;
+    timerRunIdRef.current = newRunId;
+    statusRef.current = 'RUNNING';
+
+    setTargetEndTime(calculatedTargetEnd);
+    setStatus('RUNNING');
+
+    publishLocalTimerState({
+      sessionType: sessionTypeRef.current,
+      status: 'RUNNING',
+      remainingSeconds: duration,
+      totalSeconds: totalSecondsRef.current,
+      targetEndTime: calculatedTargetEnd,
+      currentCycle: currentCycleRef.current,
+      activeTagId: activeTagIdRef.current,
+      timerRunId: newRunId,
+      updatedAtMs: now,
+    });
+
+    syncScheduledNotification();
+  }, [sound, publishLocalTimerState, syncScheduledNotification]);
+
+  // Action: Pause timer
+  const pause = useCallback(() => {
+    if (statusRef.current !== 'RUNNING') return;
+
+    wakeLockService.release();
     notifications.cancelScheduledNotification();
 
     const now = authService.getServerNow();
-    targetEndTimeRef.current = null;
-    statusRef.current = 'IDLE';
-    setTargetEndTime(null);
-    timerRunIdRef.current = null;
-
-    const curType = sessionTypeRef.current;
-    const curCycle = currentCycleRef.current;
-    const curSettings = settingsRef.current;
-
-    let nextType: SessionType = 'WORK';
-    let nextCycle = curCycle;
-    let nextDur = Math.max(1, Math.round(curSettings.workDurationMinutes * 60));
-
-    if (curType === 'WORK') {
-      if (curCycle >= curSettings.longBreakInterval) {
-        nextType = 'LONG_BREAK';
-        nextDur = Math.max(1, Math.round(curSettings.longBreakDurationMinutes * 60));
-      } else {
-        nextType = 'SHORT_BREAK';
-        nextDur = Math.max(1, Math.round(curSettings.shortBreakDurationMinutes * 60));
-      }
-    } else if (curType === 'SHORT_BREAK') {
-      nextType = 'WORK';
-      nextDur = Math.max(1, Math.round(curSettings.workDurationMinutes * 60));
-      nextCycle = curCycle + 1;
-    } else {
-      nextType = 'WORK';
-      nextDur = Math.max(1, Math.round(curSettings.workDurationMinutes * 60));
-      nextCycle = 1;
+    let currentRemaining = remainingSecondsRef.current;
+    if (targetEndTimeRef.current !== null) {
+      const diffMs = targetEndTimeRef.current - now;
+      currentRemaining = Math.max(1, Math.ceil(diffMs / 1000));
     }
 
+    targetEndTimeRef.current = null;
+    statusRef.current = 'PAUSED';
+    remainingSecondsRef.current = currentRemaining;
+
+    setTargetEndTime(null);
+    setStatus('PAUSED');
+    setRemainingSeconds(currentRemaining);
+
+    const nowMs = Date.now();
+    publishLocalTimerState({
+      sessionType: sessionTypeRef.current,
+      status: 'PAUSED',
+      remainingSeconds: currentRemaining,
+      totalSeconds: totalSecondsRef.current,
+      targetEndTime: null,
+      currentCycle: currentCycleRef.current,
+      activeTagId: activeTagIdRef.current,
+      timerRunId: timerRunIdRef.current,
+      updatedAtMs: nowMs,
+    });
+  }, [notifications, publishLocalTimerState, authService]);
+
+  // Action: Reset timer
+  const reset = useCallback(() => {
+    wakeLockService.release();
+    notifications.cancelScheduledNotification();
+    sound.stopSilentKeepAlive(false);
+
+    const defaultDuration = getDurationForType(sessionTypeRef.current);
+    targetEndTimeRef.current = null;
+    timerRunIdRef.current = null;
+    statusRef.current = 'IDLE';
+    remainingSecondsRef.current = defaultDuration;
+    totalSecondsRef.current = defaultDuration;
+
+    setTargetEndTime(null);
+    setStatus('IDLE');
+    setRemainingSeconds(defaultDuration);
+    setTotalSeconds(defaultDuration);
+
+    const nowMs = Date.now();
+    publishLocalTimerState({
+      sessionType: sessionTypeRef.current,
+      status: 'IDLE',
+      remainingSeconds: defaultDuration,
+      totalSeconds: defaultDuration,
+      targetEndTime: null,
+      currentCycle: currentCycleRef.current,
+      activeTagId: activeTagIdRef.current,
+      timerRunId: null,
+      updatedAtMs: nowMs,
+    });
+  }, [getDurationForType, sound, notifications, publishLocalTimerState]);
+
+  // Action: Skip interval
+  const skip = useCallback(() => {
+    wakeLockService.release();
+    notifications.cancelScheduledNotification();
+    sound.stopSilentKeepAlive(false);
+
+    let nextType: SessionType;
+    let nextCycle = currentCycleRef.current;
+
+    if (sessionTypeRef.current === 'WORK') {
+      if (currentCycleRef.current >= settingsRef.current.longBreakInterval) {
+        nextType = 'LONG_BREAK';
+        nextCycle = 1;
+      } else {
+        nextType = 'SHORT_BREAK';
+        nextCycle = currentCycleRef.current + 1;
+      }
+    } else {
+      nextType = 'WORK';
+    }
+
+    const nextDuration = getDurationForType(nextType);
+    targetEndTimeRef.current = null;
+    timerRunIdRef.current = null;
     sessionTypeRef.current = nextType;
     currentCycleRef.current = nextCycle;
-    totalSecondsRef.current = nextDur;
-    remainingSecondsRef.current = nextDur;
+    statusRef.current = 'IDLE';
+    remainingSecondsRef.current = nextDuration;
+    totalSecondsRef.current = nextDuration;
+
     setSessionType(nextType);
     setCurrentCycle(nextCycle);
-    setTotalSeconds(nextDur);
-    setRemainingSeconds(nextDur);
     setStatus('IDLE');
+    setRemainingSeconds(nextDuration);
+    setTotalSeconds(nextDuration);
+    setTargetEndTime(null);
 
-    const payload: RemoteTimerState = {
+    const nowMs = Date.now();
+    publishLocalTimerState({
       sessionType: nextType,
       status: 'IDLE',
-      remainingSeconds: nextDur,
-      totalSeconds: nextDur,
+      remainingSeconds: nextDuration,
+      totalSeconds: nextDuration,
       targetEndTime: null,
       currentCycle: nextCycle,
       activeTagId: activeTagIdRef.current,
       timerRunId: null,
-      updatedAtMs: now,
-    };
+      updatedAtMs: nowMs,
+    });
+  }, [getDurationForType, sound, notifications, publishLocalTimerState]);
 
-    publishLocalTimerState(payload);
-  }, [authService, publishLocalTimerState, sound, notifications]);
-
-  // Set session type manually helper
-  const setSessionTypeManually = useCallback(
+  // Action: Explicitly switch session type
+  const switchSessionType = useCallback(
     (type: SessionType) => {
-      isCompletingRef.current = false;
-      isWakeSyncingRef.current = false;
-      sound.stopSilentKeepAlive(true);
-      notifications.cancelScheduledNotification();
+      if (statusRef.current === 'RUNNING') {
+        pause();
+      }
 
-      const now = authService.getServerNow();
-      targetEndTimeRef.current = null;
+      const duration = getDurationForType(type);
+      sessionTypeRef.current = type;
+      totalSecondsRef.current = duration;
+      remainingSecondsRef.current = duration;
       statusRef.current = 'IDLE';
-      setTargetEndTime(null);
+      targetEndTimeRef.current = null;
       timerRunIdRef.current = null;
 
-      const dur = getDurationForType(type);
-      sessionTypeRef.current = type;
-      totalSecondsRef.current = dur;
-      remainingSecondsRef.current = dur;
       setSessionType(type);
-      setTotalSeconds(dur);
-      setRemainingSeconds(dur);
+      setTotalSeconds(duration);
+      setRemainingSeconds(duration);
       setStatus('IDLE');
+      setTargetEndTime(null);
 
-      const payload: RemoteTimerState = {
+      const nowMs = Date.now();
+      publishLocalTimerState({
         sessionType: type,
         status: 'IDLE',
-        remainingSeconds: dur,
-        totalSeconds: dur,
+        remainingSeconds: duration,
+        totalSeconds: duration,
         targetEndTime: null,
         currentCycle: currentCycleRef.current,
         activeTagId: activeTagIdRef.current,
         timerRunId: null,
-        updatedAtMs: now,
-      };
-
-      publishLocalTimerState(payload);
+        updatedAtMs: nowMs,
+      });
     },
-    [getDurationForType, authService, publishLocalTimerState, sound, notifications]
+    [getDurationForType, pause, publishLocalTimerState]
   );
 
-  const toggleStartPause = () => {
-    if (status === 'RUNNING') {
-      pauseTimer();
+  const toggleStartPause = useCallback(() => {
+    if (statusRef.current === 'RUNNING') {
+      pause();
     } else {
-      startTimer();
+      start();
     }
-  };
-
-  // Subscribe to BroadcastChannel for zero-latency multi-tab sync on same machine
-  useEffect(() => {
-    const unsubscribe = subscribeTimerState((remote) => {
-      applyRemoteState(remote);
-    });
-    return unsubscribe;
-  }, [applyRemoteState]);
-
-  // Reset running timer when a wipe or factory reset occurs
-  useEffect(() => {
-    const unsubscribe = subscribeReset(() => {
-      resetTimer();
-    });
-    return unsubscribe;
-  }, [resetTimer]);
-
-  // Check immediately on auth login/mount
-  useEffect(() => {
-    if (auth.isAuthenticated) {
-      void checkRemoteTimer();
-    }
-  }, [auth.isAuthenticated, checkRemoteTimer]);
-
-  // Tab Title updates
-  useEffect(() => {
-    const safeSec = Math.max(0, Math.floor(remainingSeconds));
-    const mins = Math.floor(safeSec / 60);
-    const secs = safeSec % 60;
-    const timeFormatted = `${mins}:${secs.toString().padStart(2, '0')}`;
-    const badgeLabel =
-      sessionType === 'WORK'
-        ? 'Focus'
-        : sessionType === 'SHORT_BREAK'
-        ? 'Short break'
-        : 'Long break';
-
-    if (status === 'RUNNING') {
-      document.title = `${timeFormatted} - ${badgeLabel}`;
-    } else if (status === 'PAUSED') {
-      document.title = `Paused - ${badgeLabel}`;
-    } else {
-      document.title = 'Pomodor - Focus timer';
-    }
-  }, [remainingSeconds, status, sessionType]);
+  }, [pause, start]);
 
   const value: TimerContextValue = {
     state: {
@@ -1447,7 +1265,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       remainingSeconds,
       totalSeconds,
       currentCycle,
-      maxCycles: Math.max(1, settings.longBreakInterval || 4),
+      maxCycles: settings.longBreakInterval,
       activeTagId,
     },
     sessionType,
@@ -1456,22 +1274,29 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     totalSeconds,
     targetEndTime,
     currentCycle,
-    maxCycles: Math.max(1, settings.longBreakInterval || 4),
+    maxCycles: settings.longBreakInterval,
+    activeTagId,
+    start,
+    pause,
+    reset,
+    skip,
+    switchSessionType,
     toggleStartPause,
-    resetTimer,
-    skipInterval,
-    setSessionTypeManually,
+    resetTimer: reset,
+    skipInterval: skip,
+    setSessionTypeManually: switchSessionType,
+    peerPresence: peerPresenceRef.current,
   };
 
   return <TimerContext.Provider value={value}>{children}</TimerContext.Provider>;
 };
 
-export const useTimer = (): TimerContextValue => {
+export const useTimerContext = (): TimerContextValue => {
   const context = useContext(TimerContext);
   if (!context) {
-    throw new Error('useTimer must be used within a TimerProvider');
+    throw new Error('useTimerContext must be used within a TimerProvider');
   }
   return context;
 };
 
-export const useTimerContext = useTimer;
+export const useTimer = useTimerContext;

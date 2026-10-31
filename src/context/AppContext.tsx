@@ -13,6 +13,7 @@ import { ProfileRepository } from '../services/repository/ProfileRepository';
 import { AuthService } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
+import { useConvexSync } from '../hooks/useConvexSync';
 import {
   broadcastCoffeeCups,
   subscribeCoffeeCups,
@@ -21,10 +22,8 @@ import {
   broadcastSession,
   subscribeSessions,
   broadcastReset,
-  subscribeReset,
 } from '../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../utils/environment';
-import { toDateKey } from '../utils/dates';
 
 interface AppContextValue {
   // Environment
@@ -193,6 +192,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
 
+  // Convex Reactive Hooks & Mutations
+  const {
+    isConvexConfigured,
+    convexUser,
+    convexCoffee,
+    convexSessions,
+    setAuthToken,
+    mutations: convexMutations,
+  } = useConvexSync();
+
+  // Reactive adoption of Convex state
+  useEffect(() => {
+    if (convexUser) {
+      if (convexUser.tags) {
+        setTags(convexUser.tags as Tag[]);
+        tagRepository.saveAll(convexUser.tags as Tag[]);
+      }
+      if (convexUser.settings) {
+        setSettings(convexUser.settings);
+        settingsRepository.save(convexUser.settings);
+      }
+      const updatedProfile: UserProfile = {
+        ...profileRef.current,
+        id: convexUser.id,
+        email: convexUser.email,
+        displayName: convexUser.displayName,
+        avatarUrl: convexUser.avatarUrl,
+        avatarEmoji: convexUser.avatarEmoji,
+        dailyGoalMinutes: convexUser.dailyGoalMinutes,
+      };
+      setProfile(updatedProfile);
+      profileRepository.save(updatedProfile);
+    }
+  }, [convexUser]);
+
+  useEffect(() => {
+    if (convexCoffee) {
+      setCoffeeCups(convexCoffee as CoffeeCup[]);
+      coffeeRepository.saveAll(convexCoffee as CoffeeCup[]);
+    }
+  }, [convexCoffee]);
+
+  useEffect(() => {
+    if (convexSessions) {
+      setSessions(convexSessions as CompletedSession[]);
+      sessionRepository.saveAll(convexSessions as CompletedSession[]);
+    }
+  }, [convexSessions]);
+
   // Synchronize remote tags (including archive state) received from real-time polling or background sync
   const syncRemoteTags = useCallback(async (remoteTags: Tag[], remoteDeletedIds?: string[]) => {
     const deletedTagIds = authService.getDeletedTagIds();
@@ -262,6 +310,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Synchronize local data with Cloudflare D1
   const syncWithCloud = useCallback(async (force = false): Promise<void> => {
+    if (isConvexConfigured) {
+      // In Convex, reactive WebSocket subscriptions maintain live state automatically
+      return;
+    }
+
     if (!authService.getStoredToken()) return;
     if (isSyncingRef.current) {
       if (force) syncPendingRef.current = true;
@@ -275,7 +328,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     isSyncingRef.current = true;
-    const syncStartedMs = now;
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
 
     try {
@@ -301,89 +353,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const effectiveDeletedTagIds = authService.getDeletedTagIds();
       const effectiveDeletedCoffeeCupIds = authService.getDeletedCoffeeCupIds();
 
-      // 3. Merge tags using updatedAt timestamps (preserves archive/unarchive state across devices)
-      const finalTags = mergeTagLists(
-        currentTags,
-        cloudData?.tags || [],
-        effectiveDeletedTagIds
-      );
-      await tagRepository.saveAll(finalTags);
-      setTags(finalTags);
+      // 3. Synchronize Tags
+      const mergedTags = mergeTagLists(currentTags, cloudData?.tags || [], effectiveDeletedTagIds);
+      let finalTags = currentTags;
+      if (!areTagListsEqual(currentTags, mergedTags)) {
+        await tagRepository.saveAll(mergedTags);
+        finalTags = mergedTags;
+        setTags(mergedTags);
+        broadcastTags(mergedTags);
+      }
 
-      // 4. Merge sessions
-      const sessionMap = new Map<string, CompletedSession>();
-      currentSessions.forEach((s) => {
-        const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
-        sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
+      // 4. Synchronize Coffee Cups
+      const coffeeMap = new Map<string, CoffeeCup>();
+      localCoffee.forEach((c) => {
+        if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
+          coffeeMap.set(c.id, c);
+        }
       });
-      (cloudData?.sessions || []).forEach((s) => {
-        const effectiveTagId = s.tagId && effectiveDeletedTagIds.has(s.tagId) ? null : s.tagId;
-        sessionMap.set(s.id, { ...s, tagId: effectiveTagId });
+      (cloudData?.coffeeCups || []).forEach((c) => {
+        if (!effectiveDeletedCoffeeCupIds.has(c.id) && !coffeeMap.has(c.id)) {
+          coffeeMap.set(c.id, c);
+        }
       });
-      let finalSessions = Array.from(sessionMap.values()).sort(
+      const finalCoffee = Array.from(coffeeMap.values()).sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      if (finalCoffee.length !== localCoffee.length) {
+        await coffeeRepository.saveAll(finalCoffee);
+        setCoffeeCups(finalCoffee);
+      }
+
+      // 5. Synchronize Sessions
+      const localSessionMap = new Map(currentSessions.map((s) => [s.id, s]));
+      (cloudData?.sessions || []).forEach((remoteSession) => {
+        if (!localSessionMap.has(remoteSession.id)) {
+          localSessionMap.set(remoteSession.id, remoteSession);
+        }
+      });
+      const mergedSessions = Array.from(localSessionMap.values()).sort(
         (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
       );
-      if (isProduction()) {
-        finalSessions = finalSessions.filter(
-          (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')
-        );
+      const finalSessions = isProduction()
+        ? mergedSessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
+        : mergedSessions;
+      if (finalSessions.length !== currentSessions.length) {
+        await sessionRepository.saveAll(finalSessions);
+        setSessions(finalSessions);
       }
-      await sessionRepository.saveAll(finalSessions);
-      setSessions(finalSessions);
 
-      // 5. Merge settings: adopt cloudData.settings if user has no un-pushed local edits
+      // 6. Synchronize Settings
       let finalSettings = currentSettings;
       if (cloudData?.settings) {
-        const hasUnpushedLocalSettingsEdit =
-          lastLocalSettingsEditMsRef.current > 0 && syncStartedMs <= lastLocalSettingsEditMsRef.current;
-        if (!hasUnpushedLocalSettingsEdit) {
-          finalSettings = { ...currentSettings, ...cloudData.settings };
-          settingsRef.current = finalSettings;
-          await settingsRepository.save(finalSettings);
-          setSettings(finalSettings);
+        const cloudSettingsTs = cloudData.settings.updatedAt ? Date.parse(cloudData.settings.updatedAt) : 0;
+        const localSettingsEditedRecently = lastLocalSettingsEditMsRef.current > 0;
+        if (!localSettingsEditedRecently && cloudSettingsTs > lastLocalSettingsEditMsRef.current) {
+          const { updatedAt: _, ...settingsToAdopt } = cloudData.settings;
+          const merged = { ...currentSettings, ...settingsToAdopt };
+          await settingsRepository.save(merged);
+          setSettings(merged);
+          settingsRef.current = merged;
+          finalSettings = merged;
           lastLocalSettingsEditMsRef.current = 0;
         } else {
           finalSettings = settingsRef.current;
         }
       }
 
-      // 6. Merge coffee cups EXCLUDING any deleted coffee cups
-      const cupMap = new Map<string, CoffeeCup>();
-      localCoffee.forEach((c) => {
-        if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
-          const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
-          cupMap.set(c.id, { ...c, tagId: effectiveTagId });
-        }
-      });
-      (cloudData?.coffeeCups || []).forEach((c) => {
-        if (!effectiveDeletedCoffeeCupIds.has(c.id)) {
-          const effectiveTagId = c.tagId && effectiveDeletedTagIds.has(c.tagId) ? null : c.tagId;
-          cupMap.set(c.id, { ...c, tagId: effectiveTagId });
-        }
-      });
-      const finalCoffee = Array.from(cupMap.values()).sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-      await coffeeRepository.saveAll(finalCoffee);
-      setCoffeeCups(finalCoffee);
-
-      // 7. Merge profile: adopt cloudData.profile if user has no un-pushed local edits
+      // 7. Synchronize Profile
       let finalProfile = currentProfile;
       if (cloudData?.profile) {
-        const hasUnpushedLocalProfileEdit =
-          lastLocalProfileEditMsRef.current > 0 && syncStartedMs <= lastLocalProfileEditMsRef.current;
-        if (!hasUnpushedLocalProfileEdit) {
-          finalProfile = { ...currentProfile, ...cloudData.profile };
-          profileRef.current = finalProfile;
-          await profileRepository.save(finalProfile);
-          setProfile(finalProfile);
+        const localProfileEditedRecently = lastLocalProfileEditMsRef.current > 0;
+        if (!localProfileEditedRecently) {
+          const mergedProfile: UserProfile = {
+            ...currentProfile,
+            id: cloudData.profile.id ?? currentProfile.id,
+            email: cloudData.profile.email ?? currentProfile.email,
+            avatarUrl: cloudData.profile.avatarUrl ?? currentProfile.avatarUrl,
+            avatarEmoji: cloudData.profile.avatarEmoji ?? currentProfile.avatarEmoji,
+            displayName: cloudData.profile.displayName ?? currentProfile.displayName,
+            dailyGoalMinutes: cloudData.profile.dailyGoalMinutes ?? currentProfile.dailyGoalMinutes,
+          };
+          await profileRepository.save(mergedProfile);
+          setProfile(mergedProfile);
+          profileRef.current = mergedProfile;
+          finalProfile = mergedProfile;
           lastLocalProfileEditMsRef.current = 0;
         } else {
           finalProfile = profileRef.current;
         }
       }
 
-      // 8. Push only incremental / new records to Cloudflare Worker to avoid massive batch statements and timeout errors
+      // 8. Push only incremental / new records to Cloudflare Worker
       const cloudSessionIdSet = new Set((cloudData?.sessions || []).map((s) => s.id));
       const sessionsToPush = finalSessions.filter(
         (s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-') && !cloudSessionIdSet.has(s.id)
@@ -443,7 +503,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }, 1000);
       }
     }
-  }, []);
+  }, [isConvexConfigured]);
 
   // Multi-tab coffee, tag, and completed session broadcast synchronization
   useEffect(() => {
@@ -486,6 +546,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncError: null,
       });
 
+      if (isConvexConfigured) {
+        setAuthToken(idToken);
+      }
+
       // Update local profile with Google identity and auto-activate Google avatar
       const updatedProfile: UserProfile = {
         ...profileRef.current,
@@ -515,6 +579,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logout = (): void => {
     authService.logout();
     notificationService.setAuthToken(null);
+    if (isConvexConfigured) {
+      setAuthToken(null);
+    }
     setAuth({
       isAuthenticated: false,
       user: null,
@@ -580,6 +647,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const storedToken = authService.getStoredToken();
       if (storedToken) {
         notificationService.setAuthToken(storedToken);
+        if (isConvexConfigured) {
+          setAuthToken(storedToken);
+        }
         const verifiedUser = await authService.verifySession();
         if (verifiedUser) {
           setAuth((prev) => ({
@@ -602,105 +672,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
     }
+
     init();
-  }, [syncWithCloud, setActiveTagId]);
+  }, [setActiveTagId, syncWithCloud, isConvexConfigured, setAuthToken]);
 
-  // Listen for reset events broadcast from other tabs
-  useEffect(() => {
-    const unsub = subscribeReset((scope) => {
-      if (scope === 'sessions-only') {
-        sessionRepository.clear();
-        coffeeRepository.clear();
-        authService.clearDeletedCoffeeCupIds();
-        setSessions([]);
-        setCoffeeCups([]);
-      } else if (scope === 'factory-reset') {
-        sessionRepository.clear();
-        coffeeRepository.clear();
-        authService.clearDeletedTagIds();
-        authService.clearDeletedCoffeeCupIds();
-        setSessions([]);
-        setCoffeeCups([]);
-        tagRepository.getAll().then((t) => {
-          setTags(t);
-          setActiveTagId(t.find((tag) => !tag.isArchived)?.id ?? null);
-        });
-        settingsRepository.get().then((s) => {
-          settingsRef.current = s;
-          setSettings(s);
-        });
-        profileRepository.get().then((p) => {
-          profileRef.current = p;
-          setProfile(p);
-        });
-      }
-    });
-    return unsub;
-  }, [setActiveTagId]);
-
-  // Active unarchived tags sorted by most recently completed Pomodoro (sessionType === 'WORK')
-  const activeTags = useMemo(() => {
-    const unarchived = tags.filter((t) => !t.isArchived);
-
-    // Build map of tagId -> latest completed WORK session timestamp in milliseconds
-    const latestWorkMap = new Map<string, number>();
-    for (const session of sessions) {
-      if (session.sessionType === 'WORK' && session.tagId) {
-        const time = new Date(session.completedAt).getTime();
-        if (!Number.isNaN(time)) {
-          const existing = latestWorkMap.get(session.tagId) || 0;
-          if (time > existing) {
-            latestWorkMap.set(session.tagId, time);
-          }
-        }
-      }
-    }
-
-    return [...unarchived].sort((a, b) => {
-      const timeA = latestWorkMap.get(a.id) || 0;
-      const timeB = latestWorkMap.get(b.id) || 0;
-
-      // Both have completed Pomodoros: most recently completed first
-      if (timeA > 0 && timeB > 0) {
-        if (timeA !== timeB) return timeB - timeA;
-      }
-
-      // One has completed Pomodoros and the other doesn't: used tags come first
-      if (timeA > 0 && timeB === 0) return -1;
-      if (timeB > 0 && timeA === 0) return 1;
-
-      // Neither has completed Pomodoros: sort by createdAt DESC (newest tags first)
-      const createdA = new Date(a.createdAt || 0).getTime() || 0;
-      const createdB = new Date(b.createdAt || 0).getTime() || 0;
-      if (createdA !== createdB) {
-        return createdB - createdA;
-      }
-
-      // Stable fallback: alphabetical by name
-      return a.name.localeCompare(b.name);
-    });
-  }, [tags, sessions]);
-
-  useEffect(() => {
-    if (activeTagId !== null && tags.length > 0) {
-      const exists = tags.some((t) => t.id === activeTagId && !t.isArchived);
-      if (!exists) {
-        setActiveTagId(null);
-      }
-    }
-  }, [tags, activeTagId, setActiveTagId]);
-
-  // When switching views to Statistics, guarantee data is fresh from the cloud (only on transition into stats)
-  const prevViewRef = useRef(currentView);
-  useEffect(() => {
-    const prev = prevViewRef.current;
-    prevViewRef.current = currentView;
-    if (currentView === 'stats' && prev !== 'stats' && auth.isAuthenticated) {
-      void syncWithCloud();
-    }
-  }, [currentView, auth.isAuthenticated, syncWithCloud]);
-
-  // Profile Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
+  // Profile Operations: save locally and push directly to cloud
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {
     const editMs = Date.now();
     lastLocalProfileEditMsRef.current = editMs;
@@ -708,7 +684,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     profileRef.current = merged;
     setProfile(merged);
     await profileRepository.save(merged);
-    if (auth.isAuthenticated) {
+
+    if (isConvexConfigured) {
+      convexMutations.updateProfile({
+        displayName: newProfile.displayName,
+        avatarEmoji: newProfile.avatarEmoji,
+        dailyGoalMinutes: newProfile.dailyGoalMinutes,
+      }).catch(console.warn);
+    } else if (auth.isAuthenticated) {
       await authService.pushCloudData({
         profile: {
           displayName: merged.displayName,
@@ -731,7 +714,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTags(updated);
     setActiveTagId(created.id);
     broadcastTags(updated);
-    if (auth.isAuthenticated) {
+
+    if (isConvexConfigured) {
+      convexMutations.createTag({
+        name: input.name,
+        color: input.color,
+      }).catch(console.warn);
+    } else if (auth.isAuthenticated) {
       authService.upsertTagRemote(created).then((remoteTags) => {
         if (remoteTags) {
           syncRemoteTags(remoteTags);
@@ -746,7 +735,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = await tagRepository.getAll();
     setTags(updated);
     broadcastTags(updated);
-    if (auth.isAuthenticated && result) {
+
+    if (isConvexConfigured) {
+      convexMutations.updateTag({
+        id,
+        name: updates.name,
+        color: updates.color,
+        isArchived: updates.isArchived,
+      }).catch(console.warn);
+    } else if (auth.isAuthenticated && result) {
       authService.upsertTagRemote(result).then((remoteTags) => {
         if (remoteTags) {
           syncRemoteTags(remoteTags);
@@ -765,7 +762,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActiveTagId(nextActive?.id ?? null);
     }
     broadcastTags(updated);
-    if (auth.isAuthenticated && result) {
+
+    if (isConvexConfigured) {
+      convexMutations.updateTag({ id, isArchived: true }).catch(console.warn);
+    } else if (auth.isAuthenticated && result) {
       authService.upsertTagRemote(result).then((remoteTags) => {
         if (remoteTags) {
           syncRemoteTags(remoteTags);
@@ -780,7 +780,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = await tagRepository.getAll();
     setTags(updated);
     broadcastTags(updated);
-    if (auth.isAuthenticated && result) {
+
+    if (isConvexConfigured) {
+      convexMutations.updateTag({ id, isArchived: false }).catch(console.warn);
+    } else if (auth.isAuthenticated && result) {
       authService.upsertTagRemote(result).then((remoteTags) => {
         if (remoteTags) {
           syncRemoteTags(remoteTags);
@@ -791,26 +794,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTag = async (id: string): Promise<boolean> => {
-    // 1. Record in deleted tags tracking set
     authService.addDeletedTagId(id);
-
-    // 2. Delete locally from repository
     const success = await tagRepository.delete(id);
 
-    // 3. Unassign sessions that had this tag
     const currentSessions = await sessionRepository.getAll();
     const updatedSessions = currentSessions.map((s) => (s.tagId === id ? { ...s, tagId: null } : s));
     await sessionRepository.saveAll(updatedSessions);
     setSessions(updatedSessions);
 
-    // 3.5 Unassign coffee cups that had this tag
     const currentCoffee = await coffeeRepository.getAll();
     const updatedCoffee = currentCoffee.map((cup) => (cup.tagId === id ? { ...cup, tagId: null } : cup));
     await coffeeRepository.saveAll(updatedCoffee);
     setCoffeeCups(updatedCoffee);
     broadcastCoffeeCups(updatedCoffee);
 
-    // 4. Update tags in state
     const updatedTags = await tagRepository.getAll();
     setTags(updatedTags);
     if (activeTagId === id) {
@@ -819,8 +816,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     broadcastTags(updatedTags);
 
-    // 5. If authenticated, explicitly delete on server and push
-    if (auth.isAuthenticated) {
+    if (isConvexConfigured) {
+      convexMutations.removeTag({ id }).catch(console.warn);
+    } else if (auth.isAuthenticated) {
       await authService.deleteTag(id);
       syncWithCloud();
     }
@@ -835,7 +833,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = await coffeeRepository.getAll();
     setCoffeeCups(updated);
     broadcastCoffeeCups(updated);
-    if (auth.isAuthenticated) {
+
+    if (isConvexConfigured) {
+      convexMutations.addCup({
+        date: today,
+        tagId: tagId || undefined,
+        createdAt: created.createdAt,
+      }).catch(console.warn);
+    } else if (auth.isAuthenticated) {
       authService.addCoffeeCupRemote(created).then((remoteCups) => {
         if (remoteCups) {
           syncRemoteCoffeeCups(remoteCups);
@@ -853,7 +858,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updated = await coffeeRepository.getAll();
       setCoffeeCups(updated);
       broadcastCoffeeCups(updated);
-      if (auth.isAuthenticated) {
+
+      if (isConvexConfigured) {
+        convexMutations.removeCup({ id: removedCup.id as any }).catch(console.warn);
+      } else if (auth.isAuthenticated) {
         authService.removeCoffeeCupRemote(removedCup.id);
       }
       return true;
@@ -861,7 +869,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   };
 
-  // Session Operations: instant direct remote recording + multi-tab broadcast + cloud sync
+  // Session Operations
   const recordSession = useCallback(
     async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
       const created = await sessionRepository.add(sessionData);
@@ -870,31 +878,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [...prev.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-')), created];
       });
       broadcastSession(created);
-      if (auth.isAuthenticated) {
+
+      if (isConvexConfigured) {
+        convexMutations.recordSession({
+          tagId: sessionData.tagId || undefined,
+          sessionType: sessionData.sessionType,
+          durationSeconds: sessionData.durationSeconds,
+          completedAt: created.completedAt,
+        }).catch(console.warn);
+      } else if (auth.isAuthenticated) {
         void authService.recordSessionRemote(created);
         void syncWithCloud();
       }
       return created;
     },
-    [auth.isAuthenticated, syncWithCloud]
+    [auth.isAuthenticated, syncWithCloud, isConvexConfigured, convexMutations]
   );
 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();
-    await coffeeRepository.clear();
-    authService.clearDeletedCoffeeCupIds();
-
     setSessions([]);
-    setCoffeeCups([]);
-
-    broadcastCoffeeCups([]);
-    broadcastReset('sessions-only');
-
-    if (auth.isAuthenticated) {
-      await authService.pushCloudData({
-        clearSessions: true,
-        clearHistory: true,
-      });
+    if (isConvexConfigured) {
+      convexMutations.clearSessions({}).catch(console.warn);
+    } else if (auth.isAuthenticated) {
       await syncWithCloud();
     }
   };
@@ -905,7 +911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSessions(samples);
   };
 
-  // Settings Operations: save locally and push directly to cloud so stale cloud state never overwrites local changes
+  // Settings Operations
   const updateSettings = async (newValues: Partial<UserSettings>): Promise<void> => {
     const editMs = Date.now();
     lastLocalSettingsEditMsRef.current = editMs;
@@ -913,7 +919,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     settingsRef.current = merged;
     setSettings(merged);
     await settingsRepository.save(merged);
-    if (auth.isAuthenticated) {
+
+    if (isConvexConfigured) {
+      convexMutations.updateSettings(newValues).catch(console.warn);
+    } else if (auth.isAuthenticated) {
       await authService.pushCloudData({
         settings: merged,
       });
@@ -948,227 +957,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (mode === 'replace') {
       await sessionRepository.clear();
       await coffeeRepository.clear();
+      await tagRepository.resetToDefaults();
       authService.clearDeletedTagIds();
       authService.clearDeletedCoffeeCupIds();
-
-      // 1. Sanitize incoming tags: guarantee valid id, name, color, isArchived, and updatedAt
-      const newTags: Tag[] = (data.tags || []).map((t) => ({
-        id: t.id || ('tag-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7)),
-        name: (t.name || 'Untitled Tag').trim(),
-        color: t.color || '#7E57C2',
-        isArchived: Boolean(t.isArchived),
-        createdAt: t.createdAt || new Date().toISOString(),
-        updatedAt: t.updatedAt || t.createdAt || new Date().toISOString(),
-      }));
-
-      // 2. Filter sessions (purge sample/seed sessions in production)
-      const newSessions: CompletedSession[] = (data.sessions || []).filter((s) => {
-        if (!s || !s.id || !s.completedAt) return false;
-        if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) {
-          return false;
-        }
-        return true;
-      });
-
-      // 3. Sanitize coffee cups: guarantee valid id and date
-      const newCoffee: CoffeeCup[] = (data.coffeeCups || []).map((c) => ({
-        id: c.id || ('cup-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7)),
-        tagId: c.tagId || null,
-        date: c.date || (c.createdAt ? toDateKey(new Date(c.createdAt)) : toDateKey(new Date())),
-        createdAt: c.createdAt || new Date().toISOString(),
-      }));
-
-      const newSettings: UserSettings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-      const newProfile: UserProfile = { ...DEFAULT_PROFILE, ...(data.profile || {}) };
-
-      await tagRepository.saveAll(newTags);
-      await sessionRepository.saveAll(newSessions);
-      await coffeeRepository.saveAll(newCoffee);
-      await settingsRepository.save(newSettings);
-      await profileRepository.save(newProfile);
-
-      settingsRef.current = newSettings;
-      profileRef.current = newProfile;
-      setTags(newTags);
-      setSessions(newSessions);
-      setCoffeeCups(newCoffee);
-      setSettings(newSettings);
-      setProfile(newProfile);
-
-      // Validate activeTagId after replacement
-      const activeStillValid = newTags.some((t) => t.id === activeTagId && !t.isArchived);
-      if (!activeStillValid) {
-        setActiveTagId(newTags.find((t) => !t.isArchived)?.id ?? null);
+      if (isConvexConfigured) {
+        convexMutations.clearSessions({}).catch(console.warn);
+        convexMutations.clearCoffee({}).catch(console.warn);
       }
-
-      // Broadcast changes across tabs
-      broadcastTags(newTags);
-      broadcastCoffeeCups(newCoffee);
-      if (newSessions.length > 0) {
-        broadcastSession(newSessions[newSessions.length - 1]);
-      }
-
-      if (auth.isAuthenticated) {
-        await authService.pushCloudData({
-          mode: 'replace',
-          tags: newTags,
-          sessions: newSessions,
-          coffeeCups: newCoffee,
-          settings: newSettings,
-          profile: newProfile,
-        });
-      }
-
-      return { sessionsAdded: newSessions.length, tagsAdded: newTags.length, coffeeAdded: newCoffee.length };
-    } else {
-      // Merge mode
-      const currentTags = await tagRepository.getAll();
-      const currentSessions = await sessionRepository.getAll();
-      const currentCoffee = await coffeeRepository.getAll();
-
-      // 1. Merge tags
-      const tagMap = new Map<string, Tag>();
-      currentTags.forEach((t) => tagMap.set(t.id, t));
-      let tagsAdded = 0;
-      (data.tags || []).forEach((t) => {
-        const sanitizedTag: Tag = {
-          id: t.id || ('tag-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7)),
-          name: (t.name || 'Untitled Tag').trim(),
-          color: t.color || '#7E57C2',
-          isArchived: Boolean(t.isArchived),
-          createdAt: t.createdAt || new Date().toISOString(),
-          updatedAt: t.updatedAt || t.createdAt || new Date().toISOString(),
-        };
-        const existing = tagMap.get(sanitizedTag.id);
-        if (!existing) {
-          tagMap.set(sanitizedTag.id, sanitizedTag);
-          tagsAdded++;
-        } else {
-          // If incoming tag has newer updatedAt, adopt updates
-          const existingTs = getTagTimestampMs(existing);
-          const incomingTs = getTagTimestampMs(sanitizedTag);
-          if (incomingTs > existingTs) {
-            tagMap.set(sanitizedTag.id, sanitizedTag);
-          }
-        }
-      });
-      const mergedTags = Array.from(tagMap.values());
-      await tagRepository.saveAll(mergedTags);
-      setTags(mergedTags);
-
-      // 2. Merge sessions
-      const sessionMap = new Map<string, CompletedSession>();
-      currentSessions.forEach((s) => sessionMap.set(s.id, s));
-      let sessionsAdded = 0;
-      (data.sessions || []).forEach((s) => {
-        if (!s || !s.id || !s.completedAt) return;
-        if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) {
-          return;
-        }
-        if (!sessionMap.has(s.id)) {
-          sessionMap.set(s.id, s);
-          sessionsAdded++;
-        }
-      });
-      const mergedSessions = Array.from(sessionMap.values()).sort(
-        (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
-      );
-      await sessionRepository.saveAll(mergedSessions);
-      setSessions(mergedSessions);
-
-      // 3. Merge coffee cups
-      const coffeeMap = new Map<string, CoffeeCup>();
-      currentCoffee.forEach((c) => coffeeMap.set(c.id, c));
-      let coffeeAdded = 0;
-      (data.coffeeCups || []).forEach((c) => {
-        if (!c || !c.id) return;
-        const sanitizedCup: CoffeeCup = {
-          id: c.id,
-          tagId: c.tagId || null,
-          date: c.date || (c.createdAt ? toDateKey(new Date(c.createdAt)) : toDateKey(new Date())),
-          createdAt: c.createdAt || new Date().toISOString(),
-        };
-        if (!coffeeMap.has(sanitizedCup.id)) {
-          coffeeMap.set(sanitizedCup.id, sanitizedCup);
-          coffeeAdded++;
-        }
-      });
-      const mergedCoffee = Array.from(coffeeMap.values()).sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-      await coffeeRepository.saveAll(mergedCoffee);
-      setCoffeeCups(mergedCoffee);
-
-      // 4. Merge settings and profile if provided
-      if (data.settings) {
-        const curSettings = await settingsRepository.get();
-        const mergedSettings = { ...curSettings, ...data.settings };
-        await settingsRepository.save(mergedSettings);
-        settingsRef.current = mergedSettings;
-        setSettings(mergedSettings);
-      }
-      if (data.profile) {
-        const curProfile = await profileRepository.get();
-        const mergedProfile = { ...curProfile, ...data.profile };
-        await profileRepository.save(mergedProfile);
-        profileRef.current = mergedProfile;
-        setProfile(mergedProfile);
-      }
-
-      // 5. Broadcast to other open tabs
-      broadcastTags(mergedTags);
-      broadcastCoffeeCups(mergedCoffee);
-
-      if (auth.isAuthenticated) {
-        await syncWithCloud();
-      }
-
-      return { sessionsAdded, tagsAdded, coffeeAdded };
     }
+
+    const newTags = data.tags.filter(
+      (t): t is Tag =>
+        typeof t.id === 'string' &&
+        t.id.trim().length > 0 &&
+        typeof t.name === 'string' &&
+        typeof t.color === 'string' &&
+        typeof t.isArchived === 'boolean'
+    );
+    await tagRepository.saveAll(newTags);
+    setTags(newTags);
+
+    const validSessions = data.sessions.filter(
+      (s): s is CompletedSession =>
+        typeof s.sessionType === 'string' &&
+        ['WORK', 'SHORT_BREAK', 'LONG_BREAK'].includes(s.sessionType) &&
+        typeof s.durationSeconds === 'number' &&
+        s.durationSeconds > 0 &&
+        typeof s.completedAt === 'string' &&
+        !isNaN(new Date(s.completedAt).getTime())
+    );
+    await sessionRepository.saveAll(validSessions);
+    setSessions(validSessions);
+
+    const validCoffee = (data.coffeeCups || []).filter(
+      (c): c is CoffeeCup =>
+        typeof c.id === 'string' &&
+        typeof c.date === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(c.date)
+    );
+    await coffeeRepository.saveAll(validCoffee);
+    setCoffeeCups(validCoffee);
+
+    if (data.settings) {
+      await updateSettings(data.settings);
+    }
+    if (data.profile) {
+      await updateProfile(data.profile);
+    }
+
+    if (isConvexConfigured) {
+      convexMutations.importBackup({
+        tags: newTags.map((t) => ({
+          id: t.id,
+          name: t.name,
+          color: t.color,
+          isArchived: t.isArchived,
+        })),
+        sessions: validSessions.map((s) => ({
+          tagId: s.tagId || undefined,
+          sessionType: s.sessionType,
+          durationSeconds: s.durationSeconds,
+          completedAt: s.completedAt,
+        })),
+        coffeeCups: validCoffee.map((c) => ({
+          date: c.date,
+          tagId: c.tagId || undefined,
+          createdAt: c.createdAt,
+        })),
+      }).catch(console.warn);
+    } else if (auth.isAuthenticated) {
+      await syncWithCloud();
+    }
+
+    return {
+      sessionsAdded: validSessions.length,
+      tagsAdded: newTags.length,
+      coffeeAdded: validCoffee.length,
+    };
   };
 
   const resetAllData = async (scope: 'sessions-only' | 'factory-reset'): Promise<void> => {
+    broadcastReset(scope);
     if (scope === 'sessions-only') {
-      await clearSessions();
+      await sessionRepository.clear();
+      setSessions([]);
+      if (isConvexConfigured) {
+        convexMutations.clearSessions({}).catch(console.warn);
+      }
     } else {
-      // Factory reset
       await sessionRepository.clear();
       await coffeeRepository.clear();
-      authService.clearDeletedTagIds();
-      authService.clearDeletedCoffeeCupIds();
-
       const defaultTags = await tagRepository.resetToDefaults();
       const defaultSettings = await settingsRepository.resetToDefaults();
       const defaultProfile = await profileRepository.resetToDefaults();
 
-      settingsRef.current = defaultSettings;
-      profileRef.current = defaultProfile;
       setSessions([]);
       setCoffeeCups([]);
       setTags(defaultTags);
       setSettings(defaultSettings);
       setProfile(defaultProfile);
+      settingsRef.current = defaultSettings;
+      profileRef.current = defaultProfile;
       setActiveTagId(defaultTags[0]?.id || null);
 
-      lastLocalSettingsEditMsRef.current = 0;
-      lastLocalProfileEditMsRef.current = 0;
-
-      broadcastTags(defaultTags);
-      broadcastCoffeeCups([]);
-      broadcastReset('factory-reset');
-
-      if (auth.isAuthenticated) {
-        await authService.pushCloudData({
-          mode: 'replace',
-          tags: defaultTags,
-          sessions: [],
-          coffeeCups: [],
-          settings: defaultSettings,
-          profile: defaultProfile,
-        });
+      if (isConvexConfigured) {
+        convexMutations.clearSessions({}).catch(console.warn);
+        convexMutations.clearCoffee({}).catch(console.warn);
+        convexMutations.updateSettings(defaultSettings).catch(console.warn);
+        convexMutations.updateProfile(defaultProfile).catch(console.warn);
       }
     }
   };
+
+  const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
 
   const value: AppContextValue = {
     isDemoEnvironment: isDemo,
