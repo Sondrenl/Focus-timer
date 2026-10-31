@@ -312,49 +312,7 @@ export const onTimerCompleted = internalMutation({
       date,
     });
 
-    // 2. Maintain daily aggregate stats
-    const isWork = timer.sessionType === "WORK";
-    const isShortBreak = timer.sessionType === "SHORT_BREAK";
-    const isLongBreak = timer.sessionType === "LONG_BREAK";
-
-    const daily = await ctx.db
-      .query("daily_stats")
-      .withIndex("by_user_date", (q) =>
-        q.eq("userId", args.userId).eq("date", date)
-      )
-      .first();
-
-    if (daily) {
-      const tagSeconds = { ...(daily.tagSeconds ?? {}) };
-      if (isWork && timer.tagId) {
-        tagSeconds[timer.tagId] = (tagSeconds[timer.tagId] ?? 0) + timer.totalSeconds;
-      }
-      await ctx.db.patch(daily._id, {
-        workSeconds: daily.workSeconds + (isWork ? timer.totalSeconds : 0),
-        workSessionsCount: daily.workSessionsCount + (isWork ? 1 : 0),
-        shortBreakSeconds: daily.shortBreakSeconds + (isShortBreak ? timer.totalSeconds : 0),
-        longBreakSeconds: daily.longBreakSeconds + (isLongBreak ? timer.totalSeconds : 0),
-        tagSeconds,
-      });
-    } else {
-      const tagSeconds: Record<string, number> = {};
-      if (isWork && timer.tagId) {
-        tagSeconds[timer.tagId] = timer.totalSeconds;
-      }
-      await ctx.db.insert("daily_stats", {
-        userId: args.userId,
-        date,
-        workSeconds: isWork ? timer.totalSeconds : 0,
-        workSessionsCount: isWork ? 1 : 0,
-        shortBreakSeconds: isShortBreak ? timer.totalSeconds : 0,
-        longBreakSeconds: isLongBreak ? timer.totalSeconds : 0,
-        coffeeCount: 0,
-        tagSeconds,
-        tagCoffee: {},
-      });
-    }
-
-    // 3. Mark active timer as COMPLETED
+    // 2. Mark active timer as COMPLETED
     await ctx.db.patch(timer._id, {
       status: "COMPLETED" as const,
       remainingSeconds: 0,

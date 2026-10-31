@@ -56,7 +56,6 @@ export const addCup = mutation({
     const user = await requireUser(ctx, true);
     const now = args.createdAt ?? new Date().toISOString();
 
-    // 1. Record raw cup log
     const cupId = await ctx.db.insert("coffee_cups", {
       userId: user._id,
       date: args.date,
@@ -64,41 +63,6 @@ export const addCup = mutation({
       createdAt: now,
       timestamp: Date.now(),
     });
-
-    // 2. Atomically maintain daily summary aggregate
-    const daily = await ctx.db
-      .query("daily_stats")
-      .withIndex("by_user_date", (q) =>
-        q.eq("userId", user._id).eq("date", args.date)
-      )
-      .first();
-
-    if (daily) {
-      const tagCoffee = { ...(daily.tagCoffee ?? {}) };
-      if (args.tagId) {
-        tagCoffee[args.tagId] = (tagCoffee[args.tagId] ?? 0) + 1;
-      }
-      await ctx.db.patch(daily._id, {
-        coffeeCount: daily.coffeeCount + 1,
-        tagCoffee,
-      });
-    } else {
-      const tagCoffee: Record<string, number> = {};
-      if (args.tagId) {
-        tagCoffee[args.tagId] = 1;
-      }
-      await ctx.db.insert("daily_stats", {
-        userId: user._id,
-        date: args.date,
-        workSeconds: 0,
-        workSessionsCount: 0,
-        shortBreakSeconds: 0,
-        longBreakSeconds: 0,
-        coffeeCount: 1,
-        tagSeconds: {},
-        tagCoffee,
-      });
-    }
 
     return {
       id: cupId,
@@ -118,28 +82,7 @@ export const removeCup = mutation({
       throw new Error("Coffee cup not found or unauthorized");
     }
 
-    // 1. Remove cup document
     await ctx.db.delete(args.id);
-
-    // 2. Adjust daily stats
-    const daily = await ctx.db
-      .query("daily_stats")
-      .withIndex("by_user_date", (q) =>
-        q.eq("userId", user._id).eq("date", cup.date)
-      )
-      .first();
-
-    if (daily) {
-      const tagCoffee = { ...(daily.tagCoffee ?? {}) };
-      if (cup.tagId && tagCoffee[cup.tagId]) {
-        tagCoffee[cup.tagId] = Math.max(0, tagCoffee[cup.tagId] - 1);
-      }
-      await ctx.db.patch(daily._id, {
-        coffeeCount: Math.max(0, daily.coffeeCount - 1),
-        tagCoffee,
-      });
-    }
-
     return true;
   },
 });
@@ -155,18 +98,6 @@ export const clear = mutation({
 
     for (const cup of cups) {
       await ctx.db.delete(cup._id);
-    }
-
-    const allDaily = await ctx.db
-      .query("daily_stats")
-      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-      .collect();
-
-    for (const d of allDaily) {
-      await ctx.db.patch(d._id, {
-        coffeeCount: 0,
-        tagCoffee: {},
-      });
     }
 
     return true;

@@ -11,7 +11,6 @@ export default defineSchema({
     avatarEmoji: v.string(),
     dailyGoalMinutes: v.number(),
     createdAt: v.string(),
-    // Embedded preferences: single atomic query on app boot
     settings: v.object({
       workDurationMinutes: v.number(),
       shortBreakDurationMinutes: v.number(),
@@ -49,7 +48,6 @@ export default defineSchema({
     timerRunId: v.optional(v.string()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
-    // Multi-device peer presence embedded directly into timer state
     peerPresence: v.optional(
       v.object({
         desktopActive: v.boolean(),
@@ -81,34 +79,21 @@ export default defineSchema({
       v.literal("LONG_BREAK")
     ),
     durationSeconds: v.number(),
-    completedAt: v.string(),
-    date: v.string(), // "YYYY-MM-DD" for fast indexed date-range queries
+    completedAt: v.string(), // ISO string with time for peak hour analytics
+    date: v.string(),        // "YYYY-MM-DD" for fast indexed date range lookups
   })
     .index("by_user", ["userId"])
-    .index("by_user_completed", ["userId", "completedAt"])
-    .index("by_user_date", ["userId", "date"]),
+    .index("by_user_date", ["userId", "date"])
+    .index("by_user_completed", ["userId", "completedAt"]),
 
   // 5. Coffee Log: Individual timestamped cups
   coffee_cups: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
-    date: v.string(), // "YYYY-MM-DD"
+    date: v.string(),        // "YYYY-MM-DD"
     createdAt: v.string(),
     timestamp: v.number(),
   })
     .index("by_user", ["userId"])
     .index("by_user_date", ["userId", "date"]),
-
-  // 6. Pre-computed Daily Aggregates for Instant Analytics (Day, Week, Month, Year)
-  daily_stats: defineTable({
-    userId: v.id("users"),
-    date: v.string(), // "YYYY-MM-DD"
-    workSeconds: v.number(),
-    workSessionsCount: v.number(),
-    shortBreakSeconds: v.number(),
-    longBreakSeconds: v.number(),
-    coffeeCount: v.number(),
-    tagSeconds: v.record(v.string(), v.number()), // tagId -> total work seconds
-    tagCoffee: v.record(v.string(), v.number()),  // tagId -> coffee count
-  }).index("by_user_date", ["userId", "date"]),
 });

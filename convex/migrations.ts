@@ -49,36 +49,7 @@ export const importBackup = mutation({
       });
     }
 
-    // Daily aggregates map to populate in bulk
-    const dailyMap: Record<
-      string,
-      {
-        workSeconds: number;
-        workSessionsCount: number;
-        shortBreakSeconds: number;
-        longBreakSeconds: number;
-        coffeeCount: number;
-        tagSeconds: Record<string, number>;
-        tagCoffee: Record<string, number>;
-      }
-    > = {};
-
-    const getDaily = (date: string) => {
-      if (!dailyMap[date]) {
-        dailyMap[date] = {
-          workSeconds: 0,
-          workSessionsCount: 0,
-          shortBreakSeconds: 0,
-          longBreakSeconds: 0,
-          coffeeCount: 0,
-          tagSeconds: {},
-          tagCoffee: {},
-        };
-      }
-      return dailyMap[date];
-    };
-
-    // 2. Ingest sessions & aggregate
+    // 2. Ingest sessions
     for (const session of args.sessions) {
       const date = session.completedAt.slice(0, 10);
       await ctx.db.insert("sessions", {
@@ -89,22 +60,9 @@ export const importBackup = mutation({
         completedAt: session.completedAt,
         date,
       });
-
-      const d = getDaily(date);
-      if (session.sessionType === "WORK") {
-        d.workSeconds += session.durationSeconds;
-        d.workSessionsCount += 1;
-        if (session.tagId) {
-          d.tagSeconds[session.tagId] = (d.tagSeconds[session.tagId] ?? 0) + session.durationSeconds;
-        }
-      } else if (session.sessionType === "SHORT_BREAK") {
-        d.shortBreakSeconds += session.durationSeconds;
-      } else if (session.sessionType === "LONG_BREAK") {
-        d.longBreakSeconds += session.durationSeconds;
-      }
     }
 
-    // 3. Ingest coffee cups & aggregate
+    // 3. Ingest coffee cups
     if (args.coffeeCups) {
       for (const cup of args.coffeeCups) {
         const createdAt = cup.createdAt ?? now;
@@ -114,40 +72,6 @@ export const importBackup = mutation({
           tagId: cup.tagId,
           createdAt,
           timestamp: new Date(createdAt).getTime(),
-        });
-
-        const d = getDaily(cup.date);
-        d.coffeeCount += 1;
-        if (cup.tagId) {
-          d.tagCoffee[cup.tagId] = (d.tagCoffee[cup.tagId] ?? 0) + 1;
-        }
-      }
-    }
-
-    // 4. Commit daily aggregates
-    for (const [date, agg] of Object.entries(dailyMap)) {
-      const existing = await ctx.db
-        .query("daily_stats")
-        .withIndex("by_user_date", (q) =>
-          q.eq("userId", user._id).eq("date", date)
-        )
-        .first();
-
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          workSeconds: existing.workSeconds + agg.workSeconds,
-          workSessionsCount: existing.workSessionsCount + agg.workSessionsCount,
-          shortBreakSeconds: existing.shortBreakSeconds + agg.shortBreakSeconds,
-          longBreakSeconds: existing.longBreakSeconds + agg.longBreakSeconds,
-          coffeeCount: existing.coffeeCount + agg.coffeeCount,
-          tagSeconds: { ...existing.tagSeconds, ...agg.tagSeconds },
-          tagCoffee: { ...existing.tagCoffee, ...agg.tagCoffee },
-        });
-      } else {
-        await ctx.db.insert("daily_stats", {
-          userId: user._id,
-          date,
-          ...agg,
         });
       }
     }
