@@ -41,86 +41,17 @@ async function closeAllExistingNotifications() {
 /**
  * Checks whether this device should suppress its notification to prevent double-alerts:
  * - If an app tab on this device is currently open and visible, foreground in-app alerts handle it.
- * - Queries GET /api/timer just-in-time to check peer presence:
- *   - For Focus (WORK): if desktop is active, desktop chimes/notifies -> suppress on mobile.
- *   - For Breaks: if desktop is active AND visible (user sitting at laptop), suppress on mobile.
- *     If laptop lid was closed or desktop went idle, mobile phone alerts!
- *   - If timer was already cancelled, reset, or completed on another device -> suppress on mobile.
  */
-async function shouldSuppressNotification(sessionType, sessionId, isMobileDevice) {
+async function shouldSuppressNotification(_sessionType, _sessionId, _isMobileDevice) {
   try {
-    // 1. If this device has an open visible tab, the in-app timer handles the alert
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of clients) {
       if (client.visibilityState === 'visible') {
         return true;
       }
     }
-
-    // 2. Query cloud timer and peer presence with a 2-second timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
-
-    const headers = {
-      'Accept': 'application/json',
-    };
-    if (cachedAuthToken) {
-      headers['Authorization'] = `Bearer ${cachedAuthToken}`;
-    }
-
-    const res = await fetch('/api/timer', {
-      method: 'GET',
-      credentials: 'include',
-      headers,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      // If unauthorized or network error, do not suppress (ensure user is notified)
-      return false;
-    }
-
-    const data = await res.json();
-    if (!data) return false;
-
-    const timer = data.timer;
-    const peer = data.peerPresence || {};
-
-    // 3. Stale session detection: if timer was stopped, cancelled, or switched to another session
-    if (timer) {
-      if (sessionId && timer.timerRunId && timer.timerRunId !== sessionId) {
-        return true; // Already transitioned
-      }
-      if (timer.status === 'IDLE' && timer.targetEndTime === null) {
-        return true; // Timer was reset or stopped
-      }
-    }
-
-    // 4. Device arbitration for Mobile:
-    if (isMobileDevice) {
-      if (sessionType === 'WORK') {
-        // Work / Focus: if desktop is actively awake, desktop handles it (no double chime!)
-        if (peer.desktopActive) {
-          return true;
-        }
-      } else {
-        // Break: if desktop is awake AND visible (user at laptop), desktop handles it.
-        // If desktop is closed or user stepped away, mobile phone alerts!
-        if (peer.desktopActive && peer.desktopVisible) {
-          return true;
-        }
-      }
-    } else {
-      // Desktop client: for breaks, suppress only if mobile is actively visible
-      if (sessionType !== 'WORK' && peer.mobileVisible) {
-        return true;
-      }
-    }
-
     return false;
   } catch {
-    // On any network error, fail open so user never misses their timer
     return false;
   }
 }

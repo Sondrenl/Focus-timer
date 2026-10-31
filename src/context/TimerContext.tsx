@@ -100,9 +100,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sound,
     notifications,
     auth,
-    syncWithCloud,
-    syncRemoteTags,
-    syncRemoteCoffeeCups,
     sessions,
   } = useApp();
 
@@ -204,17 +201,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const timerRunIdRef = useRef<string | null>(initialState.timerRunId || null);
   const isApplyingRemoteRef = useRef<boolean>(false);
   const isInitialMountDoneRef = useRef<boolean>(false);
-  const lastRemotePollWallMsRef = useRef<number>(Date.now());
-  const pendingPushCountRef = useRef<number>(0);
   const passivePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
 
-  const lastCoffeeSigRef = useRef<string>('');
-  const lastTagSigRef = useRef<string>('');
-  const tagsVersionRef = useRef<number>(0);
-  const coffeeVersionRef = useRef<number>(0);
   const lastTickWallMsRef = useRef<number>(Date.now());
-  const isWakeSyncingRef = useRef<boolean>(false);
 
   const peerPresenceRef = useRef<PeerPresence>({
     desktopActive: false,
@@ -250,8 +240,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
-  const lastKnownCloudSessionCompletedAtRef = useRef<string | null>(null);
-  const lastVisibilitySyncMsRef = useRef<number>(0);
 
   /**
    * Determines whether THIS device should play the completion chime and show the notification:
@@ -386,21 +374,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             tagId: payload.activeTagId || undefined,
           }).catch(console.warn);
         }
-      } else if (isAuthenticatedRef.current) {
-        pendingPushCountRef.current += 1;
-        authService
-          .pushRemoteTimer(payload, DEVICE_SESSION_ID, false)
-          .then((res) => {
-            if (res?.peerPresence) {
-              peerPresenceRef.current = res.peerPresence;
-            }
-          })
-          .finally(() => {
-            pendingPushCountRef.current = Math.max(0, pendingPushCountRef.current - 1);
-          });
       }
     },
-    [authService, isConvexConfigured]
+    [isConvexConfigured]
   );
 
   // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
@@ -459,8 +435,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           isMobile: IS_MOBILE,
           isVisible: false,
         }).catch(() => {});
-      } else if (isAuthenticatedRef.current) {
-        authService.reportDeviceClosed(DEVICE_SESSION_ID);
       }
     };
 
@@ -468,7 +442,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [authService, isConvexConfigured]);
+  }, [isConvexConfigured]);
 
   // Keep audio silent keep-alive running while timer is active
   useEffect(() => {
@@ -617,7 +591,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (
         statusRef.current === 'RUNNING' &&
         targetEndTimeRef.current !== null &&
-        !isWakeSyncingRef.current &&
         Math.abs(targetEndTimeRef.current - now) <= 10000 &&
         (remote.status === 'IDLE' || remote.sessionType !== sessionTypeRef.current)
       ) {
@@ -626,7 +599,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         dispatchCompletionAlert(completedType, completedRunId);
       }
 
-      isWakeSyncingRef.current = false;
       isApplyingRemoteRef.current = true;
       localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
 
@@ -772,120 +744,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [remoteTimer, isConvexConfigured, applyRemoteState]);
 
-  // Cross-device timer sync engine: fetches from Cloudflare D1 with active device presence headers
-  const checkRemoteTimer = useCallback(async () => {
-    if (isConvexConfigured) {
-      // In Convex, remote updates are pushed reactively over WebSockets.
-      // Zero HTTP polling needed!
-      return;
-    }
-
-    if (!isAuthenticatedRef.current || isApplyingRemoteRef.current || pendingPushCountRef.current > 0) {
-      return;
-    }
-
-    const fetchStartedWallMs = Date.now();
-    lastRemotePollWallMsRef.current = fetchStartedWallMs;
-    try {
-      const isRunning = statusRef.current === 'RUNNING';
-      const result = await authService.fetchRemoteTimer(
-        isRunning,
-        DEVICE_SESSION_ID,
-        tagsVersionRef.current,
-        coffeeVersionRef.current
-      );
-      if (!result) {
-        isWakeSyncingRef.current = false;
-        return;
-      }
-
-      if (typeof result.tagsVersion === 'number') {
-        tagsVersionRef.current = result.tagsVersion;
-      }
-      if (typeof result.coffeeVersion === 'number') {
-        coffeeVersionRef.current = result.coffeeVersion;
-      }
-
-      if (result.peerPresence) {
-        peerPresenceRef.current = result.peerPresence;
-        if (statusRef.current === 'RUNNING') {
-          syncScheduledNotification();
-        }
-      }
-
-      if (result.coffeeCups && syncRemoteCoffeeCups) {
-        const delSig = (result.deletedCoffeeCupIds || []).join(',');
-        const cupsSig = result.coffeeCups.map((c) => `${c.id}:${c.tagId || ''}:${c.date}`).join('|');
-        const sig = `${cupsSig}#del#${delSig}`;
-        if (sig !== lastCoffeeSigRef.current) {
-          lastCoffeeSigRef.current = sig;
-          syncRemoteCoffeeCups(result.coffeeCups, result.deletedCoffeeCupIds);
-        }
-      }
-
-      if (result.tags && syncRemoteTags) {
-        const delSig = (result.deletedTagIds || []).join(',');
-        const tagsSig = result.tags.map((t) => `${t.id}:${t.name}:${t.color}:${t.isArchived}:${t.updatedAt || ''}`).join('|');
-        const sig = `${tagsSig}#del#${delSig}`;
-        if (sig !== lastTagSigRef.current) {
-          lastTagSigRef.current = sig;
-          syncRemoteTags(result.tags, result.deletedTagIds);
-        }
-      }
-
-      if (
-        result.lastSessionCompletedAt &&
-        result.lastSessionCompletedAt !== lastKnownCloudSessionCompletedAtRef.current
-      ) {
-        lastKnownCloudSessionCompletedAtRef.current = result.lastSessionCompletedAt;
-        const alreadyHasSession = sessionsRef.current.some(
-          (s) => s.completedAt === result.lastSessionCompletedAt
-        );
-        if (!alreadyHasSession) {
-          void syncWithCloud();
-        }
-      }
-
-      if (
-        result.timer &&
-        result.timer.updatedAtMs > localUpdatedAtRef.current &&
-        !isApplyingRemoteRef.current
-      ) {
-        applyRemoteState(result.timer);
-      }
-    } catch {
-      isWakeSyncingRef.current = false;
-    }
-  }, [authService, applyRemoteState, syncScheduledNotification, syncRemoteCoffeeCups, syncRemoteTags, syncWithCloud, isConvexConfigured]);
-
-  const checkRemoteTimerRef = useRef(checkRemoteTimer);
-  checkRemoteTimerRef.current = checkRemoteTimer;
-
   // Main countdown tick execution
   const executeTick = useCallback(() => {
     const currentStatus = statusRef.current;
     const nowWall = Date.now();
-    const sleepGapMs = nowWall - lastTickWallMsRef.current;
     lastTickWallMsRef.current = nowWall;
 
-    if (isAuthenticatedRef.current && !isConvexConfigured) {
-      let pollIntervalMs: number;
-      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-      if (currentStatus === 'RUNNING') {
-        pollIntervalMs = isVisible ? 3000 : 10000;
-      } else {
-        pollIntervalMs = isVisible ? 10000 : 30000;
-      }
-      if (nowWall - lastRemotePollWallMsRef.current >= pollIntervalMs) {
-        void checkRemoteTimerRef.current();
-      }
 
-      if (!IS_MOBILE && sleepGapMs > 4500 && isAuthenticatedRef.current) {
-        isWakeSyncingRef.current = true;
-        void checkRemoteTimerRef.current();
-        return;
-      }
-    }
 
     if (currentStatus !== 'RUNNING' || targetEndTimeRef.current === null) {
       return;
@@ -953,24 +818,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           isMobile: IS_MOBILE,
           isVisible: !isHidden,
         }).catch(() => {});
-      } else if (isAuthenticatedRef.current) {
-        void checkRemoteTimerRef.current();
-        const nowMs = Date.now();
-        if (nowMs - lastVisibilitySyncMsRef.current > 20000) {
-          lastVisibilitySyncMsRef.current = nowMs;
-          void syncWithCloud();
-        }
       }
 
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
         const nowWall = Date.now();
-        const sleepGapMs = nowWall - lastTickWallMsRef.current;
         lastTickWallMsRef.current = nowWall;
 
-        if (!IS_MOBILE && sleepGapMs > 4500 && isAuthenticatedRef.current && !isConvexConfigured) {
-          isWakeSyncingRef.current = true;
-          return;
-        }
 
         const now = authService.getServerNow();
         const diffMs = targetEndTimeRef.current - now;
@@ -1018,7 +871,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
-  }, [sound, syncScheduledNotification, syncWithCloud, authService, isConvexConfigured]);
+  }, [sound, syncScheduledNotification, isConvexConfigured]);
 
   // Main-thread backup countdown timer
   useEffect(() => {
