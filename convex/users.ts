@@ -1,10 +1,10 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import { getAuthenticatedUser, requireUser, DEFAULT_SETTINGS } from "./authHelper";
+import { getAuthenticatedUser, requireUser, DEFAULT_SETTINGS, DEFAULT_TAGS } from "./authHelper";
 
 /**
- * Returns the currently authenticated user with their embedded preferences.
- * Provides complete profile and settings in a single atomic query.
+ * Returns the currently authenticated user with their embedded preferences and tags.
+ * Provides the entire core application shell in a single atomic reactive query!
  */
 export const current = query({
   args: {},
@@ -21,6 +21,7 @@ export const current = query({
       dailyGoalMinutes: user.dailyGoalMinutes,
       createdAt: user.createdAt,
       settings: user.settings,
+      tags: user.tags ?? DEFAULT_TAGS,
     };
   },
 });
@@ -47,7 +48,7 @@ export const updateSettings = mutation({
   args: {
     workDurationMinutes: v.optional(v.number()),
     shortBreakDurationMinutes: v.optional(v.number()),
-    longBreakDurationMinutes: v.optional(v.number()),
+    longBreakDurationMinutes: v.number(),
     longBreakInterval: v.optional(v.number()),
     autoStartBreaks: v.optional(v.boolean()),
     autoStartPomodoros: v.optional(v.boolean()),

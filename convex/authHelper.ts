@@ -14,6 +14,14 @@ export const DEFAULT_SETTINGS = {
   keepAwake: false,
 };
 
+export const DEFAULT_TAGS = [
+  { id: "tag-deep-work", name: "Deep Work", color: "#7E57C2", isArchived: false, createdAt: new Date().toISOString() },
+  { id: "tag-study", name: "Study & Learning", color: "#5C6BC0", isArchived: false, createdAt: new Date().toISOString() },
+  { id: "tag-coding", name: "Coding & Dev", color: "#00897B", isArchived: false, createdAt: new Date().toISOString() },
+  { id: "tag-writing", name: "Writing", color: "#D81B60", isArchived: false, createdAt: new Date().toISOString() },
+  { id: "tag-reading", name: "Reading", color: "#FB8C00", isArchived: false, createdAt: new Date().toISOString() },
+];
+
 /**
  * Retrieves the currently authenticated user document.
  * In a mutation context, if the user document does not exist yet, creates it.
@@ -51,6 +59,7 @@ export async function getAuthenticatedUser(
         ...DEFAULT_SETTINGS,
         updatedAt: now,
       },
+      tags: DEFAULT_TAGS,
     });
 
     return await mutationDb.get(userId);

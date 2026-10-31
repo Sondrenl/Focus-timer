@@ -6,6 +6,7 @@ export const importBackup = mutation({
   args: {
     tags: v.array(
       v.object({
+        id: v.optional(v.string()),
         name: v.string(),
         color: v.string(),
         isArchived: v.optional(v.boolean()),
@@ -37,17 +38,19 @@ export const importBackup = mutation({
     const user = await requireUser(ctx, true);
     const now = new Date().toISOString();
 
-    // 1. Ingest tags
-    for (const tag of args.tags) {
-      await ctx.db.insert("tags", {
-        userId: user._id,
-        name: tag.name,
-        color: tag.color,
-        isArchived: tag.isArchived ?? false,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
+    // 1. Ingest tags into user.tags
+    const formattedTags = args.tags.map((t) => ({
+      id: t.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: t.name,
+      color: t.color,
+      isArchived: t.isArchived ?? false,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    await ctx.db.patch(user._id, {
+      tags: formattedTags,
+    });
 
     // 2. Ingest sessions
     for (const session of args.sessions) {

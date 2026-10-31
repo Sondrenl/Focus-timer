@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-  // 1. User: Profile + Embedded Preferences (Single atomic query on boot)
+  // 1. User: Profile + Preferences + Embedded Tags (All core state in 1 query)
   users: defineTable({
     tokenIdentifier: v.string(),
     email: v.string(),
@@ -24,6 +24,16 @@ export default defineSchema({
       keepAwake: v.boolean(),
       updatedAt: v.string(),
     }),
+    tags: v.array(
+      v.object({
+        id: v.string(),
+        name: v.string(),
+        color: v.string(),
+        isArchived: v.boolean(),
+        createdAt: v.string(),
+        updatedAt: v.optional(v.string()),
+      })
+    ),
   }).index("by_token", ["tokenIdentifier"]),
 
   // 2. Active Timer: Dedicated for sub-50ms sync & peer presence
@@ -59,17 +69,7 @@ export default defineSchema({
     ),
   }).index("by_user", ["userId"]),
 
-  // 3. Tags: User project tags
-  tags: defineTable({
-    userId: v.id("users"),
-    name: v.string(),
-    color: v.string(),
-    isArchived: v.boolean(),
-    createdAt: v.string(),
-    updatedAt: v.optional(v.string()),
-  }).index("by_user", ["userId"]),
-
-  // 4. Completed Sessions: Historical log with ISO timestamps
+  // 3. Completed Sessions: Historical log with ISO timestamps
   sessions: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
@@ -84,13 +84,26 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_user_completed", ["userId", "completedAt"]),
 
-  // 5. Coffee Log: Individual cups with ISO timestamps
+  // 4. Coffee Log: Individual timestamped cups
   coffee_cups: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
-    date: v.string(), // "YYYY-MM-DD" used for fast day grouping
-    createdAt: v.string(), // ISO-8601 timestamp
+    date: v.string(), // "YYYY-MM-DD"
+    createdAt: v.string(), // ISO-8601
   })
     .index("by_user", ["userId"])
     .index("by_user_date", ["userId", "date"]),
+
+  // 5. Multi-Device Push Subscriptions (For background lock-screen notifications)
+  push_subscriptions: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+    userAgent: v.optional(v.string()),
+    updatedAt: v.string(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_device", ["userId", "deviceId"]),
 });
