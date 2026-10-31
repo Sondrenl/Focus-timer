@@ -64,20 +64,25 @@ export const record = mutation({
     const user = await requireUser(ctx, true);
     const completedAt = args.completedAt ?? new Date().toISOString();
 
-    const existing = await ctx.db
+    const completedAtMs = new Date(completedAt).getTime();
+    const recent = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) =>
-        q.eq("userId", user._id).eq("completedAt", completedAt)
+        q
+          .eq("userId", user._id)
+          .gte("completedAt", new Date(completedAtMs - 45000).toISOString())
+          .lte("completedAt", new Date(completedAtMs + 45000).toISOString())
       )
-      .first();
+      .collect();
 
-    if (existing) {
+    const duplicate = recent.find((s) => s.sessionType === args.sessionType);
+    if (duplicate) {
       return {
-        id: existing._id,
-        tagId: existing.tagId ?? null,
-        sessionType: existing.sessionType,
-        durationSeconds: existing.durationSeconds,
-        completedAt: existing.completedAt,
+        id: duplicate._id,
+        tagId: duplicate.tagId ?? null,
+        sessionType: duplicate.sessionType,
+        durationSeconds: duplicate.durationSeconds,
+        completedAt: duplicate.completedAt,
       };
     }
 

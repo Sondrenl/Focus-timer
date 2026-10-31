@@ -29,18 +29,7 @@ export const getActive = query({
       .first();
 
     if (!timer) {
-      return {
-        sessionType: "WORK" as const,
-        status: "IDLE" as const,
-        remainingSeconds: 25 * 60,
-        totalSeconds: 25 * 60,
-        targetEndTime: null,
-        currentCycle: 1,
-        activeTagId: null,
-        timerRunId: null,
-        updatedAtMs: Date.now(),
-        peerPresence: null,
-      };
+      return null;
     }
 
     // Dynamic remaining seconds calculation
@@ -303,14 +292,26 @@ export const onTimerCompleted = internalMutation({
       return;
     }
 
-    // 1. Record completed session in sessions table
-    await ctx.db.insert("sessions", {
-      userId: args.userId,
-      tagId: timer.tagId,
-      sessionType: timer.sessionType,
-      durationSeconds: timer.totalSeconds,
-      completedAt: new Date().toISOString(),
-    });
+    // 1. Record completed session in sessions table (if not already recorded)
+    const recent = await ctx.db
+      .query("sessions")
+      .withIndex("by_user_completed", (q) =>
+        q
+          .eq("userId", args.userId)
+          .gte("completedAt", new Date(Date.now() - 45000).toISOString())
+      )
+      .collect();
+
+    const alreadyRecorded = recent.some((s) => s.sessionType === timer.sessionType);
+    if (!alreadyRecorded) {
+      await ctx.db.insert("sessions", {
+        userId: args.userId,
+        tagId: timer.tagId,
+        sessionType: timer.sessionType,
+        durationSeconds: timer.totalSeconds,
+        completedAt: new Date().toISOString(),
+      });
+    }
 
     // 2. Mark active timer as COMPLETED
     await ctx.db.patch(timer._id, {
