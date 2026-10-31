@@ -1,13 +1,14 @@
 import { ConvexReactClient } from "convex/react";
 
-const convexUrl =
+export const DEFAULT_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";
+
+export const convexUrl =
   import.meta.env.VITE_CONVEX_URL ||
   (typeof window !== "undefined" && (window as any).__CONVEX_URL__) ||
-  "https://proud-otter-999.convex.cloud";
+  DEFAULT_CONVEX_URL;
 
 export const isConvexConfigured = Boolean(
-  import.meta.env.VITE_CONVEX_URL &&
-    !import.meta.env.VITE_CONVEX_URL.includes("dummy")
+  convexUrl && !convexUrl.includes("dummy") && !convexUrl.includes("proud-otter")
 );
 
 export const convexClient = new ConvexReactClient(convexUrl);
