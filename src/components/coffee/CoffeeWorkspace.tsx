@@ -10,9 +10,11 @@ export const CoffeeWorkspace: React.FC = () => {
 
   const todayKey = toDateKey(new Date());
 
-  // Filter cups for today
+  // Filter cups for today and sort chronologically ascending
   const cupsForDate = useMemo(() => {
-    return coffeeCups.filter((c) => c.date === todayKey);
+    return coffeeCups
+      .filter((c) => c.date === todayKey)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [coffeeCups, todayKey]);
 
   const totalCount = cupsForDate.length;

@@ -163,11 +163,15 @@ export const ProfileView: React.FC = () => {
           throw new Error('Invalid JSON format');
         }
 
-        const hasTags = Array.isArray(parsed.tags);
-        const hasSessions = Array.isArray(parsed.sessions);
-        const hasCoffee = Array.isArray(parsed.coffeeCups);
+        const rawTags = Array.isArray(parsed.tags) ? parsed.tags : [];
+        const rawSessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+        const rawCoffee = Array.isArray(parsed.coffeeCups)
+          ? parsed.coffeeCups
+          : Array.isArray(parsed.coffee_cups)
+          ? parsed.coffee_cups
+          : [];
 
-        if (!hasTags && !hasSessions && !hasCoffee) {
+        if (rawTags.length === 0 && rawSessions.length === 0 && rawCoffee.length === 0) {
           throw new Error('File does not appear to be a valid Focus Timer backup.');
         }
 
@@ -176,9 +180,9 @@ export const ProfileView: React.FC = () => {
           exportedAt: parsed.exportedAt || new Date().toISOString(),
           profile: parsed.profile,
           settings: parsed.settings,
-          tags: parsed.tags || [],
-          sessions: parsed.sessions || [],
-          coffeeCups: parsed.coffeeCups || [],
+          tags: rawTags,
+          sessions: rawSessions,
+          coffeeCups: rawCoffee,
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to parse JSON backup file';

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
+import { SessionType } from '../types/timer';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { UserProfile, DEFAULT_PROFILE, BackupData, AuthState } from '../types/user';
 import { CoffeeCup } from '../types/coffee';
@@ -262,7 +263,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (a) => !serverIds.has(a.id) && !serverCreatedTimes.has(a.createdAt)
     );
 
-    const merged = [...remainingServer, ...unconfirmedAdds];
+    const merged = [...remainingServer, ...unconfirmedAdds].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
     setCoffeeCups(merged);
     coffeeRepository.saveAll(merged);
   }, [convexCoffee, auth.isAuthenticated]);
@@ -583,8 +586,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pendingAddsRef.current.set(created.id, created);
 
     const updated = await coffeeRepository.getAll();
-    setCoffeeCups(updated);
-    broadcastCoffeeCups(updated);
+    const sortedUpdated = [...updated].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    setCoffeeCups(sortedUpdated);
+    broadcastCoffeeCups(sortedUpdated);
 
     if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations
@@ -624,8 +630,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pendingDeletesRef.current.add(removedCup.id);
 
       const updated = await coffeeRepository.getAll();
-      setCoffeeCups(updated);
-      broadcastCoffeeCups(updated);
+      const sortedUpdated = [...updated].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      setCoffeeCups(sortedUpdated);
+      broadcastCoffeeCups(sortedUpdated);
 
       if (isConvexConfigured && auth.isAuthenticated) {
         convexMutations
@@ -702,13 +711,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanSessions = isProduction()
       ? sessions.filter((s) => !s.id.startsWith('seed-session-') && !s.id.startsWith('sample-session-'))
       : sessions;
+    const sortedSessions = [...cleanSessions].sort(
+      (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+    );
+    const sortedCoffee = [...coffeeCups].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
     return {
       version: '2.3.1',
       exportedAt: new Date().toISOString(),
       profile,
       tags,
-      sessions: cleanSessions,
-      coffeeCups,
+      sessions: sortedSessions,
+      coffeeCups: sortedCoffee,
       settings,
     };
   };
@@ -717,58 +732,188 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     data: BackupData,
     mode: 'merge' | 'replace'
   ): Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }> => {
+    // 1. Normalize and validate incoming tags (supporting both camelCase and legacy formats)
+    const rawTags = Array.isArray(data.tags) ? data.tags : [];
+    const validTags: Tag[] = rawTags
+      .filter((t: any) => t && typeof t.name === 'string' && t.name.trim().length > 0)
+      .map((t: any) => ({
+        id: typeof t.id === 'string' && t.id.trim().length > 0 ? t.id : `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: t.name.trim(),
+        color: typeof t.color === 'string' && t.color.trim().length > 0 ? t.color : '#3B82F6',
+        isArchived: typeof t.isArchived === 'boolean' ? t.isArchived : Boolean(t.is_archived),
+        createdAt: typeof t.createdAt === 'string' ? t.createdAt : (typeof t.created_at === 'string' ? t.created_at : new Date().toISOString()),
+        updatedAt: typeof t.updatedAt === 'string' ? t.updatedAt : (typeof t.updated_at === 'string' ? t.updated_at : new Date().toISOString()),
+      }));
+
+    // 2. Normalize and validate incoming sessions (supporting both camelCase and legacy formats)
+    const rawSessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const validSessions: CompletedSession[] = rawSessions
+      .filter((s: any) => {
+        if (!s) return false;
+        const type = s.sessionType || s.session_type;
+        const duration = Number(s.durationSeconds ?? s.duration_seconds);
+        const completed = s.completedAt || s.completed_at;
+        return (
+          ['WORK', 'SHORT_BREAK', 'LONG_BREAK'].includes(type) &&
+          !isNaN(duration) &&
+          duration > 0 &&
+          typeof completed === 'string' &&
+          !isNaN(new Date(completed).getTime())
+        );
+      })
+      .map((s: any) => {
+        const type = (s.sessionType || s.session_type) as SessionType;
+        const duration = Number(s.durationSeconds ?? s.duration_seconds);
+        const completed = s.completedAt || s.completed_at;
+        const tag = s.tagId !== undefined ? s.tagId : (s.tag_id !== undefined ? s.tag_id : null);
+        return {
+          id: typeof s.id === 'string' && s.id.trim().length > 0 ? s.id : `session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          tagId: tag || null,
+          sessionType: type,
+          durationSeconds: duration,
+          completedAt: completed,
+        };
+      });
+
+    // 3. Normalize and validate incoming coffee cups (supporting both camelCase and legacy formats)
+    const rawCoffee = Array.isArray(data.coffeeCups)
+      ? data.coffeeCups
+      : Array.isArray((data as any).coffee_cups)
+      ? (data as any).coffee_cups
+      : [];
+    const validCoffee: CoffeeCup[] = rawCoffee
+      .filter((c: any) => {
+        if (!c) return false;
+        const date = c.date;
+        return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+      })
+      .map((c: any) => {
+        const date = c.date;
+        const tag = c.tagId !== undefined ? c.tagId : (c.tag_id !== undefined ? c.tag_id : null);
+        const createdAt = typeof c.createdAt === 'string' ? c.createdAt : (typeof c.created_at === 'string' ? c.created_at : `${date}T12:00:00.000Z`);
+        return {
+          id: typeof c.id === 'string' && c.id.trim().length > 0 ? c.id : `cup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          date,
+          tagId: tag || null,
+          createdAt,
+        };
+      });
+
+    let finalTags: Tag[] = [];
+    let finalSessions: CompletedSession[] = [];
+    let finalCoffee: CoffeeCup[] = [];
+    let sessionsAdded = 0;
+    let tagsAdded = 0;
+    let coffeeAdded = 0;
+
     if (mode === 'replace') {
       await sessionRepository.clear();
       await coffeeRepository.clear();
-      await tagRepository.resetToDefaults();
-      if (isConvexConfigured) {
-        convexMutations.clearSessions({}).catch(console.warn);
-        convexMutations.clearCoffee({}).catch(console.warn);
+
+      finalTags = validTags.length > 0 ? validTags : await tagRepository.resetToDefaults();
+      finalSessions = [...validSessions].sort(
+        (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+      );
+      finalCoffee = [...validCoffee].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+
+      await tagRepository.saveAll(finalTags);
+      await sessionRepository.saveAll(finalSessions);
+      await coffeeRepository.saveAll(finalCoffee);
+
+      setTags(finalTags);
+      setSessions(finalSessions);
+      setCoffeeCups(finalCoffee);
+
+      broadcastTags(finalTags);
+      broadcastCoffeeCups(finalCoffee);
+
+      sessionsAdded = finalSessions.length;
+      tagsAdded = finalTags.length;
+      coffeeAdded = finalCoffee.length;
+    } else {
+      // Merge mode
+      // Merge tags (deduplicate by id or lowercase trimmed name)
+      const existingTagIds = new Set(tags.map((t) => t.id));
+      const existingTagNames = new Set(tags.map((t) => t.name.toLowerCase().trim()));
+      const newTagsToKeep: Tag[] = [];
+
+      for (const t of validTags) {
+        const nameKey = t.name.toLowerCase().trim();
+        if (!existingTagIds.has(t.id) && !existingTagNames.has(nameKey)) {
+          newTagsToKeep.push(t);
+          existingTagIds.add(t.id);
+          existingTagNames.add(nameKey);
+          tagsAdded++;
+        }
       }
+      finalTags = [...tags, ...newTagsToKeep];
+      await tagRepository.saveAll(finalTags);
+      setTags(finalTags);
+      broadcastTags(finalTags);
+
+      // Merge sessions (deduplicate by id or sessionType + completedAt)
+      const existingSessionIds = new Set(sessions.map((s) => s.id));
+      const existingSessionKeys = new Set(sessions.map((s) => `${s.sessionType}-${s.completedAt}`));
+      const newSessionsToKeep: CompletedSession[] = [];
+
+      for (const s of validSessions) {
+        const sessionKey = `${s.sessionType}-${s.completedAt}`;
+        if (!existingSessionIds.has(s.id) && !existingSessionKeys.has(sessionKey)) {
+          newSessionsToKeep.push(s);
+          existingSessionIds.add(s.id);
+          existingSessionKeys.add(sessionKey);
+          sessionsAdded++;
+        }
+      }
+      finalSessions = [...sessions, ...newSessionsToKeep].sort(
+        (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+      );
+      await sessionRepository.saveAll(finalSessions);
+      setSessions(finalSessions);
+
+      // Merge coffee cups (deduplicate by id or date + createdAt)
+      const existingCupIds = new Set(coffeeCups.map((c) => c.id));
+      const existingCupKeys = new Set(coffeeCups.map((c) => `${c.date}-${c.createdAt}`));
+      const newCoffeeToKeep: CoffeeCup[] = [];
+
+      for (const c of validCoffee) {
+        const cupKey = `${c.date}-${c.createdAt}`;
+        if (!existingCupIds.has(c.id) && !existingCupKeys.has(cupKey)) {
+          newCoffeeToKeep.push(c);
+          existingCupIds.add(c.id);
+          existingCupKeys.add(cupKey);
+          coffeeAdded++;
+        }
+      }
+      finalCoffee = [...coffeeCups, ...newCoffeeToKeep].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      await coffeeRepository.saveAll(finalCoffee);
+      setCoffeeCups(finalCoffee);
+      broadcastCoffeeCups(finalCoffee);
     }
-
-    const newTags = data.tags.filter(
-      (t): t is Tag =>
-        typeof t.id === 'string' &&
-        t.id.trim().length > 0 &&
-        typeof t.name === 'string' &&
-        typeof t.color === 'string' &&
-        typeof t.isArchived === 'boolean'
-    );
-    await tagRepository.saveAll(newTags);
-    setTags(newTags);
-
-    const validSessions = data.sessions.filter(
-      (s): s is CompletedSession =>
-        typeof s.sessionType === 'string' &&
-        ['WORK', 'SHORT_BREAK', 'LONG_BREAK'].includes(s.sessionType) &&
-        typeof s.durationSeconds === 'number' &&
-        s.durationSeconds > 0 &&
-        typeof s.completedAt === 'string' &&
-        !isNaN(new Date(s.completedAt).getTime())
-    );
-    await sessionRepository.saveAll(validSessions);
-    setSessions(validSessions);
-
-    const validCoffee = (data.coffeeCups || []).filter(
-      (c): c is CoffeeCup =>
-        typeof c.id === 'string' &&
-        typeof c.date === 'string' &&
-        /^\d{4}-\d{2}-\d{2}$/.test(c.date)
-    );
-    await coffeeRepository.saveAll(validCoffee);
-    setCoffeeCups(validCoffee);
 
     if (data.settings) {
       await updateSettings(data.settings);
     }
     if (data.profile) {
-      await updateProfile(data.profile);
+      const safeProfileUpdate: Partial<UserProfile> = {
+        displayName: data.profile.displayName,
+        avatarEmoji: data.profile.avatarEmoji,
+        dailyGoalMinutes: data.profile.dailyGoalMinutes,
+      };
+      if (!auth.isAuthenticated) {
+        if (data.profile.avatarUrl) safeProfileUpdate.avatarUrl = data.profile.avatarUrl;
+      }
+      await updateProfile(safeProfileUpdate);
     }
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.importBackup({
-        tags: newTags.map((t) => ({
+        mode,
+        tags: validTags.map((t) => ({
           id: t.id,
           name: t.name,
           color: t.color,
@@ -789,9 +934,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return {
-      sessionsAdded: validSessions.length,
-      tagsAdded: newTags.length,
-      coffeeAdded: validCoffee.length,
+      sessionsAdded,
+      tagsAdded,
+      coffeeAdded,
     };
   };
 

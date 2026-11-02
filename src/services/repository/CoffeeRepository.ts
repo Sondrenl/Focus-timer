@@ -53,6 +53,7 @@ export class CoffeeRepository implements ICoffeeRepository {
         createdAt: c.createdAt || new Date().toISOString(),
       };
     });
+    sanitized.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     if (needsMigration) {
       this.storage.setItem(COFFEE_STORAGE_KEY, sanitized);
     }
@@ -74,6 +75,7 @@ export class CoffeeRepository implements ICoffeeRepository {
         createdAt: new Date().toISOString(),
       };
       all.push(newCup);
+      all.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       this.storage.setItem(COFFEE_STORAGE_KEY, all);
       return newCup;
     });
@@ -112,7 +114,10 @@ export class CoffeeRepository implements ICoffeeRepository {
 
   async saveAll(cups: CoffeeCup[]): Promise<void> {
     return this.enqueue(async () => {
-      this.storage.setItem(COFFEE_STORAGE_KEY, cups);
+      const sorted = [...cups].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      this.storage.setItem(COFFEE_STORAGE_KEY, sorted);
     });
   }
 

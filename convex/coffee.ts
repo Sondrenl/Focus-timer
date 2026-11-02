@@ -4,7 +4,7 @@ import { requireUser, getAuthenticatedUser } from "./authHelper";
 
 /**
  * Returns coffee cups. Optionally filters by date (e.g. today "YYYY-MM-DD")
- * or returns recent cups up to an optional limit.
+ * or returns recent cups up to an optional limit in chronological ascending order.
  */
 export const list = query({
   args: {
@@ -25,11 +25,12 @@ export const list = query({
         .collect();
     } else {
       const limit = args.limit ?? 500;
-      cups = await ctx.db
+      const descCups = await ctx.db
         .query("coffee_cups")
         .withIndex("by_user_date", (q) => q.eq("userId", user._id))
         .order("desc")
         .take(limit);
+      cups = descCups.reverse();
     }
 
     return cups.map((c) => ({
