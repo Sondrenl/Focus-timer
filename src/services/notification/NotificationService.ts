@@ -2,14 +2,8 @@ import { SessionType } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
 import { AuthService } from '../auth/AuthService';
 
-export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
+export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
 
-const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
-
-/**
- * Service to handle browser & mobile Home Screen / lock-screen notifications via Service Worker
- * with automatic cleanup of prior notifications and live permission status inspection.
- */
 export class NotificationService {
   private swRegistrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
   private cachedRegistration: ServiceWorkerRegistration | null = null;
@@ -21,13 +15,9 @@ export class NotificationService {
         .register('/sw.js')
         .then((reg) => {
           this.cachedRegistration = reg;
-          reg.update().catch(() => {});
           return reg;
         })
-        .catch((err) => {
-          console.warn('Service worker registration failed:', err);
-          return null;
-        });
+        .catch(() => null);
 
       navigator.serviceWorker.ready
         .then((reg) => {
@@ -69,8 +59,7 @@ export class NotificationService {
   }
 
   hasPermission(): boolean {
-    if (!this.isSupported()) return false;
-    return Notification.permission === 'granted';
+    return this.getPermissionState() === 'granted';
   }
 
   /**
@@ -87,7 +76,7 @@ export class NotificationService {
         syncWorker.postMessage(message);
         return;
       } catch {
-        // Fall through to active registration resolution
+        // Fallback to async retrieval below
       }
     }
 
@@ -97,13 +86,13 @@ export class NotificationService {
         try {
           worker.postMessage(message);
         } catch {
-          // Ignored
+          // Ignore
         }
       }
     });
   }
 
-  public setAuthToken(token: string | null): void {
+  setAuthToken(token: string | null): void {
     this.sendWorkerMessage({ type: 'SET_AUTH_TOKEN', token });
   }
 
@@ -168,9 +157,10 @@ export class NotificationService {
   }
 
   private markSessionNotifiedInWorker(sessionId?: string | null): void {
+    if (!sessionId) return;
     this.sendWorkerMessage({
       type: 'MARK_SESSION_NOTIFIED',
-      sessionId: sessionId || null,
+      sessionId,
     });
   }
 
@@ -190,9 +180,7 @@ export class NotificationService {
     }
 
     // Cancel any pending scheduled timer notification in the Service Worker
-    // and notify worker so it never fires a duplicate alert for this session
     this.cancelScheduledNotification();
-    this.markSessionNotifiedInWorker(sessionRunId);
 
     try {
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -202,7 +190,12 @@ export class NotificationService {
       // Ignore vibration errors
     }
 
-    const notifTag = isManualTest ? `pomodor-test-${Date.now()}` : ACTIVE_NOTIFICATION_TAG;
+    // Using a unique timestamped tag ensures Android NotificationManager always treats
+    // each completion as an urgent fresh event and presents a heads-up banner over the lock screen.
+    const notifTag = isManualTest
+      ? `pomodor-test-${Date.now()}`
+      : `pomodor-alert-${Date.now()}`;
+
     const options: NotificationOptions = {
       body,
       icon: '/icon-192.png',
@@ -220,17 +213,18 @@ export class NotificationService {
         ? this.cachedRegistration
         : await this.getActiveRegistration();
       if (reg && reg.active && typeof reg.showNotification === 'function') {
-        if (!isManualTest) {
-          try {
-            const existing = await reg.getNotifications();
-            for (const n of existing) {
+        await reg.showNotification(title, options);
+        this.markSessionNotifiedInWorker(sessionRunId);
+
+        // Asynchronously clean up any older notifications without racing against the active one
+        reg.getNotifications().then((existing) => {
+          for (const n of existing) {
+            if (n.tag !== notifTag) {
               n.close();
             }
-          } catch {
-            // Ignore
           }
-        }
-        await reg.showNotification(title, options);
+        }).catch(() => {});
+
         return true;
       }
     } catch (err) {
@@ -249,10 +243,12 @@ export class NotificationService {
         notif.onclick = () => {
           try {
             window.focus();
+            notif.close();
           } catch {
             // Ignore
           }
         };
+        this.markSessionNotifiedInWorker(sessionRunId);
         return true;
       }
     } catch (err) {
@@ -286,8 +282,6 @@ export class NotificationService {
       return;
     }
 
-    // Use identical declarative sentence structure for Focus and Break so Chrome's on-device
-    // spam classifier never flags Break notifications.
     const title =
       sessionType === 'WORK'
         ? 'Pomodor — Focus session complete'

@@ -1,11 +1,11 @@
 // Service Worker for Pomodor Focus Timer
+// Version: 1.0.2
 // Handles background, Home Screen, and lock-screen notifications with multi-device arbitration
 
 let scheduledTimerId = null;
 let scheduledResolve = null;
 let lastNotifiedSessionId = null;
 let cachedAuthToken = null;
-const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -64,18 +64,27 @@ async function showTimerNotification(title, body, sessionId, allowImmediateRepea
     lastNotifiedSessionId = sessionId;
   }
 
-  await closeAllExistingNotifications();
+  const notifTag = allowImmediateRepeat ? ('pomodor-test-' + Date.now()) : ('pomodor-alert-' + Date.now());
 
-  return self.registration.showNotification(title, {
+  await self.registration.showNotification(title, {
     body,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    tag: allowImmediateRepeat ? ('pomodor-test-' + Date.now()) : ACTIVE_NOTIFICATION_TAG,
+    tag: notifTag,
     renotify: true,
     silent: false,
     requireInteraction: true,
     vibrate: [250, 100, 250],
   });
+
+  // Clean up older notifications in the background without canceling the current one
+  self.registration.getNotifications().then((existing) => {
+    for (const notif of existing) {
+      if (notif.tag !== notifTag) {
+        notif.close();
+      }
+    }
+  }).catch(() => {});
 }
 
 self.addEventListener('message', (event) => {
@@ -93,7 +102,7 @@ self.addEventListener('message', (event) => {
         data.title,
         data.body,
         data.sessionId || null,
-        Boolean(data.isManualTest)
+        true // Always allow explicit SHOW_NOTIFICATION requests from the client
       )
     );
   } else if (data.type === 'SCHEDULE_TIMER_NOTIFICATION') {

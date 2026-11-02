@@ -324,12 +324,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (currentSettings.notificationsEnabled) {
         const title =
           completedSessionType === 'WORK'
-            ? 'Focus interval completed! 🎉'
-            : 'Break finished! Ready to focus? ⚡';
+            ? 'Pomodor — Focus session complete'
+            : 'Pomodor — Break session complete';
         const body =
           completedSessionType === 'WORK'
-            ? 'Great job maintaining deep flow state. Time for a well-deserved break.'
-            : 'Your break has concluded. Ready to start your next interval?';
+            ? 'Your focus timer has finished. Time for a break.'
+            : 'Your break timer has finished. Time for a focus session.';
 
         notifications.notify(title, body, false, currentRunId);
       }
