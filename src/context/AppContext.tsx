@@ -363,10 +363,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncError: null,
     });
     const cleanedProfile: UserProfile = {
-      ...profileRef.current,
-      id: undefined,
-      email: undefined,
-      avatarUrl: undefined,
+      ...DEFAULT_PROFILE,
+      dailyGoalMinutes: profileRef.current.dailyGoalMinutes || DEFAULT_PROFILE.dailyGoalMinutes,
+      createdAt: profileRef.current.createdAt || new Date().toISOString(),
     };
     profileRef.current = cleanedProfile;
     profileRepository.save(cleanedProfile);
@@ -417,25 +416,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // If already logged in, verify session and trigger background sync
       const storedToken = authService.getStoredToken();
-      if (storedToken) {
-        notificationService.setAuthToken(storedToken);
-        if (isConvexConfigured) {
-          const payload = parseGoogleJwt(storedToken);
-          if (payload && payload.sub && (!payload.exp || payload.exp * 1000 > Date.now())) {
-            setAuthToken(storedToken);
-            const verifiedUser = buildProfileFromJwt(payload, profileRef.current);
-            setAuth({
-              isAuthenticated: true,
-              user: verifiedUser,
-              token: storedToken,
-              isSyncing: false,
-              lastSyncedAt: null,
-              syncError: null,
-            });
-          } else {
-            logout();
-          }
+      let isAuthenticatedSession = false;
+
+      if (storedToken && isConvexConfigured) {
+        const payload = parseGoogleJwt(storedToken);
+        if (payload && payload.sub && (!payload.exp || payload.exp * 1000 > Date.now())) {
+          isAuthenticatedSession = true;
+          notificationService.setAuthToken(storedToken);
+          setAuthToken(storedToken);
+          const verifiedUser = buildProfileFromJwt(payload, profileRef.current);
+          setAuth({
+            isAuthenticated: true,
+            user: verifiedUser,
+            token: storedToken,
+            isSyncing: false,
+            lastSyncedAt: null,
+            syncError: null,
+          });
         }
+      }
+
+      if (!isAuthenticatedSession) {
+        logout();
       }
     }
 

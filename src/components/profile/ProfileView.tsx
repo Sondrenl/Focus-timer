@@ -49,7 +49,7 @@ export const ProfileView: React.FC = () => {
 
   // Edit Profile modal state
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [editName, setEditName] = useState(profile.displayName);
+  const [editName, setEditName] = useState(auth.isAuthenticated ? profile.displayName : 'Focus Practitioner');
   const [editEmoji, setEditEmoji] = useState(profile.avatarEmoji);
   const [editGoalMinutes, setEditGoalMinutes] = useState(profile.dailyGoalMinutes);
 
@@ -260,10 +260,10 @@ export const ProfileView: React.FC = () => {
             <div className="w-20 h-20 rounded-3xl bg-md-primary/10 border-2 border-md-primary/30 flex items-center justify-center text-3xl shadow-xs select-none overflow-hidden">
               {profile.avatarEmoji ? (
                 profile.avatarEmoji
-              ) : profile.avatarUrl ? (
+              ) : (auth.isAuthenticated && profile.avatarUrl) ? (
                 <img
                   src={profile.avatarUrl}
-                  alt={profile.displayName}
+                  alt={auth.isAuthenticated ? profile.displayName : 'Focus Practitioner'}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -273,7 +273,7 @@ export const ProfileView: React.FC = () => {
             </div>
             <button
               onClick={() => {
-                setEditName(profile.displayName);
+                setEditName(auth.isAuthenticated ? profile.displayName : 'Focus Practitioner');
                 setEditEmoji(profile.avatarEmoji);
                 setEditGoalMinutes(profile.dailyGoalMinutes);
                 setIsEditingProfile(true);
@@ -288,7 +288,7 @@ export const ProfileView: React.FC = () => {
           <div className="flex-1">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h3 className="text-xl font-bold text-md-on-surface">{profile.displayName}</h3>
+                <h3 className="text-xl font-bold text-md-on-surface">{auth.isAuthenticated ? profile.displayName : 'Focus Practitioner'}</h3>
                 {auth.isAuthenticated && auth.user?.email ? (
                   <span className="inline-flex items-center gap-1 text-xs text-md-on-surface-variant font-mono mt-0.5">
                     <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {auth.user.email}
@@ -304,7 +304,7 @@ export const ProfileView: React.FC = () => {
                 variant="outlined"
                 size="sm"
                 onClick={() => {
-                  setEditName(profile.displayName);
+                  setEditName(auth.isAuthenticated ? profile.displayName : 'Focus Practitioner');
                   setEditEmoji(profile.avatarEmoji);
                   setEditGoalMinutes(profile.dailyGoalMinutes);
                   setIsEditingProfile(true);
@@ -328,7 +328,7 @@ export const ProfileView: React.FC = () => {
                   </span>
                   <button
                     onClick={() => {
-                      setEditName(profile.displayName);
+                      setEditName(auth.isAuthenticated ? profile.displayName : 'Focus Practitioner');
                       setEditEmoji(profile.avatarEmoji);
                       setEditGoalMinutes(profile.dailyGoalMinutes);
                       setIsEditingProfile(true);

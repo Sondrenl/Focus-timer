@@ -110,10 +110,11 @@ export class AuthService {
   public getInitialAuthState(): AuthState {
     const token = this.getStoredToken();
     const user = this.getStoredUser();
+    const isAuthenticated = Boolean(token && user);
     return {
-      isAuthenticated: Boolean(token && user),
-      user: user,
-      token: token,
+      isAuthenticated,
+      user: isAuthenticated ? user : null,
+      token: isAuthenticated ? token : null,
       isSyncing: false,
       lastSyncedAt: this.getLastSyncedAt(),
       syncError: null,
