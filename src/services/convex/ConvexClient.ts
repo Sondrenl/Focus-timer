@@ -1,6 +1,8 @@
 import { ConvexReactClient } from "convex/react";
 
-export const DEFAULT_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";
+export const DEFAULT_CONVEX_URL = import.meta.env.PROD
+  ? "https://acrobatic-oyster-97.convex.cloud"
+  : "https://agile-seahorse-756.eu-west-1.convex.cloud";
 
 export const convexUrl =
   import.meta.env.VITE_CONVEX_URL ||

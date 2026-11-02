@@ -76,7 +76,9 @@ export const ProfileView: React.FC = () => {
       if (window.google?.accounts?.id && googleButtonContainerRef.current) {
         try {
           window.google.accounts.id.initialize({
-            client_id: '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com',
+            client_id:
+              import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+              '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com',
             callback: async (response: any) => {
               if (response.credential) {
                 try {
