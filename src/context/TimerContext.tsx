@@ -609,35 +609,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (remote: RemoteTimerState) => {
       const nowMs = Date.now();
       const isRecentCompletion = nowMs - lastAlertWallMsRef.current < 4000;
-      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 3000;
+      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 2000;
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
 
-      const isAdoptingActiveRemote =
-        !isRecentCompletion &&
-        !hasRecentLocalAction &&
-        statusRef.current === 'IDLE' &&
-        (remote.status === 'RUNNING' || remote.status === 'PAUSED');
-
-      const isAdoptingActiveRunning =
-        !isRecentCompletion &&
-        !hasRecentLocalAction &&
-        remote.status === 'RUNNING' &&
-        Boolean(remote.targetEndTime && remote.targetEndTime > nowMs);
-
-      if (!isNewer && !isAdoptingActiveRemote && !isAdoptingActiveRunning) {
+      // If this device recently took a local action or triggered a completion alert,
+      // only accept remote state if it is newer to prevent echo/race conditions.
+      if ((hasRecentLocalAction || isRecentCompletion) && !isNewer) {
         return;
       }
 
       const now = authService.getServerNow();
 
+      // Trigger completion alert only when remote explicitly signals COMPLETED
       if (
         statusRef.current === 'RUNNING' &&
-        targetEndTimeRef.current !== null &&
-        Math.abs(targetEndTimeRef.current - now) <= 10000 &&
-        (remote.status === 'IDLE' || remote.sessionType !== sessionTypeRef.current)
+        remote.status === 'COMPLETED'
       ) {
         const completedType = sessionTypeRef.current;
-        const completedRunId = timerRunIdRef.current || `${completedType.toLowerCase()}-${now}`;
+        const completedRunId = timerRunIdRef.current || remote.timerRunId || `${completedType.toLowerCase()}-${now}`;
         dispatchCompletionAlert(completedType, completedRunId);
       }
 
@@ -650,6 +639,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         if (diffSec > 0) {
           sound.startSilentKeepAlive();
+          wakeLockService.acquire();
 
           sessionTypeRef.current = remote.sessionType;
           currentCycleRef.current = remote.currentCycle || 1;
@@ -697,6 +687,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             timerRunIdRef.current = null;
             notifications.cancelScheduledNotification();
             sound.stopSilentKeepAlive(false);
+            wakeLockService.release();
             return;
           }
 
@@ -719,6 +710,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         sound.stopSilentKeepAlive(true);
+        wakeLockService.release();
         notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
@@ -726,15 +718,21 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setStatus('PAUSED');
       } else {
         const nextStatus: TimerStatus = remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
-        const configuredDur = getDurationForType(remote.sessionType);
+        const dur = remote.remainingSeconds && remote.remainingSeconds > 0
+          ? remote.remainingSeconds
+          : getDurationForType(remote.sessionType);
+        const tot = remote.totalSeconds && remote.totalSeconds > 0
+          ? remote.totalSeconds
+          : dur;
+
         sessionTypeRef.current = remote.sessionType;
         currentCycleRef.current = remote.currentCycle || 1;
-        totalSecondsRef.current = configuredDur;
-        remainingSecondsRef.current = configuredDur;
+        totalSecondsRef.current = tot;
+        remainingSecondsRef.current = dur;
         statusRef.current = nextStatus;
         setSessionType(remote.sessionType);
         setCurrentCycle(remote.currentCycle || 1);
-        setTotalSeconds(configuredDur);
+        setTotalSeconds(tot);
         timerRunIdRef.current = remote.timerRunId || null;
         if (remote.activeTagId !== undefined && setActiveTagId) {
           prevActiveTagIdRef.current = remote.activeTagId;
@@ -742,10 +740,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         sound.stopSilentKeepAlive(false);
+        wakeLockService.release();
         notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;
         setTargetEndTime(null);
-        setRemainingSeconds(configuredDur);
+        setRemainingSeconds(dur);
         setStatus(nextStatus);
       }
 
@@ -772,14 +771,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       peerPresenceRef.current = remoteTimer.peerPresence;
     }
     const now = Date.now();
-    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 3000;
+    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 2000;
+    const isRecentCompletion = now - lastAlertWallMsRef.current < 4000;
     const isNewer = remoteTimer.updatedAtMs > localUpdatedAtRef.current;
-    const isAdoptingActive =
-      !hasRecentLocalAction &&
-      ((statusRef.current === 'IDLE' && (remoteTimer.status === 'RUNNING' || remoteTimer.status === 'PAUSED')) ||
-       (remoteTimer.status === 'RUNNING' && remoteTimer.targetEndTime !== null && remoteTimer.targetEndTime !== undefined && remoteTimer.targetEndTime > now));
 
-    if (isNewer || isAdoptingActive) {
+    // Adopt remote state unconditionally if no recent local action or completion occurred,
+    // or if the remote state timestamp is newer than our local state.
+    if ((!hasRecentLocalAction && !isRecentCompletion) || isNewer) {
       applyRemoteState({
         sessionType: remoteTimer.sessionType,
         status: remoteTimer.status,
@@ -932,8 +930,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Multi-tab BroadcastChannel listener
   useEffect(() => {
     const unsubscribeState = subscribeTimerState((incoming) => {
-      if (incoming.updatedAtMs > localUpdatedAtRef.current && !isApplyingRemoteRef.current) {
-        applyRemoteState(incoming);
+      const now = Date.now();
+      const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 2000;
+      const isRecentCompletion = now - lastAlertWallMsRef.current < 4000;
+      if (!isApplyingRemoteRef.current) {
+        if ((!hasRecentLocalAction && !isRecentCompletion) || incoming.updatedAtMs > localUpdatedAtRef.current) {
+          applyRemoteState(incoming);
+        }
       }
     });
 

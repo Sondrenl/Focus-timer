@@ -57,7 +57,6 @@ try {
       }
     };
     window.addEventListener('pagehide', announceGoodbye);
-    window.addEventListener('beforeunload', announceGoodbye);
   }
 } catch {
   channel = null;
