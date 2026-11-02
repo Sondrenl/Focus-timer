@@ -10,7 +10,7 @@ import { TagRepository } from '../services/repository/TagRepository';
 import { SessionRepository } from '../services/repository/SessionRepository';
 import { SettingsRepository } from '../services/repository/SettingsRepository';
 import { ProfileRepository } from '../services/repository/ProfileRepository';
-import { AuthService } from '../services/auth/AuthService';
+import { AuthService, parseGoogleJwt, buildProfileFromJwt } from '../services/auth/AuthService';
 import { SoundService, soundService } from '../services/audio/SoundService';
 import { NotificationService, notificationService } from '../services/notification/NotificationService';
 import { useConvexSync } from '../services/convex/useConvexSync';
@@ -92,22 +92,7 @@ const profileRepository = new ProfileRepository(storageService);
 const coffeeRepository = new CoffeeRepository(storageService);
 const authService = AuthService.getInstance();
 
-const parseGoogleJwt = (token: string): any => {
-  try {
-    const base64Url = token.split('.')[1];
-    if (!base64Url) return null;
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    return JSON.parse(jsonPayload);
-  } catch {
-    return null;
-  }
-};
+
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
@@ -322,22 +307,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Invalid Google identity token');
       }
 
-      const user: UserProfile = {
-        id: payload.sub,
-        email: payload.email || '',
-        displayName: payload.name || payload.email?.split('@')[0] || 'Focus Practitioner',
-        avatarUrl: payload.picture,
-        avatarEmoji: '',
-        dailyGoalMinutes: profileRef.current.dailyGoalMinutes || 120,
-        createdAt: profileRef.current.createdAt || new Date().toISOString(),
-      };
-
-      try {
-        localStorage.setItem('focus_timer_auth_token', idToken);
-        localStorage.setItem('focus_timer_user_profile', JSON.stringify(user));
-      } catch (e) {
-        console.warn('Could not persist auth to localStorage', e);
-      }
+      const user = buildProfileFromJwt(payload, profileRef.current);
+      authService.saveAuthSession(idToken, user);
 
       if (isConvexConfigured) {
         setAuthToken(idToken);
@@ -452,15 +423,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const payload = parseGoogleJwt(storedToken);
           if (payload && payload.sub && (!payload.exp || payload.exp * 1000 > Date.now())) {
             setAuthToken(storedToken);
-            const verifiedUser: UserProfile = {
-              id: payload.sub,
-              email: payload.email || '',
-              displayName: payload.name || payload.email?.split('@')[0] || 'Focus Practitioner',
-              avatarUrl: payload.picture,
-              avatarEmoji: '',
-              dailyGoalMinutes: profileRef.current.dailyGoalMinutes || 120,
-              createdAt: profileRef.current.createdAt || new Date().toISOString(),
-            };
+            const verifiedUser = buildProfileFromJwt(payload, profileRef.current);
             setAuth({
               isAuthenticated: true,
               user: verifiedUser,

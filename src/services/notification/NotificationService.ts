@@ -1,9 +1,10 @@
 import { SessionType } from '../../types/timer';
+import { isMobileDevice } from '../../utils/environment';
+import { AuthService } from '../auth/AuthService';
 
 export type NotificationPermissionStatus = NotificationPermission | 'unsupported';
 
 const ACTIVE_NOTIFICATION_TAG = 'pomodor-active-alert';
-const TOKEN_KEY = 'focus_timer_auth_token';
 
 /**
  * Service to handle browser & mobile Home Screen / lock-screen notifications via Service Worker
@@ -72,28 +73,38 @@ export class NotificationService {
     return Notification.permission === 'granted';
   }
 
-  private getAuthToken(): string | null {
-    if (typeof window === 'undefined') return null;
-    try {
-      return localStorage.getItem(TOKEN_KEY);
-    } catch {
-      return null;
-    }
-  }
-
-  public setAuthToken(token: string | null): void {
+  /**
+   * Helper to dispatch messages to the active Service Worker or controller with fallback.
+   */
+  private sendWorkerMessage(message: unknown): void {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
     const syncWorker =
-      this.cachedRegistration?.active ||
-      navigator.serviceWorker?.controller;
+      this.cachedRegistration?.active || navigator.serviceWorker?.controller;
 
     if (syncWorker) {
       try {
-        syncWorker.postMessage({ type: 'SET_AUTH_TOKEN', token });
+        syncWorker.postMessage(message);
+        return;
       } catch {
-        // Ignore
+        // Fall through to active registration resolution
       }
     }
+
+    this.getActiveRegistration().then((reg) => {
+      const worker = reg?.active || navigator.serviceWorker?.controller;
+      if (worker) {
+        try {
+          worker.postMessage(message);
+        } catch {
+          // Ignored
+        }
+      }
+    });
+  }
+
+  public setAuthToken(token: string | null): void {
+    this.sendWorkerMessage({ type: 'SET_AUTH_TOKEN', token });
   }
 
   private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
@@ -142,19 +153,7 @@ export class NotificationService {
    * Closes any previous Pomodor notifications in the notification center so they never bunch up.
    */
   clearActiveNotifications(): void {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-
-    const syncWorker =
-      this.cachedRegistration?.active ||
-      navigator.serviceWorker?.controller;
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage({ type: 'CLEAR_NOTIFICATIONS' });
-      } catch {
-        // Ignore
-      }
-    }
+    this.sendWorkerMessage({ type: 'CLEAR_NOTIFICATIONS' });
 
     if (this.cachedRegistration && typeof this.cachedRegistration.getNotifications === 'function') {
       this.cachedRegistration
@@ -169,22 +168,10 @@ export class NotificationService {
   }
 
   private markSessionNotifiedInWorker(sessionId?: string | null): void {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-
-    const syncWorker =
-      this.cachedRegistration?.active ||
-      navigator.serviceWorker?.controller;
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage({
-          type: 'MARK_SESSION_NOTIFIED',
-          sessionId: sessionId || null,
-        });
-      } catch {
-        // Ignore
-      }
-    }
+    this.sendWorkerMessage({
+      type: 'MARK_SESSION_NOTIFIED',
+      sessionId: sessionId || null,
+    });
   }
 
   async notify(
@@ -247,16 +234,24 @@ export class NotificationService {
         return true;
       }
     } catch (err) {
-      console.warn('reg.showNotification direct dispatch failed, trying fallbacks:', err);
+      console.warn('reg.showNotification failed, trying Window Notification:', err);
     }
 
-    // 2. Direct Window Notification constructor fallback (standard on desktop browsers)
+    // 2. Window Notification constructor fallback
     try {
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        const notif = new Notification(title, options);
+      if (typeof Notification === 'function') {
+        const notif = new Notification(title, {
+          body,
+          icon: '/icon-192.png',
+          tag: notifTag,
+          silent: false,
+        });
         notif.onclick = () => {
-          window.focus();
-          notif.close();
+          try {
+            window.focus();
+          } catch {
+            // Ignore
+          }
         };
         return true;
       }
@@ -265,29 +260,15 @@ export class NotificationService {
     }
 
     // 3. Service Worker message dispatch fallback
-    const syncWorker =
-      this.cachedRegistration?.active ||
-      (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
-        ? navigator.serviceWorker.controller
-        : null);
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage({
-          type: 'SHOW_NOTIFICATION',
-          title,
-          body,
-          sessionId: sessionRunId || null,
-          isManualTest,
-          token: this.getAuthToken(),
-        });
-        return true;
-      } catch (err) {
-        console.warn('syncWorker.postMessage fallback failed:', err);
-      }
-    }
-
-    return false;
+    this.sendWorkerMessage({
+      type: 'SHOW_NOTIFICATION',
+      title,
+      body,
+      sessionId: sessionRunId || null,
+      isManualTest,
+      token: AuthService.getInstance().getStoredToken(),
+    });
+    return true;
   }
 
   /**
@@ -316,69 +297,21 @@ export class NotificationService {
         ? 'Your focus timer has finished. Time for a break.'
         : 'Your break timer has finished. Time for a focus session.';
 
-    const syncWorker =
-      this.cachedRegistration?.active ||
-      (typeof navigator !== 'undefined' && 'serviceWorker' in navigator
-        ? navigator.serviceWorker.controller
-        : null);
-
-    const isMobile =
-      typeof navigator !== 'undefined' &&
-      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-    const messageData = {
+    this.sendWorkerMessage({
       type: 'SCHEDULE_TIMER_NOTIFICATION',
       targetEndTime: targetEndTimeMs,
       title,
       body,
       sessionId: sessionRunId || null,
       sessionType,
-      isMobile,
-      token: this.getAuthToken(),
-    };
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage(messageData);
-        return;
-      } catch {
-        // Fall through to async lookup
-      }
-    }
-
-    this.getActiveRegistration().then((reg) => {
-      const worker = reg?.active || navigator.serviceWorker?.controller;
-      if (worker) {
-        worker.postMessage(messageData);
-      }
+      isMobile: isMobileDevice(),
+      token: AuthService.getInstance().getStoredToken(),
     });
   }
 
   cancelScheduledNotification(): void {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-
-    const syncWorker =
-      this.cachedRegistration?.active ||
-      navigator.serviceWorker?.controller;
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage({
-          type: 'CANCEL_TIMER_NOTIFICATION',
-        });
-        return;
-      } catch {
-        // Fall through
-      }
-    }
-
-    this.getActiveRegistration().then((reg) => {
-      const worker = reg?.active || navigator.serviceWorker?.controller;
-      if (worker) {
-        worker.postMessage({
-          type: 'CANCEL_TIMER_NOTIFICATION',
-        });
-      }
+    this.sendWorkerMessage({
+      type: 'CANCEL_TIMER_NOTIFICATION',
     });
   }
 }

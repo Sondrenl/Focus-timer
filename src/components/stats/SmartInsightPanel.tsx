@@ -13,11 +13,26 @@ import {
   ChevronLeft,
   ChevronRight,
   Lightbulb,
+  LucideIcon,
 } from 'lucide-react';
 
 interface SmartInsightPanelProps {
   insights: InterestingStat[];
 }
+
+const INSIGHT_ICONS: Record<
+  NonNullable<InterestingStat['iconName']>,
+  { Icon: LucideIcon; color: string; bg: string }
+> = {
+  coffee: { Icon: Coffee, color: 'text-amber-700', bg: 'bg-amber-700/10' },
+  zap: { Icon: Zap, color: 'text-amber-600', bg: 'bg-amber-600/10' },
+  'trending-up': { Icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-600/10' },
+  target: { Icon: Target, color: 'text-blue-600', bg: 'bg-blue-600/10' },
+  clock: { Icon: Clock, color: 'text-indigo-600', bg: 'bg-indigo-600/10' },
+  flame: { Icon: Flame, color: 'text-orange-600', bg: 'bg-orange-600/10' },
+  layers: { Icon: Layers, color: 'text-purple-600', bg: 'bg-purple-600/10' },
+  sparkles: { Icon: Sparkles, color: 'text-emerald-600', bg: 'bg-emerald-600/10' },
+};
 
 export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -40,49 +55,8 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
     setCurrentIndex((prev) => (prev < insights.length - 1 ? prev + 1 : 0));
   };
 
-  const renderIcon = (name: InterestingStat['iconName']) => {
-    switch (name) {
-      case 'coffee':
-        return <Coffee className="w-5 h-5 text-amber-700" />;
-      case 'zap':
-        return <Zap className="w-5 h-5 text-amber-600" />;
-      case 'trending-up':
-        return <TrendingUp className="w-5 h-5 text-emerald-600" />;
-      case 'target':
-        return <Target className="w-5 h-5 text-blue-600" />;
-      case 'clock':
-        return <Clock className="w-5 h-5 text-indigo-600" />;
-      case 'flame':
-        return <Flame className="w-5 h-5 text-orange-600" />;
-      case 'layers':
-        return <Layers className="w-5 h-5 text-purple-600" />;
-      case 'sparkles':
-      default:
-        return <Sparkles className="w-5 h-5 text-emerald-600" />;
-    }
-  };
-
-  const getIconBg = (name: InterestingStat['iconName']) => {
-    switch (name) {
-      case 'coffee':
-        return 'bg-amber-700/10';
-      case 'zap':
-        return 'bg-amber-600/10';
-      case 'trending-up':
-        return 'bg-emerald-600/10';
-      case 'target':
-        return 'bg-blue-600/10';
-      case 'clock':
-        return 'bg-indigo-600/10';
-      case 'flame':
-        return 'bg-orange-600/10';
-      case 'layers':
-        return 'bg-purple-600/10';
-      case 'sparkles':
-      default:
-        return 'bg-emerald-600/10';
-    }
-  };
+  const iconConfig = (currentInsight.iconName && INSIGHT_ICONS[currentInsight.iconName]) || INSIGHT_ICONS.sparkles;
+  const { Icon: InsightIcon, color, bg } = iconConfig;
 
   return (
     <div className="flex flex-col gap-2">
@@ -127,16 +101,12 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
       >
         <div className="flex items-start gap-4">
           <div
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${getIconBg(
-              currentInsight.iconName
-            )}`}
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${bg}`}
           >
-            {renderIcon(currentInsight.iconName)}
+            <InsightIcon className={`w-5 h-5 ${color}`} />
           </div>
 
           <div className="flex-1 min-w-0">
-
-
             <h4 className="text-base sm:text-lg font-bold text-md-on-surface tracking-tight leading-snug">
               {currentInsight.headline}
             </h4>

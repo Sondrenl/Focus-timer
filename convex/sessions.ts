@@ -2,6 +2,23 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
 
+interface SessionData {
+  tagId?: string | null;
+  sessionType: "WORK" | "SHORT_BREAK" | "LONG_BREAK";
+  durationSeconds: number;
+  completedAt: string;
+}
+
+function formatSessionRecord(id: string, s: SessionData) {
+  return {
+    id,
+    tagId: s.tagId ?? null,
+    sessionType: s.sessionType,
+    durationSeconds: s.durationSeconds,
+    completedAt: s.completedAt,
+  };
+}
+
 /**
  * Returns completed focus/break sessions.
  * Supports date-range filtering or returning recent sessions up to a limit.
@@ -39,13 +56,7 @@ export const list = query({
         .take(limit);
     }
 
-    return sessions.map((s) => ({
-      id: s._id,
-      tagId: s.tagId ?? null,
-      sessionType: s.sessionType,
-      durationSeconds: s.durationSeconds,
-      completedAt: s.completedAt,
-    }));
+    return sessions.map((s) => formatSessionRecord(s._id, s));
   },
 });
 
@@ -77,13 +88,7 @@ export const record = mutation({
 
     const duplicate = recent.find((s) => s.sessionType === args.sessionType);
     if (duplicate) {
-      return {
-        id: duplicate._id,
-        tagId: duplicate.tagId ?? null,
-        sessionType: duplicate.sessionType,
-        durationSeconds: duplicate.durationSeconds,
-        completedAt: duplicate.completedAt,
-      };
+      return formatSessionRecord(duplicate._id, duplicate);
     }
 
     const sessionId = await ctx.db.insert("sessions", {
@@ -94,13 +99,12 @@ export const record = mutation({
       completedAt,
     });
 
-    return {
-      id: sessionId,
-      tagId: args.tagId ?? null,
+    return formatSessionRecord(sessionId, {
+      tagId: args.tagId,
       sessionType: args.sessionType,
       durationSeconds: args.durationSeconds,
       completedAt,
-    };
+    });
   },
 });
 

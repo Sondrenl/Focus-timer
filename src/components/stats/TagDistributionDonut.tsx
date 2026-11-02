@@ -8,6 +8,41 @@ interface TagDistributionDonutProps {
   totalFocusSeconds: number;
 }
 
+interface SliceWithRatio {
+  tagId: string;
+  startRatio: number;
+  endRatio: number;
+  isLast: boolean;
+}
+
+function getSliceAtPoint<T extends SliceWithRatio>(
+  e: React.MouseEvent<SVGSVGElement>,
+  center: number,
+  slices: T[]
+): { svgDist: number; matchedSlice: T | undefined } {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = e.clientX - cx;
+  const dy = e.clientY - cy;
+  const dist = Math.hypot(dx, dy);
+
+  const scale = center / (rect.width / 2);
+  const svgDist = dist * scale;
+
+  let deg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+  if (deg < 0) deg += 360;
+  const ratio = deg / 360;
+
+  const matchedSlice = slices.find((slice) =>
+    slice.isLast
+      ? ratio >= slice.startRatio && ratio <= 1.001
+      : ratio >= slice.startRatio && ratio < slice.endRatio
+  );
+
+  return { svgDist, matchedSlice };
+}
+
 export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   distribution,
   totalFocusSeconds,
@@ -55,16 +90,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (activeSlices.length === 0) return;
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const dx = e.clientX - cx;
-    const dy = e.clientY - cy;
-    const dist = Math.hypot(dx, dy);
-
-    // Scale pixel distance to the 100px radius coordinate space
-    const scale = center / (rect.width / 2);
-    const svgDist = dist * scale;
+    const { svgDist, matchedSlice } = getSliceAtPoint(e, center, slicesWithOffsets);
 
     // Donut ring range is [radius - strokeWidth/2, radius + strokeWidth/2] = [74, 98]
     // Add generous padding [68, 104] so cursor doesn't jitter at the boundary
@@ -78,34 +104,15 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
       return;
     }
 
-    // Angle in degrees [0, 360) clockwise from 12 o'clock
-    let deg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
-    if (deg < 0) deg += 360;
-    const ratio = deg / 360;
-
-    const matched = slicesWithOffsets.find((slice) =>
-      slice.isLast
-        ? ratio >= slice.startRatio && ratio <= 1.001
-        : ratio >= slice.startRatio && ratio < slice.endRatio
-    );
-
-    if (matched && matched.tagId !== hoveredTagId) {
-      setHoveredTagId(matched.tagId);
+    if (matchedSlice && matchedSlice.tagId !== hoveredTagId) {
+      setHoveredTagId(matchedSlice.tagId);
     }
   };
 
   const handleSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (activeSlices.length === 0) return;
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const dx = e.clientX - cx;
-    const dy = e.clientY - cy;
-    const dist = Math.hypot(dx, dy);
-
-    const scale = center / (rect.width / 2);
-    const svgDist = dist * scale;
+    const { svgDist, matchedSlice } = getSliceAtPoint(e, center, slicesWithOffsets);
 
     // Clicking the center hole clears pinned selection
     if (svgDist < radius - strokeWidth / 2 - 4) {
@@ -118,18 +125,8 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
       return;
     }
 
-    let deg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
-    if (deg < 0) deg += 360;
-    const ratio = deg / 360;
-
-    const matched = slicesWithOffsets.find((slice) =>
-      slice.isLast
-        ? ratio >= slice.startRatio && ratio <= 1.001
-        : ratio >= slice.startRatio && ratio < slice.endRatio
-    );
-
-    if (matched) {
-      setSelectedTagId((prev) => (prev === matched.tagId ? null : matched.tagId));
+    if (matchedSlice) {
+      setSelectedTagId((prev) => (prev === matchedSlice.tagId ? null : matchedSlice.tagId));
     }
   };
 
