@@ -46,3 +46,18 @@ export function getEnvironmentType(): 'production' | 'preview' | 'development' {
   if (isProduction()) return 'production';
   return 'preview';
 }
+
+/**
+ * Detects if the current user agent / device is mobile or touch-primary
+ */
+export function isMobileDevice(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) {
+    return true;
+  }
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints && navigator.maxTouchPoints > 1) {
+    return true;
+  }
+  return false;
+}

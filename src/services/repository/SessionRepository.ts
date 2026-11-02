@@ -1,6 +1,13 @@
-import { ISessionRepository } from './ISessionRepository';
 import { CompletedSession } from '../../types/session';
 import { IStorageService } from '../storage/IStorageService';
+
+export interface ISessionRepository {
+  getAll(): Promise<CompletedSession[]>;
+  add(session: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession>;
+  saveAll(sessions: CompletedSession[]): Promise<void>;
+  loadSampleData(): Promise<CompletedSession[]>;
+  clear(): Promise<void>;
+}
 
 const SESSIONS_STORAGE_KEY = 'sessions_v1';
 

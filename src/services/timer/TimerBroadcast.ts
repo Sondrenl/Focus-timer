@@ -1,4 +1,4 @@
-import { RemoteTimerState } from '../auth/AuthService';
+import { RemoteTimerState } from '../../types/timer';
 import { CoffeeCup } from '../../types/coffee';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
@@ -67,26 +67,39 @@ export const hasActivePeerTabs = (): boolean => {
   return activePeerTabs.size > 0;
 };
 
-export const broadcastTimerState = (timer: RemoteTimerState): void => {
+/**
+ * Generic helper to broadcast typed events to peer tabs
+ */
+function broadcastPayload<K extends keyof TimerBroadcastEvent>(
+  type: TimerBroadcastEvent['type'],
+  key: K,
+  payload: NonNullable<TimerBroadcastEvent[K]>
+): void {
   try {
     if (channel) {
       channel.postMessage({
         senderId: TAB_ID,
-        type: 'TIMER',
-        timer,
+        type,
+        [key]: payload,
       } as TimerBroadcastEvent);
     }
   } catch (e) {
-    console.warn('Timer BroadcastChannel error:', e);
+    console.warn(`${String(type)} BroadcastChannel error:`, e);
   }
-};
+}
 
-export const subscribeTimerState = (callback: (timer: RemoteTimerState) => void): (() => void) => {
+/**
+ * Generic helper to subscribe to typed events from peer tabs
+ */
+function subscribePayload<K extends keyof TimerBroadcastEvent>(
+  key: K,
+  callback: (payload: NonNullable<TimerBroadcastEvent[K]>) => void
+): () => void {
   if (!channel) return () => {};
 
   const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
-    if (event.data && event.data.senderId !== TAB_ID && event.data.timer) {
-      callback(event.data.timer);
+    if (event.data && event.data.senderId !== TAB_ID && event.data[key]) {
+      callback(event.data[key] as NonNullable<TimerBroadcastEvent[K]>);
     }
   };
 
@@ -94,99 +107,35 @@ export const subscribeTimerState = (callback: (timer: RemoteTimerState) => void)
   return () => {
     channel?.removeEventListener('message', handler);
   };
-};
+}
 
-export const broadcastCoffeeCups = (coffeeCups: CoffeeCup[]): void => {
-  try {
-    if (channel) {
-      channel.postMessage({
-        senderId: TAB_ID,
-        type: 'COFFEE',
-        coffeeCups,
-      } as TimerBroadcastEvent);
-    }
-  } catch (e) {
-    console.warn('Coffee BroadcastChannel error:', e);
-  }
-};
+export const broadcastTimerState = (timer: RemoteTimerState): void =>
+  broadcastPayload('TIMER', 'timer', timer);
 
-export const subscribeCoffeeCups = (callback: (cups: CoffeeCup[]) => void): (() => void) => {
-  if (!channel) return () => {};
+export const subscribeTimerState = (callback: (timer: RemoteTimerState) => void): (() => void) =>
+  subscribePayload('timer', callback);
 
-  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
-    if (event.data && event.data.senderId !== TAB_ID && event.data.coffeeCups) {
-      callback(event.data.coffeeCups);
-    }
-  };
+export const broadcastCoffeeCups = (coffeeCups: CoffeeCup[]): void =>
+  broadcastPayload('COFFEE', 'coffeeCups', coffeeCups);
 
-  channel.addEventListener('message', handler);
-  return () => {
-    channel?.removeEventListener('message', handler);
-  };
-};
+export const subscribeCoffeeCups = (callback: (cups: CoffeeCup[]) => void): (() => void) =>
+  subscribePayload('coffeeCups', callback);
 
-export const broadcastTags = (tags: Tag[]): void => {
-  try {
-    if (channel) {
-      channel.postMessage({
-        senderId: TAB_ID,
-        type: 'TAGS',
-        tags,
-      } as TimerBroadcastEvent);
-    }
-  } catch (e) {
-    console.warn('Tags BroadcastChannel error:', e);
-  }
-};
+export const broadcastTags = (tags: Tag[]): void =>
+  broadcastPayload('TAGS', 'tags', tags);
 
-export const subscribeTags = (callback: (tags: Tag[]) => void): (() => void) => {
-  if (!channel) return () => {};
+export const subscribeTags = (callback: (tags: Tag[]) => void): (() => void) =>
+  subscribePayload('tags', callback);
 
-  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
-    if (event.data && event.data.senderId !== TAB_ID && event.data.tags) {
-      callback(event.data.tags);
-    }
-  };
+export const broadcastSession = (session: CompletedSession): void =>
+  broadcastPayload('SESSION', 'session', session);
 
-  channel.addEventListener('message', handler);
-  return () => {
-    channel?.removeEventListener('message', handler);
-  };
-};
-
-export const broadcastSession = (session: CompletedSession): void => {
-  try {
-    if (channel) {
-      channel.postMessage({
-        senderId: TAB_ID,
-        type: 'SESSION',
-        session,
-      } as TimerBroadcastEvent);
-    }
-  } catch (e) {
-    console.warn('Session BroadcastChannel error:', e);
-  }
-};
-
-export const subscribeSessions = (callback: (session: CompletedSession) => void): (() => void) => {
-  if (!channel) return () => {};
-
-  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
-    if (event.data && event.data.senderId !== TAB_ID && event.data.session) {
-      callback(event.data.session);
-    }
-  };
-
-  channel.addEventListener('message', handler);
-  return () => {
-    channel?.removeEventListener('message', handler);
-  };
-};
+export const subscribeSessions = (callback: (session: CompletedSession) => void): (() => void) =>
+  subscribePayload('session', callback);
 
 const localResetListeners = new Set<(scope: ResetScope) => void>();
 
 export const broadcastReset = (resetScope: ResetScope): void => {
-  // Notify local subscribers on this tab
   localResetListeners.forEach((fn) => {
     try {
       fn(resetScope);
@@ -195,38 +144,15 @@ export const broadcastReset = (resetScope: ResetScope): void => {
     }
   });
 
-  // Post to peer tabs
-  try {
-    if (channel) {
-      channel.postMessage({
-        senderId: TAB_ID,
-        type: 'RESET',
-        resetScope,
-      } as TimerBroadcastEvent);
-    }
-  } catch (e) {
-    console.warn('Reset BroadcastChannel error:', e);
-  }
+  broadcastPayload('RESET', 'resetScope', resetScope);
 };
 
 export const subscribeReset = (callback: (scope: ResetScope) => void): (() => void) => {
   localResetListeners.add(callback);
+  const unsubscribeChannel = subscribePayload('resetScope', callback);
 
-  if (!channel) {
-    return () => {
-      localResetListeners.delete(callback);
-    };
-  }
-
-  const handler = (event: MessageEvent<TimerBroadcastEvent>) => {
-    if (event.data && event.data.senderId !== TAB_ID && event.data.type === 'RESET' && event.data.resetScope) {
-      callback(event.data.resetScope);
-    }
-  };
-
-  channel.addEventListener('message', handler);
   return () => {
     localResetListeners.delete(callback);
-    channel?.removeEventListener('message', handler);
+    unsubscribeChannel();
   };
 };

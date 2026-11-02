@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES } from '../../utils/dates';
-import { Calendar as CalendarIcon, BarChart2, Award } from 'lucide-react';
+import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
+import { ActivityInspectionCard } from './ActivityInspectionCard';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -273,48 +274,11 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
           </div>
 
           {/* Dynamic Day Inspector Bar */}
-          <div className="mt-2 p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
-            {inspectedBar ? (
-              <>
-                <div className="font-semibold text-md-on-surface">
-                  {formatInspectedDate(inspectedBar.key)}
-                </div>
-                <div className="font-medium text-md-on-surface-variant">
-                  {inspectedBar.totalSeconds > 0 ? (
-                    <span>
-                      <strong className="text-md-primary font-bold">
-                        {formatDurationHoursMins(inspectedBar.totalSeconds)}
-                      </strong>{' '}
-                      focused across {inspectedBar.sessionCount}{' '}
-                      {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'}
-                    </span>
-                  ) : (
-                    <span>No focus sessions logged</span>
-                  )}
-                </div>
-              </>
-            ) : peakDay ? (
-              <>
-                <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
-                  <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                  <span>
-                    Peak Day:{' '}
-                    <span className="text-md-primary font-bold">
-                      {formatInspectedDate(peakDay.key)}
-                    </span>
-                  </span>
-                </div>
-                <div className="text-md-on-surface-variant font-medium">
-                  {formatDurationHoursMins(peakDay.totalSeconds)} focused ({peakDay.sessionCount}{' '}
-                  {peakDay.sessionCount === 1 ? 'session' : 'sessions'})
-                </div>
-              </>
-            ) : (
-              <div className="text-md-outline">
-                Hover or tap any day to inspect focus duration.
-              </div>
-            )}
-          </div>
+          <ActivityInspectionCard
+            inspectedBar={inspectedBar}
+            peakDay={peakDay}
+            formatInspectedDate={formatInspectedDate}
+          />
         </div>
       ) : (
         /* Weekly Breakdown Mode */

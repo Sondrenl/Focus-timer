@@ -1,35 +1,9 @@
 import { UserProfile, AuthState } from '../../types/user';
+import { RemoteTimerState, PeerPresence } from '../../types/timer';
+import { isMobileDevice } from '../../utils/environment';
 
-export interface RemoteTimerState {
-  sessionType: "WORK" | "SHORT_BREAK" | "LONG_BREAK";
-  status: "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
-  remainingSeconds: number;
-  totalSeconds: number;
-  targetEndTime: number | null;
-  currentCycle: number;
-  activeTagId: string | null;
-  timerRunId: string | null;
-  updatedAtMs: number;
-}
-
-export interface PeerPresence {
-  desktopActive: boolean;
-  desktopVisible: boolean;
-  mobileActive: boolean;
-  mobileVisible: boolean;
-}
-
-export function isMobileDevice(): boolean {
-  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
-  const ua = navigator.userAgent || '';
-  if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) {
-    return true;
-  }
-  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints && navigator.maxTouchPoints > 1) {
-    return true;
-  }
-  return false;
-}
+export type { RemoteTimerState, PeerPresence };
+export { isMobileDevice };
 
 const TOKEN_KEY = 'focus_timer_auth_token';
 const USER_KEY = 'focus_timer_user_profile';

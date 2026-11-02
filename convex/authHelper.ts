@@ -1,26 +1,8 @@
 import { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
 
-export const DEFAULT_SETTINGS = {
-  workDurationMinutes: 25,
-  shortBreakDurationMinutes: 5,
-  longBreakDurationMinutes: 25,
-  longBreakInterval: 4,
-  autoStartBreaks: false,
-  autoStartPomodoros: false,
-  soundVolume: 0.8,
-  soundEnabled: true,
-  notificationsEnabled: false,
-  keepAwake: false,
-};
-
-export const DEFAULT_TAGS = [
-  { id: "tag-deep-work", name: "Deep Work", color: "#7E57C2", isArchived: false, createdAt: new Date().toISOString() },
-  { id: "tag-study", name: "Study & Learning", color: "#5C6BC0", isArchived: false, createdAt: new Date().toISOString() },
-  { id: "tag-coding", name: "Coding & Dev", color: "#00897B", isArchived: false, createdAt: new Date().toISOString() },
-  { id: "tag-writing", name: "Writing", color: "#D81B60", isArchived: false, createdAt: new Date().toISOString() },
-  { id: "tag-reading", name: "Reading", color: "#FB8C00", isArchived: false, createdAt: new Date().toISOString() },
-];
+import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "./defaultData";
+export { DEFAULT_SETTINGS, DEFAULT_TAGS };
 
 /**
  * Retrieves the currently authenticated user document.

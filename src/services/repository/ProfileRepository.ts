@@ -1,6 +1,11 @@
-import { IProfileRepository } from './IProfileRepository';
 import { UserProfile, DEFAULT_PROFILE } from '../../types/user';
 import { IStorageService } from '../storage/IStorageService';
+
+export interface IProfileRepository {
+  get(): Promise<UserProfile>;
+  save(profile: UserProfile): Promise<void>;
+  resetToDefaults(): Promise<UserProfile>;
+}
 
 const PROFILE_STORAGE_KEY = 'profile_v1';
 

@@ -1,6 +1,11 @@
-import { ISettingsRepository } from './ISettingsRepository';
 import { UserSettings, DEFAULT_SETTINGS } from '../../types/settings';
 import { IStorageService } from '../storage/IStorageService';
+
+export interface ISettingsRepository {
+  get(): Promise<UserSettings>;
+  save(settings: UserSettings): Promise<void>;
+  resetToDefaults(): Promise<UserSettings>;
+}
 
 const SETTINGS_STORAGE_KEY = 'settings_v1';
 

@@ -1,3 +1,5 @@
+import { DEFAULT_SETTINGS as BASE_DEFAULT_SETTINGS } from '../../convex/defaultData';
+
 /**
  * User configuration preferences for timer cycles and feedback
  */
@@ -23,13 +25,13 @@ export interface UserSettings {
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
-  workDurationMinutes: 25,
-  shortBreakDurationMinutes: 5,
-  longBreakDurationMinutes: 25,
-  longBreakInterval: 4,
-  autoStartBreaks: false,
-  autoStartPomodoros: false,
-  soundVolume: 0.8,
-  soundEnabled: true,
-  notificationsEnabled: false,
+  workDurationMinutes: BASE_DEFAULT_SETTINGS.workDurationMinutes,
+  shortBreakDurationMinutes: BASE_DEFAULT_SETTINGS.shortBreakDurationMinutes,
+  longBreakDurationMinutes: BASE_DEFAULT_SETTINGS.longBreakDurationMinutes,
+  longBreakInterval: BASE_DEFAULT_SETTINGS.longBreakInterval,
+  autoStartBreaks: BASE_DEFAULT_SETTINGS.autoStartBreaks,
+  autoStartPomodoros: BASE_DEFAULT_SETTINGS.autoStartPomodoros,
+  soundVolume: BASE_DEFAULT_SETTINGS.soundVolume,
+  soundEnabled: BASE_DEFAULT_SETTINGS.soundEnabled,
+  notificationsEnabled: BASE_DEFAULT_SETTINGS.notificationsEnabled,
 };

@@ -1,3 +1,5 @@
+import { DEFAULT_TAGS as BASE_DEFAULT_TAGS } from '../../convex/defaultData';
+
 /**
  * Tag model for categorizing Pomodoro focus sessions.
  * Follows soft-delete pattern via isArchived flag.
@@ -19,3 +21,5 @@ export interface Tag {
 
 export type CreateTagInput = Omit<Tag, 'id' | 'createdAt' | 'updatedAt' | 'isArchived'>;
 export type UpdateTagInput = Partial<Omit<Tag, 'id' | 'createdAt'>>;
+
+export const DEFAULT_TAGS: Tag[] = BASE_DEFAULT_TAGS;

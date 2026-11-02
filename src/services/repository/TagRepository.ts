@@ -1,56 +1,23 @@
-import { ITagRepository } from './ITagRepository';
-import { Tag, CreateTagInput, UpdateTagInput } from '../../types/tag';
+import { Tag, CreateTagInput, UpdateTagInput, DEFAULT_TAGS } from '../../types/tag';
 import { IStorageService } from '../storage/IStorageService';
+
+export interface ITagRepository {
+  getAll(): Promise<Tag[]>;
+  getActive(): Promise<Tag[]>;
+  getById(id: string): Promise<Tag | null>;
+  create(input: CreateTagInput): Promise<Tag>;
+  update(id: string, updates: UpdateTagInput): Promise<Tag | null>;
+  archive(id: string): Promise<Tag | null>;
+  unarchive(id: string): Promise<Tag | null>;
+  delete(id: string): Promise<boolean>;
+  saveAll(tags: Tag[]): Promise<void>;
+  resetToDefaults(): Promise<Tag[]>;
+}
 
 const TAGS_STORAGE_KEY = 'tags_v1';
 const EPOCH_ISO = '1970-01-01T00:00:00.000Z';
 
-/**
- * Initial curated tags with Material Design 3 pastel tones
- * Seeded with epoch timestamps so untouched local defaults never overwrite user-modified cloud tags.
- */
-export const DEFAULT_TAGS: Tag[] = [
-  {
-    id: 'tag-deep-work',
-    name: 'Deep Work',
-    color: '#7E57C2', // Pastel Purple
-    isArchived: false,
-    createdAt: EPOCH_ISO,
-    updatedAt: EPOCH_ISO,
-  },
-  {
-    id: 'tag-study',
-    name: 'Study & Learning',
-    color: '#5C6BC0', // Pastel Indigo
-    isArchived: false,
-    createdAt: EPOCH_ISO,
-    updatedAt: EPOCH_ISO,
-  },
-  {
-    id: 'tag-coding',
-    name: 'Coding & Dev',
-    color: '#00897B', // Pastel Teal
-    isArchived: false,
-    createdAt: EPOCH_ISO,
-    updatedAt: EPOCH_ISO,
-  },
-  {
-    id: 'tag-writing',
-    name: 'Writing',
-    color: '#D81B60', // Pastel Rose
-    isArchived: false,
-    createdAt: EPOCH_ISO,
-    updatedAt: EPOCH_ISO,
-  },
-  {
-    id: 'tag-admin',
-    name: 'Admin & Emails',
-    color: '#FB8C00', // Pastel Orange
-    isArchived: false,
-    createdAt: EPOCH_ISO,
-    updatedAt: EPOCH_ISO,
-  },
-];
+export { DEFAULT_TAGS } from "../../types/tag";
 
 /**
  * Implementation of ITagRepository using injected IStorageService

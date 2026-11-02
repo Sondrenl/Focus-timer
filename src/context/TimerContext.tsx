@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { SessionType, TimerStatus, TimerState } from '../types/timer';
+import { SessionType, TimerStatus, TimerState, RemoteTimerState, PeerPresence } from '../types/timer';
 import { UserSettings } from '../types/settings';
 import { useApp } from './AppContext';
 import { triggerCompletionConfetti } from '../utils/confetti';
-import { AuthService, RemoteTimerState, PeerPresence, isMobileDevice } from '../services/auth/AuthService';
+import { isMobileDevice } from '../utils/environment';
+import { AuthService } from '../services/auth/AuthService';
 import { broadcastTimerState, subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
 import { useConvexTimer } from '../services/convex/useConvexTimer';

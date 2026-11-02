@@ -10,6 +10,7 @@
 
 import type * as authHelper from "../authHelper.js";
 import type * as coffee from "../coffee.js";
+import type * as defaultData from "../defaultData.js";
 import type * as migrations from "../migrations.js";
 import type * as push from "../push.js";
 import type * as sessions from "../sessions.js";
@@ -26,6 +27,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   authHelper: typeof authHelper;
   coffee: typeof coffee;
+  defaultData: typeof defaultData;
   migrations: typeof migrations;
   push: typeof push;
   sessions: typeof sessions;
