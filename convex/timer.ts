@@ -268,7 +268,8 @@ export const updatePresence = mutation({
     isVisible: v.boolean(),
   },
   handler: async (ctx, args): Promise<any> => {
-    const user = await requireUser(ctx, true);
+    const user = await getAuthenticatedUser(ctx);
+    if (!user) return null;
     const existing = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
