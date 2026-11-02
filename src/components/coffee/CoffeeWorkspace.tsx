@@ -150,16 +150,24 @@ export const CoffeeWorkspace: React.FC = () => {
             const cupTag = tags.find((t) => t.id === cup.tagId);
             const cupColor = cupTag ? cupTag.color : '#8D6E63';
             const cupName = cupTag ? cupTag.name : 'No Tag';
+            const isCupTagSelected = cup.tagId ? selectedTagId === cup.tagId : selectedTagId === null;
 
             return (
-              <div
+              <button
                 key={cup.id}
-                className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-transform hover:scale-115 cursor-help"
-                style={{ backgroundColor: `${cupColor}20` }}
-                title={`Cup #${idx + 1}: ${cupName}`}
+                type="button"
+                onClick={() => setSelectedTagId(cup.tagId ?? null)}
+                className={`flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-all duration-150 hover:scale-115 active:scale-95 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary ${
+                  isCupTagSelected
+                    ? 'ring-2 ring-md-primary ring-offset-2 ring-offset-md-background shadow-xs scale-105'
+                    : 'hover:ring-1 hover:ring-md-outline/30'
+                }`}
+                style={{ backgroundColor: `${cupColor}25` }}
+                title={`Cup #${idx + 1}: ${cupName} (Click to select this tag)`}
+                aria-label={`Select tag ${cupName} from Cup #${idx + 1}`}
               >
                 <Coffee className="w-4 h-4" style={{ color: cupColor }} />
-              </div>
+              </button>
             );
           })}
         </div>

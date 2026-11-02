@@ -200,7 +200,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const localUpdatedAtRef = useRef<number>(initialState.updatedAtMs || Date.now());
   const lastLocalActionWallMsRef = useRef<number>(0);
   const timerRunIdRef = useRef<string | null>(initialState.timerRunId || null);
-  const isApplyingRemoteRef = useRef<boolean>(false);
   const isInitialMountDoneRef = useRef<boolean>(false);
   const passivePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
@@ -343,45 +342,30 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Helper to broadcast and push local timer state changes safely without race conditions
   const publishLocalTimerState = useCallback(
-    (payload: RemoteTimerState) => {
+    (payload: RemoteTimerState, isUserAction = false) => {
       if (passivePushTimerRef.current) {
         clearTimeout(passivePushTimerRef.current);
         passivePushTimerRef.current = null;
       }
 
       localUpdatedAtRef.current = payload.updatedAtMs;
-      lastLocalActionWallMsRef.current = Date.now();
+      if (isUserAction) {
+        lastLocalActionWallMsRef.current = Date.now();
+      }
 
       broadcastTimerState(payload);
 
       if (isConvexConfigured && isAuthenticatedRef.current) {
         if (payload.status === 'RUNNING') {
-          const isResuming = payload.remainingSeconds < payload.totalSeconds;
-          if (isResuming) {
-            convexTimerMutationsRef.current
-              .resumeTimer({ remainingSeconds: payload.remainingSeconds })
-              .catch(() => {
-                convexTimerMutationsRef.current.startTimer({
-                  sessionType: payload.sessionType,
-                  durationSeconds: payload.totalSeconds,
-                  remainingSeconds: payload.remainingSeconds,
-                  totalSeconds: payload.totalSeconds,
-                  currentCycle: payload.currentCycle,
-                  tagId: payload.activeTagId || undefined,
-                  timerRunId: payload.timerRunId || `run-${Date.now()}`,
-                }).catch(console.warn);
-              });
-          } else {
-            convexTimerMutationsRef.current.startTimer({
-              sessionType: payload.sessionType,
-              durationSeconds: payload.totalSeconds,
-              remainingSeconds: payload.remainingSeconds,
-              totalSeconds: payload.totalSeconds,
-              currentCycle: payload.currentCycle,
-              tagId: payload.activeTagId || undefined,
-              timerRunId: payload.timerRunId || `run-${Date.now()}`,
-            }).catch(console.warn);
-          }
+          convexTimerMutationsRef.current.startTimer({
+            sessionType: payload.sessionType,
+            durationSeconds: payload.totalSeconds,
+            remainingSeconds: payload.remainingSeconds,
+            totalSeconds: payload.totalSeconds,
+            currentCycle: payload.currentCycle,
+            tagId: payload.activeTagId || undefined,
+            timerRunId: payload.timerRunId || `run-${Date.now()}`,
+          }).catch(console.warn);
         } else if (payload.status === 'PAUSED') {
           convexTimerMutationsRef.current.pauseTimer({
             remainingSeconds: payload.remainingSeconds,
@@ -608,13 +592,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const applyRemoteState = useCallback(
     (remote: RemoteTimerState) => {
       const nowMs = Date.now();
-      const isRecentCompletion = nowMs - lastAlertWallMsRef.current < 4000;
-      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 2000;
+      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 1500;
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
 
-      // If this device recently took a local action or triggered a completion alert,
-      // only accept remote state if it is newer to prevent echo/race conditions.
-      if ((hasRecentLocalAction || isRecentCompletion) && !isNewer) {
+      // Only reject remote state if the user directly clicked a button on THIS device
+      // in the last 1.5s AND the remote snapshot is older than that button click.
+      if (hasRecentLocalAction && !isNewer) {
         return;
       }
 
@@ -630,7 +613,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         dispatchCompletionAlert(completedType, completedRunId);
       }
 
-      isApplyingRemoteRef.current = true;
       localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
 
       if (remote.status === 'RUNNING' && remote.targetEndTime) {
@@ -747,10 +729,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setRemainingSeconds(dur);
         setStatus(nextStatus);
       }
-
-      setTimeout(() => {
-        isApplyingRemoteRef.current = false;
-      }, 150);
     },
     [
       authService,
@@ -758,7 +736,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       sound,
       notifications,
       getDurationForType,
-      shouldThisDeviceAlert,
       syncScheduledNotification,
       dispatchCompletionAlert,
     ]
@@ -766,18 +743,17 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Adopt live Convex WebSocket timer updates instantly
   useEffect(() => {
-    if (!isConvexConfigured || !remoteTimer || isApplyingRemoteRef.current) return;
+    if (!isConvexConfigured || !remoteTimer) return;
     if (remoteTimer.peerPresence) {
       peerPresenceRef.current = remoteTimer.peerPresence;
     }
     const now = Date.now();
-    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 2000;
-    const isRecentCompletion = now - lastAlertWallMsRef.current < 4000;
+    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
     const isNewer = remoteTimer.updatedAtMs > localUpdatedAtRef.current;
 
-    // Adopt remote state unconditionally if no recent local action or completion occurred,
+    // Adopt remote state unconditionally if no recent local action on this device,
     // or if the remote state timestamp is newer than our local state.
-    if ((!hasRecentLocalAction && !isRecentCompletion) || isNewer) {
+    if (!hasRecentLocalAction || isNewer) {
       applyRemoteState({
         sessionType: remoteTimer.sessionType,
         status: remoteTimer.status,
@@ -931,12 +907,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const unsubscribeState = subscribeTimerState((incoming) => {
       const now = Date.now();
-      const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 2000;
-      const isRecentCompletion = now - lastAlertWallMsRef.current < 4000;
-      if (!isApplyingRemoteRef.current) {
-        if ((!hasRecentLocalAction && !isRecentCompletion) || incoming.updatedAtMs > localUpdatedAtRef.current) {
-          applyRemoteState(incoming);
-        }
+      const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
+      if (!hasRecentLocalAction || incoming.updatedAtMs > localUpdatedAtRef.current) {
+        applyRemoteState(incoming);
       }
     });
 
@@ -1002,7 +975,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       activeTagId: activeTagIdRef.current,
       timerRunId: newRunId,
       updatedAtMs: now,
-    });
+    }, true);
 
     syncScheduledNotification();
   }, [sound, publishLocalTimerState, syncScheduledNotification]);
@@ -1040,7 +1013,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       activeTagId: activeTagIdRef.current,
       timerRunId: timerRunIdRef.current,
       updatedAtMs: nowMs,
-    });
+    }, true);
   }, [notifications, publishLocalTimerState, authService]);
 
   // Action: Reset timer
@@ -1072,7 +1045,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       activeTagId: activeTagIdRef.current,
       timerRunId: null,
       updatedAtMs: nowMs,
-    });
+    }, true);
   }, [getDurationForType, sound, notifications, publishLocalTimerState]);
 
   // Action: Skip interval
@@ -1128,7 +1101,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       activeTagId: activeTagIdRef.current,
       timerRunId: null,
       updatedAtMs: nowMs,
-    });
+    }, true);
   }, [getDurationForType, sound, notifications, publishLocalTimerState]);
 
   // Action: Explicitly switch session type
@@ -1163,7 +1136,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         activeTagId: activeTagIdRef.current,
         timerRunId: null,
         updatedAtMs: nowMs,
-      });
+      }, true);
     },
     [getDurationForType, pause, publishLocalTimerState]
   );
