@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStatistics, TimePeriodType } from '../../hooks/useStatistics';
+import { useApp } from '../../context/AppContext';
 import { Card } from '../ui/Card';
 import {
   Clock,
@@ -25,6 +26,7 @@ import { CustomActivityView } from './CustomActivityView';
 import { clsx } from 'clsx';
 
 export const StatisticsView: React.FC = () => {
+  const { auth, setCurrentView } = useApp();
   const {
     periodType,
     setPeriodType,
@@ -66,6 +68,28 @@ export const StatisticsView: React.FC = () => {
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
       </div>
+
+      {auth.isTokenExpired && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 dark:text-amber-200">
+          <div>
+            <p className="text-sm font-bold">Google Session Expired</p>
+            <p className="text-xs opacity-90 mt-0.5">
+              Google security tokens expire after 1 hour. Tap to refresh your Google session and load your statistics.
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              if (typeof window !== 'undefined' && (window as any).google?.accounts?.id) {
+                (window as any).google.accounts.id.prompt();
+              }
+              setCurrentView('profile');
+            }}
+            className="px-3.5 py-1.5 rounded-xl bg-amber-600 text-white font-medium text-xs hover:bg-amber-700 active:scale-95 transition-all shrink-0 shadow-xs"
+          >
+            Reconnect Google
+          </button>
+        </div>
+      )}
 
       {/* 1. Time Period Selector & Period Navigator */}
       {/* Desktop Layout (md and up) */}

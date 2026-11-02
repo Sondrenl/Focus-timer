@@ -70,7 +70,7 @@ export const ProfileView: React.FC = () => {
 
   // Render Google Identity Services button
   useEffect(() => {
-    if (auth.isAuthenticated) return;
+    if (auth.isAuthenticated && !auth.isTokenExpired) return;
 
     const renderGoogleBtn = () => {
       if (window.google?.accounts?.id && googleButtonContainerRef.current) {
@@ -114,7 +114,7 @@ export const ProfileView: React.FC = () => {
     }, 300);
 
     return () => clearInterval(interval);
-  }, [auth.isAuthenticated, loginWithGoogle]);
+  }, [auth.isAuthenticated, auth.isTokenExpired, loginWithGoogle]);
 
   // Total Focus Time in seconds (Work sessions only)
   const totalFocusSeconds = sessions
@@ -410,7 +410,7 @@ export const ProfileView: React.FC = () => {
           )}
         </div>
 
-        {auth.isAuthenticated ? (
+        {auth.isAuthenticated && !auth.isTokenExpired ? (
           <div className="flex flex-col gap-3 pt-2 border-t border-md-outline-variant/15">
             <div className="flex items-center justify-between">
               <div>
@@ -436,9 +436,13 @@ export const ProfileView: React.FC = () => {
         ) : (
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-2 border-t border-md-outline-variant/15">
             <div>
-              <p className="text-sm font-semibold text-md-on-surface">Back up and sync across devices</p>
+              <p className="text-sm font-semibold text-md-on-surface">
+                {auth.isTokenExpired ? 'Google Session Expired' : 'Back up and sync across devices'}
+              </p>
               <p className="text-xs text-md-on-surface-variant mt-0.5">
-                Sign in with Google to synchronize your active timer, completed sessions, and custom tags.
+                {auth.isTokenExpired
+                  ? 'Google tokens expire after 1 hour for security. Tap Continue with Google to renew your session and sync statistics.'
+                  : 'Sign in with Google to synchronize your active timer, completed sessions, and custom tags.'}
               </p>
               {authError && <p className="text-xs text-md-error mt-1">{authError}</p>}
             </div>

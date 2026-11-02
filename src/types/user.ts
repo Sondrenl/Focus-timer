@@ -45,6 +45,7 @@ export interface AuthState {
   isSyncing: boolean;
   lastSyncedAt: string | null;
   syncError: string | null;
+  isTokenExpired?: boolean;
 }
 
 /**

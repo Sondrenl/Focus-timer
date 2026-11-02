@@ -76,6 +76,14 @@ export class AuthService {
     return Date.now();
   }
 
+  public isTokenExpired(token?: string | null): boolean {
+    const t = token !== undefined ? token : this.getStoredToken();
+    if (!t) return true;
+    const payload = parseGoogleJwt(t);
+    if (!payload || !payload.exp) return true;
+    return payload.exp * 1000 <= Date.now();
+  }
+
   public getStoredToken(): string | null {
     try {
       return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('auth_token_v1');
@@ -113,14 +121,16 @@ export class AuthService {
   public getInitialAuthState(): AuthState {
     const token = this.getStoredToken();
     const user = this.getStoredUser();
-    const isAuthenticated = Boolean(token && user);
+    const isExpired = this.isTokenExpired(token);
+    const isAuthenticated = Boolean(token && user && !isExpired);
     return {
       isAuthenticated,
-      user: isAuthenticated ? user : null,
+      user,
       token: isAuthenticated ? token : null,
       isSyncing: false,
       lastSyncedAt: this.getLastSyncedAt(),
       syncError: null,
+      isTokenExpired: Boolean(token && isExpired),
     };
   }
 

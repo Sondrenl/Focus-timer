@@ -120,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
             )}
           >
-            <div className="w-8 h-8 shrink-0 flex items-center justify-center overflow-hidden rounded-full">
+            <div className="w-8 h-8 shrink-0 flex items-center justify-center rounded-full relative">
               {profile?.avatarEmoji ? (
                 <span className="text-xl leading-none select-none">{profile.avatarEmoji}</span>
               ) : (auth.isAuthenticated && profile?.avatarUrl) ? (
@@ -137,6 +137,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     isProfileActive ? 'text-md-primary scale-110' : 'text-md-outline'
                   )}
                 />
+              )}
+              {auth.isTokenExpired && (
+                <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-md-surface-container" title="Google session expired" />
               )}
             </div>
             <div className="opacity-0 lg:group-hover:opacity-100 max-lg:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">

@@ -1,5 +1,5 @@
 import { ConvexReactClient } from "convex/react";
-import { AUTH_TOKEN_KEY } from "../auth/AuthService";
+import { AUTH_TOKEN_KEY, parseGoogleJwt } from "../auth/AuthService";
 
 export const PROD_CONVEX_URL = "https://acrobatic-oyster-97.convex.cloud";
 export const DEV_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";
@@ -31,7 +31,10 @@ if (isConvexConfigured && typeof window !== "undefined") {
       localStorage.getItem(AUTH_TOKEN_KEY) ||
       localStorage.getItem("auth_token_v1");
     if (storedToken) {
-      convexClient.setAuth(async () => storedToken);
+      const payload = parseGoogleJwt(storedToken);
+      if (payload && (!payload.exp || payload.exp * 1000 > Date.now())) {
+        convexClient.setAuth(async () => storedToken);
+      }
     }
   } catch {
     // Ignore storage errors

@@ -330,6 +330,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
+  const tokenRefreshTimerRef = useRef<any>(null);
+
+  const scheduleTokenRefresh = useCallback((expSeconds?: number) => {
+    if (tokenRefreshTimerRef.current) {
+      clearTimeout(tokenRefreshTimerRef.current);
+      tokenRefreshTimerRef.current = null;
+    }
+    if (!expSeconds) return;
+
+    const msUntilExpiry = expSeconds * 1000 - Date.now();
+    // Refresh 5 minutes before expiration, or at least in 10 seconds
+    const refreshInMs = Math.max(10000, msUntilExpiry - 5 * 60 * 1000);
+
+    tokenRefreshTimerRef.current = setTimeout(() => {
+      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id) {
+        try {
+          (window as any).google.accounts.id.prompt((notification: any) => {
+            if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+              setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+            }
+          });
+        } catch {
+          setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+        }
+      } else {
+        setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+      }
+    }, refreshInMs);
+  }, []);
+
   // Google Sign In
   const loginWithGoogle = async (idToken: string): Promise<void> => {
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
@@ -369,6 +399,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await profileRepository.save(updatedProfile);
       setProfile(updatedProfile);
 
+      if (payload.exp) {
+        scheduleTokenRefresh(payload.exp);
+      }
     } catch (err) {
       setAuth((prev) => ({
         ...prev,
@@ -381,6 +414,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Sign out
   const logout = (): void => {
+    if (tokenRefreshTimerRef.current) {
+      clearTimeout(tokenRefreshTimerRef.current);
+      tokenRefreshTimerRef.current = null;
+    }
     pendingAddsRef.current.clear();
     pendingDeletesRef.current.clear();
     authService.logout();
@@ -454,18 +491,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (storedToken && isConvexConfigured) {
         const payload = parseGoogleJwt(storedToken);
+        const isExpired = authService.isTokenExpired(storedToken);
         if (payload && payload.sub) {
-          notificationService.setAuthToken(storedToken);
-          setAuthToken(storedToken);
           const verifiedUser = buildProfileFromJwt(payload, storedUser || profileRef.current);
-          setAuth({
-            isAuthenticated: true,
-            user: verifiedUser,
-            token: storedToken,
-            isSyncing: false,
-            lastSyncedAt: null,
-            syncError: null,
-          });
+          if (!isExpired) {
+            notificationService.setAuthToken(storedToken);
+            setAuthToken(storedToken);
+            setAuth({
+              isAuthenticated: true,
+              user: verifiedUser,
+              token: storedToken,
+              isSyncing: false,
+              lastSyncedAt: null,
+              syncError: null,
+              isTokenExpired: false,
+            });
+            scheduleTokenRefresh(payload.exp);
+          } else {
+            // Token is expired - retain user profile but flag that re-auth is needed for sync
+            setAuth({
+              isAuthenticated: false,
+              user: verifiedUser,
+              token: null,
+              isSyncing: false,
+              lastSyncedAt: null,
+              syncError: null,
+              isTokenExpired: true,
+            });
+          }
         }
       } else if (!storedToken && !storedUser) {
         logout();
@@ -505,6 +558,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 500);
     return () => clearInterval(interval);
   }, [loginWithGoogle]);
+
+  // If token is expired, prompt Google One Tap
+  useEffect(() => {
+    if (auth.isTokenExpired && typeof window !== 'undefined' && (window as any).google?.accounts?.id) {
+      try {
+        (window as any).google.accounts.id.prompt();
+      } catch {
+        // Ignore prompt error
+      }
+    }
+  }, [auth.isTokenExpired]);
 
   // Profile Operations: save locally and push directly to cloud
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {
