@@ -1,17 +1,32 @@
 import { QueryCtx, MutationCtx } from "./_generated/server";
-import { Doc } from "./_generated/dataModel";
-
+import { Doc, Id } from "./_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "./defaultData";
 export { DEFAULT_SETTINGS, DEFAULT_TAGS };
 
 /**
  * Retrieves the currently authenticated user document.
- * In a mutation context, if the user document does not exist yet, creates it.
+ * Checks both persistent Convex Auth sessions and legacy JWT tokens.
+ * In a mutation context, if the user document does not exist yet, optionally creates it.
  */
 export async function getAuthenticatedUser(
   ctx: QueryCtx | MutationCtx,
   autoCreate: boolean = false
 ): Promise<Doc<"users"> | null> {
+  // 1. Check Convex Auth identity (minted from 30-day session)
+  try {
+    const authUserId = await getAuthUserId(ctx);
+    if (authUserId) {
+      const user = await ctx.db.get(authUserId as Id<"users">);
+      if (user) {
+        return user;
+      }
+    }
+  } catch {
+    // Continue to fallback
+  }
+
+  // 2. Fallback to direct JWT identity (direct Google ID token)
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     return null;
@@ -30,7 +45,7 @@ export async function getAuthenticatedUser(
   if (identity.email) {
     const existingByEmail = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("email"), identity.email))
+      .withIndex("email", (q) => q.eq("email", identity.email))
       .first();
 
     if (existingByEmail) {

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { getAuthenticatedUser, requireUser, DEFAULT_SETTINGS, DEFAULT_TAGS } from "./authHelper";
 
 /**
@@ -14,13 +14,13 @@ export const current = query({
 
     return {
       id: user._id,
-      email: user.email,
-      displayName: user.displayName,
-      avatarUrl: user.avatarUrl,
-      avatarEmoji: user.avatarEmoji,
-      dailyGoalMinutes: user.dailyGoalMinutes,
-      createdAt: user.createdAt,
-      settings: user.settings,
+      email: user.email || "",
+      displayName: user.displayName || user.name || user.email?.split("@")[0] || "Focus Practitioner",
+      avatarUrl: user.avatarUrl || user.image,
+      avatarEmoji: user.avatarEmoji || "",
+      dailyGoalMinutes: user.dailyGoalMinutes || 120,
+      createdAt: user.createdAt || new Date().toISOString(),
+      settings: user.settings || DEFAULT_SETTINGS,
       tags: user.tags ?? DEFAULT_TAGS,
     };
   },
@@ -37,6 +37,7 @@ export const updateProfile = mutation({
     const updates: Record<string, any> = {};
     if (args.displayName !== undefined && args.displayName.trim() !== user.displayName) {
       updates.displayName = args.displayName.trim();
+      updates.name = args.displayName.trim();
     }
     if (args.avatarEmoji !== undefined && args.avatarEmoji !== user.avatarEmoji) {
       updates.avatarEmoji = args.avatarEmoji;
@@ -94,5 +95,81 @@ export const updateSettings = mutation({
     });
 
     return mergedSettings;
+  },
+});
+
+/**
+ * Internal mutation for Convex Auth to link existing accounts (e.g. sondrelassen@gmail.com)
+ * or create a new user document upon cryptographic verification of credentials.
+ */
+export const getOrCreateUserForAuth = internalMutation({
+  args: {
+    email: v.string(),
+    sub: v.string(),
+    name: v.string(),
+    avatarUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // 1. Search for existing user by email (links existing migrated account seamlessly)
+    const existingByEmail = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.email))
+      .first();
+
+    if (existingByEmail) {
+      const patchData: Record<string, any> = {
+        emailVerificationTime: Date.now(),
+      };
+      if (!existingByEmail.displayName && args.name) {
+        patchData.displayName = args.name;
+      }
+      if (!existingByEmail.name && args.name) {
+        patchData.name = args.name;
+      }
+      if (args.avatarUrl && (!existingByEmail.avatarUrl || existingByEmail.avatarUrl !== args.avatarUrl)) {
+        patchData.avatarUrl = args.avatarUrl;
+        patchData.image = args.avatarUrl;
+      }
+      if (Object.keys(patchData).length > 0) {
+        await ctx.db.patch(existingByEmail._id, patchData);
+      }
+      return existingByEmail._id;
+    }
+
+    // 2. Search by tokenIdentifier
+    const existingByToken = await ctx.db
+      .query("users")
+      .withIndex("by_token", (q) => q.eq("tokenIdentifier", args.sub))
+      .first();
+
+    if (existingByToken) {
+      await ctx.db.patch(existingByToken._id, {
+        email: args.email,
+        emailVerificationTime: Date.now(),
+        ...(args.avatarUrl ? { avatarUrl: args.avatarUrl, image: args.avatarUrl } : {}),
+      });
+      return existingByToken._id;
+    }
+
+    // 3. Create new user if not found
+    const now = new Date().toISOString();
+    const newUserId = await ctx.db.insert("users", {
+      email: args.email,
+      name: args.name,
+      displayName: args.name,
+      avatarUrl: args.avatarUrl,
+      image: args.avatarUrl,
+      avatarEmoji: "",
+      dailyGoalMinutes: 120,
+      createdAt: now,
+      emailVerificationTime: Date.now(),
+      tokenIdentifier: args.sub,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        updatedAt: now,
+      },
+      tags: DEFAULT_TAGS,
+    });
+    return newUserId;
   },
 });

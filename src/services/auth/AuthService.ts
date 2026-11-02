@@ -6,16 +6,12 @@ import { isMobileDevice } from '../../utils/environment';
 export type { RemoteTimerState, PeerPresence, GoogleJwtPayload };
 export { isMobileDevice };
 
-export const AUTH_TOKEN_KEY = 'focus_timer_auth_token';
-export const USER_PROFILE_KEY = 'focus_timer_user_profile';
-export const LAST_SYNC_KEY = 'focus_timer_last_synced_at';
-
+export const AUTH_TOKEN_KEY = 'auth_token_v2';
+export const AUTH_USER_KEY = 'auth_user_v2';
 const TOKEN_KEY = AUTH_TOKEN_KEY;
-const USER_KEY = USER_PROFILE_KEY;
+const USER_KEY = AUTH_USER_KEY;
+const LAST_SYNC_KEY = 'auth_last_synced_at_v1';
 
-/**
- * Decodes and parses a standard Google identity JWT.
- */
 export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
   try {
     const base64Url = token.split('.')[1];
@@ -33,33 +29,20 @@ export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
   }
 }
 
-/**
- * Builds a consistent UserProfile from a parsed Google JWT,
- * preserving any custom avatarEmoji or existing preferences.
- */
 export function buildProfileFromJwt(
   payload: GoogleJwtPayload,
-  currentProfile?: Partial<UserProfile>
+  currentProfile: UserProfile
 ): UserProfile {
   return {
-    id: payload.sub,
-    email: payload.email || '',
-    displayName:
-      payload.name ||
-      payload.email?.split('@')[0] ||
-      currentProfile?.displayName ||
-      'Focus Practitioner',
-    avatarUrl: payload.picture,
-    avatarEmoji: currentProfile?.avatarEmoji || '',
-    dailyGoalMinutes: currentProfile?.dailyGoalMinutes || 120,
-    createdAt: currentProfile?.createdAt || new Date().toISOString(),
+    ...currentProfile,
+    id: payload.sub || currentProfile.id,
+    email: payload.email || currentProfile.email,
+    displayName: payload.name || currentProfile.displayName,
+    avatarUrl: payload.picture || currentProfile.avatarUrl,
+    avatarEmoji: '', // Clear emoji when Google picture exists
   };
 }
 
-/**
- * Lightweight authentication and local session service for Convex-backed Focus Timer.
- * All remote state and synchronization are handled reactively by Convex.
- */
 export class AuthService {
   private static instance: AuthService;
 
@@ -76,17 +59,12 @@ export class AuthService {
     return Date.now();
   }
 
-  public isTokenExpired(token?: string | null): boolean {
-    const t = token !== undefined ? token : this.getStoredToken();
-    if (!t) return true;
-    const payload = parseGoogleJwt(t);
-    if (!payload || !payload.exp) return true;
-    return payload.exp * 1000 <= Date.now();
-  }
-
   public getStoredToken(): string | null {
     try {
-      return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('auth_token_v1');
+      return (
+        localStorage.getItem(TOKEN_KEY) ||
+        localStorage.getItem('auth_token_v1')
+      );
     } catch {
       return null;
     }
@@ -94,8 +72,10 @@ export class AuthService {
 
   public getStoredUser(): UserProfile | null {
     try {
-      const raw = localStorage.getItem(USER_KEY);
-      return raw ? JSON.parse(raw) : null;
+      const data =
+        localStorage.getItem(USER_KEY) ||
+        localStorage.getItem('auth_user_v1');
+      return data ? JSON.parse(data) : null;
     } catch {
       return null;
     }
@@ -107,6 +87,32 @@ export class AuthService {
     } catch {
       return null;
     }
+  }
+
+  public isTokenExpired(token?: string | null): boolean {
+    if (!token) return true;
+    const payload = parseGoogleJwt(token);
+    if (!payload || !payload.exp) return false;
+    // Buffer by 30 seconds
+    return Date.now() >= (payload.exp * 1000 - 30000);
+  }
+
+  public hasConvexAuthSession(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('__convexAuthRefreshToken') || key.startsWith('__convexAuthJWT'))) {
+          const val = localStorage.getItem(key);
+          if (val && val !== 'null' && val !== '""') {
+            return true;
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return false;
   }
 
   public saveAuthSession(token: string, user: UserProfile): void {
@@ -121,8 +127,9 @@ export class AuthService {
   public getInitialAuthState(): AuthState {
     const token = this.getStoredToken();
     const user = this.getStoredUser();
-    const isExpired = this.isTokenExpired(token);
-    const isAuthenticated = Boolean(token && user && !isExpired);
+    const hasConvexSession = this.hasConvexAuthSession();
+    const isExpired = !hasConvexSession && this.isTokenExpired(token);
+    const isAuthenticated = Boolean(user && (hasConvexSession || (token && !isExpired)));
     return {
       isAuthenticated,
       user,
@@ -130,7 +137,7 @@ export class AuthService {
       isSyncing: false,
       lastSyncedAt: this.getLastSyncedAt(),
       syncError: null,
-      isTokenExpired: Boolean(token && isExpired),
+      isTokenExpired: Boolean(token && isExpired && !hasConvexSession),
     };
   }
 

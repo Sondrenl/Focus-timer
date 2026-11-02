@@ -1,40 +1,58 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { authTables } from "@convex-dev/auth/server";
 
 export default defineSchema({
+  ...authTables,
+
   // 1. User: Profile + Preferences + Embedded Tags (All core state in 1 query)
   users: defineTable({
-    tokenIdentifier: v.string(),
-    email: v.string(),
-    displayName: v.string(),
+    // Convex Auth schema fields
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    email: v.optional(v.string()),
+    emailVerificationTime: v.optional(v.number()),
+    phone: v.optional(v.string()),
+    phoneVerificationTime: v.optional(v.number()),
+    isAnonymous: v.optional(v.boolean()),
+
+    // Focus Timer application fields
+    tokenIdentifier: v.optional(v.string()),
+    displayName: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
-    avatarEmoji: v.string(),
-    dailyGoalMinutes: v.number(),
-    createdAt: v.string(),
-    settings: v.object({
-      workDurationMinutes: v.number(),
-      shortBreakDurationMinutes: v.number(),
-      longBreakDurationMinutes: v.number(),
-      longBreakInterval: v.number(),
-      autoStartBreaks: v.boolean(),
-      autoStartPomodoros: v.boolean(),
-      soundVolume: v.number(),
-      soundEnabled: v.boolean(),
-      notificationsEnabled: v.boolean(),
-      keepAwake: v.boolean(),
-      updatedAt: v.string(),
-    }),
-    tags: v.array(
+    avatarEmoji: v.optional(v.string()),
+    dailyGoalMinutes: v.optional(v.number()),
+    createdAt: v.optional(v.string()),
+    settings: v.optional(
       v.object({
-        id: v.string(),
-        name: v.string(),
-        color: v.string(),
-        isArchived: v.boolean(),
-        createdAt: v.string(),
-        updatedAt: v.optional(v.string()),
+        workDurationMinutes: v.number(),
+        shortBreakDurationMinutes: v.number(),
+        longBreakDurationMinutes: v.number(),
+        longBreakInterval: v.number(),
+        autoStartBreaks: v.boolean(),
+        autoStartPomodoros: v.boolean(),
+        soundVolume: v.number(),
+        soundEnabled: v.boolean(),
+        notificationsEnabled: v.boolean(),
+        keepAwake: v.boolean(),
+        updatedAt: v.string(),
       })
     ),
-  }).index("by_token", ["tokenIdentifier"]),
+    tags: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          name: v.string(),
+          color: v.string(),
+          isArchived: v.boolean(),
+          createdAt: v.string(),
+          updatedAt: v.optional(v.string()),
+        })
+      )
+    ),
+  })
+    .index("email", ["email"])
+    .index("by_token", ["tokenIdentifier"]),
 
   // 2. Active Timer: Dedicated for sub-50ms sync & peer presence
   active_timers: defineTable({

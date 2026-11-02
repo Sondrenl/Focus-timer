@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useConvexAuth, useAuthActions } from '@convex-dev/auth/react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { SessionType } from '../types/timer';
@@ -34,7 +35,7 @@ interface AppContextValue {
   // Authentication & Cloud Sync
   auth: AuthState;
   loginWithGoogle: (idToken: string) => Promise<void>;
-  logout: () => void;
+  logout: () => void | Promise<void>;
   syncWithCloud: (force?: boolean) => Promise<void>;
 
   // Profile
@@ -93,8 +94,6 @@ const profileRepository = new ProfileRepository(storageService);
 const coffeeRepository = new CoffeeRepository(storageService);
 const authService = AuthService.getInstance();
 
-
-
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -111,8 +110,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const lastLocalProfileEditMsRef = useRef<number>(0);
   const pendingAddsRef = useRef<Map<string, CoffeeCup>>(new Map());
   const pendingDeletesRef = useRef<Set<string>>(new Set());
-
-
 
   const [activeTagId, setActiveTagIdState] = useState<string | null>(() => {
     try {
@@ -134,11 +131,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Storage errors ignored
     }
   }, []);
+
   const [coffeeCups, setCoffeeCups] = useState<CoffeeCup[]>([]);
   const [currentView, setCurrentView] = useState<'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile'>('timer');
   const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState());
 
   const isDemo = useMemo(() => isPreviewOrDev(), []);
+
+  // Convex Auth Hooks
+  const { isAuthenticated: isConvexAuthAuthenticated } = useConvexAuth();
+  const { signIn: convexSignIn, signOut: convexSignOut } = useAuthActions();
+
+  // Effective authentication state considers both persistent Convex Auth and local session
+  const isEffectiveAuthenticated = isConvexAuthAuthenticated || auth.isAuthenticated;
 
   // Convex Reactive Hooks & Mutations
   const {
@@ -148,13 +153,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     convexSessions,
     setAuthToken,
     mutations: convexMutations,
-  } = useConvexSync(auth.isAuthenticated);
+  } = useConvexSync(isEffectiveAuthenticated);
 
   const hasMigratedLocalToConvexRef = useRef<boolean>(false);
 
   // Background migration of local offline data to Convex upon first login/load
   useEffect(() => {
-    if (!auth.isAuthenticated || !isConvexConfigured) {
+    if (!isEffectiveAuthenticated || !isConvexConfigured) {
       hasMigratedLocalToConvexRef.current = false;
       return;
     }
@@ -226,11 +231,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('Initial local-to-Convex migration check failed', err);
       }
     })();
-  }, [auth.isAuthenticated, isConvexConfigured, convexUser, convexSessions, convexCoffee, convexMutations]);
+  }, [isEffectiveAuthenticated, isConvexConfigured, convexUser, convexSessions, convexCoffee, convexMutations]);
 
-  // Reactive adoption of Convex state (only for authenticated cloud users)
+  // Reactive adoption of Convex state (for authenticated cloud users)
   useEffect(() => {
-    if (!auth.isAuthenticated || !convexUser) return;
+    if (!isEffectiveAuthenticated || !convexUser) return;
     if (convexUser.tags && convexUser.tags.length > 0) {
       setTags(convexUser.tags as Tag[]);
       tagRepository.saveAll(convexUser.tags as Tag[]);
@@ -250,10 +255,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setProfile(updatedProfile);
     profileRepository.save(updatedProfile);
-  }, [convexUser, auth.isAuthenticated]);
+
+    // Keep auth state aligned with persistent Convex profile
+    setAuth((prev) => ({
+      ...prev,
+      isAuthenticated: true,
+      isTokenExpired: false,
+      user: updatedProfile,
+    }));
+  }, [convexUser, isEffectiveAuthenticated]);
 
   useEffect(() => {
-    if (!auth.isAuthenticated || !Array.isArray(convexCoffee)) return;
+    if (!isEffectiveAuthenticated || !Array.isArray(convexCoffee)) return;
 
     const serverCups = convexCoffee as CoffeeCup[];
     const pendingDeletes = pendingDeletesRef.current;
@@ -275,16 +288,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     setCoffeeCups(merged);
     coffeeRepository.saveAll(merged);
-  }, [convexCoffee, auth.isAuthenticated]);
+  }, [convexCoffee, isEffectiveAuthenticated]);
 
   useEffect(() => {
-    if (!auth.isAuthenticated || !Array.isArray(convexSessions)) return;
+    if (!isEffectiveAuthenticated || !Array.isArray(convexSessions)) return;
     const sorted = [...(convexSessions as CompletedSession[])].sort(
       (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
     );
     setSessions(sorted);
     sessionRepository.saveAll(sorted);
-  }, [convexSessions, auth.isAuthenticated]);
+  }, [convexSessions, isEffectiveAuthenticated]);
 
   // Stubs for cross-component compatibility
   const syncRemoteTags = useCallback(async (_remoteTags: Tag[], _remoteDeletedIds?: string[]) => {}, []);
@@ -292,7 +305,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Synchronize cloud status indicator
   const syncWithCloud = useCallback(async (_force = false): Promise<void> => {
-    if (auth.isAuthenticated) {
+    if (isEffectiveAuthenticated) {
       setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
       setTimeout(() => {
         setAuth((prev) => ({
@@ -302,7 +315,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }));
       }, 300);
     }
-  }, [auth.isAuthenticated]);
+  }, [isEffectiveAuthenticated]);
 
   // Multi-tab coffee, tag, and completed session broadcast synchronization
   useEffect(() => {
@@ -348,19 +361,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try {
           (window as any).google.accounts.id.prompt((notification: any) => {
             if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-              setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+              if (!authService.hasConvexAuthSession()) {
+                setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+              }
             }
           });
         } catch {
-          setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+          if (!authService.hasConvexAuthSession()) {
+            setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+          }
         }
       } else {
-        setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+        if (!authService.hasConvexAuthSession()) {
+          setAuth((prev) => ({ ...prev, isTokenExpired: true }));
+        }
       }
     }, refreshInMs);
   }, []);
 
-  // Google Sign In
+  // Google Sign In with persistent Convex Auth session
   const loginWithGoogle = async (idToken: string): Promise<void> => {
     setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
     try {
@@ -373,7 +392,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       authService.saveAuthSession(idToken, user);
 
       if (isConvexConfigured) {
-        setAuthToken(idToken);
+        try {
+          await convexSignIn("google-id-token", { token: idToken });
+        } catch (convexErr) {
+          console.warn('Convex sign-in error:', convexErr);
+        }
       }
 
       notificationService.setAuthToken(idToken);
@@ -384,6 +407,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSyncing: false,
         lastSyncedAt: null,
         syncError: null,
+        isTokenExpired: false,
       });
 
       // Update local profile with Google identity and auto-activate Google avatar
@@ -399,7 +423,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await profileRepository.save(updatedProfile);
       setProfile(updatedProfile);
 
-      if (payload.exp) {
+      if (payload.exp && !authService.hasConvexAuthSession()) {
         scheduleTokenRefresh(payload.exp);
       }
     } catch (err) {
@@ -413,7 +437,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Sign out
-  const logout = (): void => {
+  const logout = async (): Promise<void> => {
     if (tokenRefreshTimerRef.current) {
       clearTimeout(tokenRefreshTimerRef.current);
       tokenRefreshTimerRef.current = null;
@@ -423,6 +447,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     authService.logout();
     notificationService.setAuthToken(null);
     if (isConvexConfigured) {
+      try {
+        await convexSignOut();
+      } catch (err) {
+        console.warn('Convex signOut error', err);
+      }
       setAuthToken(null);
     }
     setAuth({
@@ -432,6 +461,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isSyncing: false,
       lastSyncedAt: null,
       syncError: null,
+      isTokenExpired: false,
     });
     const cleanedProfile: UserProfile = {
       ...DEFAULT_PROFILE,
@@ -488,39 +518,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // If already logged in, verify session and trigger background sync
       const storedToken = authService.getStoredToken();
       const storedUser = authService.getStoredUser();
+      const hasConvexSession = authService.hasConvexAuthSession();
 
-      if (storedToken && isConvexConfigured) {
-        const payload = parseGoogleJwt(storedToken);
-        const isExpired = authService.isTokenExpired(storedToken);
-        if (payload && payload.sub) {
-          const verifiedUser = buildProfileFromJwt(payload, storedUser || profileRef.current);
-          if (!isExpired) {
+      if ((storedToken || hasConvexSession) && isConvexConfigured) {
+        const payload = storedToken ? parseGoogleJwt(storedToken) : null;
+        const isExpired = !hasConvexSession && authService.isTokenExpired(storedToken);
+        const verifiedUser = payload && payload.sub
+          ? buildProfileFromJwt(payload, storedUser || profileRef.current)
+          : (storedUser || profileRef.current);
+
+        if (!isExpired) {
+          if (storedToken) {
             notificationService.setAuthToken(storedToken);
             setAuthToken(storedToken);
-            setAuth({
-              isAuthenticated: true,
-              user: verifiedUser,
-              token: storedToken,
-              isSyncing: false,
-              lastSyncedAt: null,
-              syncError: null,
-              isTokenExpired: false,
-            });
-            scheduleTokenRefresh(payload.exp);
-          } else {
-            // Token is expired - retain user profile but flag that re-auth is needed for sync
-            setAuth({
-              isAuthenticated: false,
-              user: verifiedUser,
-              token: null,
-              isSyncing: false,
-              lastSyncedAt: null,
-              syncError: null,
-              isTokenExpired: true,
-            });
           }
+          setAuth({
+            isAuthenticated: true,
+            user: verifiedUser,
+            token: storedToken,
+            isSyncing: false,
+            lastSyncedAt: null,
+            syncError: null,
+            isTokenExpired: false,
+          });
+          if (payload?.exp && !hasConvexSession) {
+            scheduleTokenRefresh(payload.exp);
+          }
+        } else {
+          // Token is expired - retain user profile but flag that re-auth is needed for sync
+          setAuth({
+            isAuthenticated: false,
+            user: verifiedUser,
+            token: null,
+            isSyncing: false,
+            lastSyncedAt: null,
+            syncError: null,
+            isTokenExpired: true,
+          });
         }
-      } else if (!storedToken && !storedUser) {
+      } else if (!storedToken && !storedUser && !hasConvexSession) {
         logout();
       }
     }
@@ -559,9 +595,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(interval);
   }, [loginWithGoogle]);
 
-  // If token is expired, prompt Google One Tap
+  // If token is expired and no persistent session exists, prompt Google One Tap
   useEffect(() => {
-    if (auth.isTokenExpired && typeof window !== 'undefined' && (window as any).google?.accounts?.id) {
+    if (auth.isTokenExpired && !authService.hasConvexAuthSession() && typeof window !== 'undefined' && (window as any).google?.accounts?.id) {
       try {
         (window as any).google.accounts.id.prompt();
       } catch {
@@ -579,7 +615,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProfile(merged);
     await profileRepository.save(merged);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.updateProfile({
         displayName: newProfile.displayName,
         avatarEmoji: newProfile.avatarEmoji,
@@ -596,7 +632,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTagId(created.id);
     broadcastTags(updated);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.createTag({
         id: created.id,
         name: input.name,
@@ -612,7 +648,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTags(updated);
     broadcastTags(updated);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.updateTag({
         id,
         name: updates.name,
@@ -633,7 +669,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     broadcastTags(updated);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.updateTag({ id, isArchived: true }).catch(console.warn);
     }
     return result;
@@ -645,7 +681,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTags(updated);
     broadcastTags(updated);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.updateTag({ id, isArchived: false }).catch(console.warn);
     }
     return result;
@@ -673,7 +709,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     broadcastTags(updatedTags);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.removeTag({ id }).catch(console.warn);
     }
     return success;
@@ -694,7 +730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCoffeeCups(sortedUpdated);
     broadcastCoffeeCups(sortedUpdated);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations
         .addCup({
           date: today,
@@ -738,7 +774,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCoffeeCups(sortedUpdated);
       broadcastCoffeeCups(sortedUpdated);
 
-      if (isConvexConfigured && auth.isAuthenticated) {
+      if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations
           .removeCup({
             id: removedCup.id,
@@ -767,7 +803,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       broadcastSession(created);
 
-      if (isConvexConfigured && auth.isAuthenticated) {
+      if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations.recordSession({
           tagId: sessionData.tagId || undefined,
           sessionType: sessionData.sessionType,
@@ -777,13 +813,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return created;
     },
-    [isConvexConfigured, auth.isAuthenticated, convexMutations]
+    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
   );
 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();
     setSessions([]);
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.clearSessions({}).catch(console.warn);
     }
   };
@@ -803,7 +839,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSettings(merged);
     await settingsRepository.save(merged);
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.updateSettings(newValues).catch(console.warn);
     }
   };
@@ -1006,13 +1042,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         avatarEmoji: data.profile.avatarEmoji,
         dailyGoalMinutes: data.profile.dailyGoalMinutes,
       };
-      if (!auth.isAuthenticated) {
+      if (!isEffectiveAuthenticated) {
         if (data.profile.avatarUrl) safeProfileUpdate.avatarUrl = data.profile.avatarUrl;
       }
       await updateProfile(safeProfileUpdate);
     }
 
-    if (isConvexConfigured && auth.isAuthenticated) {
+    if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.importBackup({
         mode,
         tags: validTags.map((t) => ({
@@ -1047,7 +1083,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (scope === 'sessions-only') {
       await sessionRepository.clear();
       setSessions([]);
-      if (isConvexConfigured && auth.isAuthenticated) {
+      if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations.clearSessions({}).catch(console.warn);
       }
     } else {
@@ -1066,7 +1102,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       profileRef.current = defaultProfile;
       setActiveTagId(defaultTags[0]?.id || null);
 
-      if (isConvexConfigured && auth.isAuthenticated) {
+      if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations.clearSessions({}).catch(console.warn);
         convexMutations.clearCoffee({}).catch(console.warn);
         convexMutations.resetTags({}).catch(console.warn);
