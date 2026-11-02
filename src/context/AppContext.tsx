@@ -108,6 +108,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const lastLocalSettingsEditMsRef = useRef<number>(0);
   const lastLocalProfileEditMsRef = useRef<number>(0);
+  const pendingAddsRef = useRef<Map<string, CoffeeCup>>(new Map());
+  const pendingDeletesRef = useRef<Set<string>>(new Set());
 
 
 
@@ -244,8 +246,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     if (!auth.isAuthenticated || !Array.isArray(convexCoffee)) return;
-    setCoffeeCups(convexCoffee as CoffeeCup[]);
-    coffeeRepository.saveAll(convexCoffee as CoffeeCup[]);
+
+    const serverCups = convexCoffee as CoffeeCup[];
+    const pendingDeletes = pendingDeletesRef.current;
+    const pendingAdds = Array.from(pendingAddsRef.current.values());
+
+    // Exclude cups deleted locally that haven't been committed by the server snapshot yet
+    const remainingServer = serverCups.filter((c) => !pendingDeletes.has(c.id));
+
+    // Preserve cups added locally that haven't appeared in the server snapshot yet
+    const serverIds = new Set(remainingServer.map((c) => c.id));
+    const serverCreatedTimes = new Set(remainingServer.map((c) => c.createdAt));
+
+    const unconfirmedAdds = pendingAdds.filter(
+      (a) => !serverIds.has(a.id) && !serverCreatedTimes.has(a.createdAt)
+    );
+
+    const merged = [...remainingServer, ...unconfirmedAdds];
+    setCoffeeCups(merged);
+    coffeeRepository.saveAll(merged);
   }, [convexCoffee, auth.isAuthenticated]);
 
   useEffect(() => {
@@ -349,6 +368,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Sign out
   const logout = (): void => {
+    pendingAddsRef.current.clear();
+    pendingDeletesRef.current.clear();
     authService.logout();
     notificationService.setAuthToken(null);
     if (isConvexConfigured) {
@@ -557,16 +578,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addCoffeeCup = async (tagId: string | null, dateStr?: string): Promise<CoffeeCup> => {
     const today = dateStr || new Date().toISOString().slice(0, 10);
     const created = await coffeeRepository.addCup(today, tagId);
+
+    // Track optimistic in-flight addition
+    pendingAddsRef.current.set(created.id, created);
+
     const updated = await coffeeRepository.getAll();
     setCoffeeCups(updated);
     broadcastCoffeeCups(updated);
 
-    if (isConvexConfigured) {
-      convexMutations.addCup({
-        date: today,
-        tagId: tagId || undefined,
-        createdAt: created.createdAt,
-      }).catch(console.warn);
+    if (isConvexConfigured && auth.isAuthenticated) {
+      convexMutations
+        .addCup({
+          date: today,
+          tagId: tagId || undefined,
+          createdAt: created.createdAt,
+        })
+        .then((serverCup) => {
+          pendingAddsRef.current.delete(created.id);
+          if (serverCup && serverCup.id) {
+            // Adopt canonical Convex server ID for subsequent targeted removals
+            setCoffeeCups((prev) =>
+              prev.map((c) => (c.id === created.id ? { ...c, id: serverCup.id } : c))
+            );
+            coffeeRepository.getAll().then((all) => {
+              const withServerId = all.map((c) =>
+                c.id === created.id ? { ...c, id: serverCup.id } : c
+              );
+              coffeeRepository.saveAll(withServerId);
+            });
+          }
+        })
+        .catch((err) => {
+          pendingAddsRef.current.delete(created.id);
+          console.warn('Convex addCup error:', err);
+        });
     }
     return created;
   };
@@ -575,16 +620,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const today = dateStr || new Date().toISOString().slice(0, 10);
     const removedCup = await coffeeRepository.removeCup(today, tagId, cupId);
     if (removedCup) {
+      // Track optimistic in-flight deletion
+      pendingDeletesRef.current.add(removedCup.id);
+
       const updated = await coffeeRepository.getAll();
       setCoffeeCups(updated);
       broadcastCoffeeCups(updated);
 
-      if (isConvexConfigured) {
-        convexMutations.removeCup({
-          id: removedCup.id,
-          date: today,
-          tagId: tagId || undefined,
-        }).catch(console.warn);
+      if (isConvexConfigured && auth.isAuthenticated) {
+        convexMutations
+          .removeCup({
+            id: removedCup.id,
+            date: today,
+            tagId: tagId || undefined,
+          })
+          .finally(() => {
+            pendingDeletesRef.current.delete(removedCup.id);
+          })
+          .catch((err) => {
+            console.warn('Convex removeCup error:', err);
+          });
       }
       return true;
     }

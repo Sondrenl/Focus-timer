@@ -14,9 +14,20 @@ const COFFEE_STORAGE_KEY = 'coffee_cups_v1';
 
 export class CoffeeRepository implements ICoffeeRepository {
   private storage: IStorageService;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(storage: IStorageService) {
     this.storage = storage;
+  }
+
+  /**
+   * Enqueues tasks to serialize concurrent storage read-modify-write operations
+   * and prevent race conditions when rapidly adding or removing cups.
+   */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(task, task);
+    this.queue = next.catch(() => {});
+    return next;
   }
 
   async getAll(): Promise<CoffeeCup[]> {
@@ -54,52 +65,60 @@ export class CoffeeRepository implements ICoffeeRepository {
   }
 
   async addCup(date: string, tagId: string | null = null): Promise<CoffeeCup> {
-    const all = await this.getAll();
-    const newCup: CoffeeCup = {
-      id: `coffee-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      date,
-      tagId: tagId || null,
-      createdAt: new Date().toISOString(),
-    };
-    all.push(newCup);
-    this.storage.setItem(COFFEE_STORAGE_KEY, all);
-    return newCup;
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      const newCup: CoffeeCup = {
+        id: `coffee-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        date,
+        tagId: tagId || null,
+        createdAt: new Date().toISOString(),
+      };
+      all.push(newCup);
+      this.storage.setItem(COFFEE_STORAGE_KEY, all);
+      return newCup;
+    });
   }
 
   async removeCup(date: string, tagId?: string | null, cupId?: string): Promise<CoffeeCup | null> {
-    const all = await this.getAll();
-    let removeIndex = -1;
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      let removeIndex = -1;
 
-    // 1. If explicit cupId provided, remove that specific cup
-    if (cupId) {
-      removeIndex = all.findIndex((c) => c.id === cupId);
-    }
+      // 1. If explicit cupId provided, remove that specific cup
+      if (cupId) {
+        removeIndex = all.findIndex((c) => c.id === cupId);
+      }
 
-    // 2. Otherwise find the latest cup on the specified date matching tagId
-    if (removeIndex < 0) {
-      for (let i = all.length - 1; i >= 0; i--) {
-        if (all[i].date === date) {
-          if (tagId === undefined || (all[i].tagId || null) === (tagId || null)) {
-            removeIndex = i;
-            break;
+      // 2. Otherwise find the latest cup on the specified date matching tagId
+      if (removeIndex < 0) {
+        for (let i = all.length - 1; i >= 0; i--) {
+          if (all[i].date === date) {
+            if (tagId === undefined || (all[i].tagId || null) === (tagId || null)) {
+              removeIndex = i;
+              break;
+            }
           }
         }
       }
-    }
 
-    if (removeIndex >= 0) {
-      const removed = all.splice(removeIndex, 1)[0];
-      this.storage.setItem(COFFEE_STORAGE_KEY, all);
-      return removed;
-    }
-    return null;
+      if (removeIndex >= 0) {
+        const removed = all.splice(removeIndex, 1)[0];
+        this.storage.setItem(COFFEE_STORAGE_KEY, all);
+        return removed;
+      }
+      return null;
+    });
   }
 
   async saveAll(cups: CoffeeCup[]): Promise<void> {
-    this.storage.setItem(COFFEE_STORAGE_KEY, cups);
+    return this.enqueue(async () => {
+      this.storage.setItem(COFFEE_STORAGE_KEY, cups);
+    });
   }
 
   async clear(): Promise<void> {
-    this.storage.setItem(COFFEE_STORAGE_KEY, []);
+    return this.enqueue(async () => {
+      this.storage.setItem(COFFEE_STORAGE_KEY, []);
+    });
   }
 }

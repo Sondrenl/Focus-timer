@@ -96,9 +96,25 @@ export const removeCup = mutation({
       .withIndex("by_user_date", (q) => q.eq("userId", user._id).eq("date", date))
       .collect();
 
-    const target = args.tagId
-      ? cups.reverse().find((c) => c.tagId === args.tagId)
-      : cups.reverse().find((c) => !c.tagId) ?? cups[cups.length - 1];
+    let target = null;
+    for (let i = cups.length - 1; i >= 0; i--) {
+      const c = cups[i];
+      if (args.tagId !== undefined) {
+        if ((c.tagId ?? null) === (args.tagId ?? null)) {
+          target = c;
+          break;
+        }
+      } else {
+        if (!c.tagId) {
+          target = c;
+          break;
+        }
+      }
+    }
+
+    if (!target && cups.length > 0) {
+      target = cups[cups.length - 1];
+    }
 
     if (target) {
       await ctx.db.delete(target._id);
@@ -122,6 +138,6 @@ export const clear = mutation({
       await ctx.db.delete(cup._id);
     }
 
-    return cups.length;
+    return true;
   },
 });
