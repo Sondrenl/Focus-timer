@@ -496,11 +496,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const timeFormatted = formatTime(remainingSeconds);
 
     if (status === 'RUNNING') {
-      document.title = `(${timeFormatted}) ${mode} — Pomodor`;
+      document.title = `${timeFormatted} | ${mode}`;
     } else if (status === 'PAUSED') {
-      document.title = `(Paused ${timeFormatted}) ${mode} — Pomodor`;
+      document.title = `Paused | ${mode}`;
     } else if (status === 'COMPLETED') {
-      document.title = `🎉 Complete! — Pomodor`;
+      document.title = `${mode} Completed!`;
     } else {
       document.title = 'Pomodor - Focus timer';
     }
