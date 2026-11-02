@@ -69,6 +69,8 @@ export const start = mutation({
       v.literal("LONG_BREAK")
     ),
     durationSeconds: v.number(),
+    remainingSeconds: v.optional(v.number()),
+    totalSeconds: v.optional(v.number()),
     currentCycle: v.number(),
     tagId: v.optional(v.string()),
     timerRunId: v.string(),
@@ -76,7 +78,9 @@ export const start = mutation({
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
     const now = Date.now();
-    const targetEndTime = now + args.durationSeconds * 1000;
+    const remaining = Math.max(1, args.remainingSeconds ?? args.durationSeconds);
+    const total = Math.max(remaining, args.totalSeconds ?? args.durationSeconds);
+    const targetEndTime = now + remaining * 1000;
 
     const existing = await ctx.db
       .query("active_timers")
@@ -87,7 +91,7 @@ export const start = mutation({
 
     // Schedule authoritative server-side completion trigger
     const scheduledCompletionId = await ctx.scheduler.runAfter(
-      args.durationSeconds * 1000,
+      remaining * 1000,
       internal.timer.onTimerCompleted,
       {
         userId: user._id,
@@ -99,8 +103,8 @@ export const start = mutation({
       userId: user._id,
       sessionType: args.sessionType,
       status: "RUNNING" as const,
-      remainingSeconds: args.durationSeconds,
-      totalSeconds: args.durationSeconds,
+      remainingSeconds: remaining,
+      totalSeconds: total,
       targetEndTime,
       currentCycle: args.currentCycle,
       tagId: args.tagId,

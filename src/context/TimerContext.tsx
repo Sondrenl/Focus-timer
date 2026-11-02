@@ -356,13 +356,32 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (isConvexConfigured && isAuthenticatedRef.current) {
         if (payload.status === 'RUNNING') {
-          convexTimerMutationsRef.current.startTimer({
-            sessionType: payload.sessionType,
-            durationSeconds: payload.totalSeconds,
-            currentCycle: payload.currentCycle,
-            tagId: payload.activeTagId || undefined,
-            timerRunId: payload.timerRunId || `run-${Date.now()}`,
-          }).catch(console.warn);
+          const isResuming = payload.remainingSeconds < payload.totalSeconds;
+          if (isResuming) {
+            convexTimerMutationsRef.current
+              .resumeTimer({ remainingSeconds: payload.remainingSeconds })
+              .catch(() => {
+                convexTimerMutationsRef.current.startTimer({
+                  sessionType: payload.sessionType,
+                  durationSeconds: payload.totalSeconds,
+                  remainingSeconds: payload.remainingSeconds,
+                  totalSeconds: payload.totalSeconds,
+                  currentCycle: payload.currentCycle,
+                  tagId: payload.activeTagId || undefined,
+                  timerRunId: payload.timerRunId || `run-${Date.now()}`,
+                }).catch(console.warn);
+              });
+          } else {
+            convexTimerMutationsRef.current.startTimer({
+              sessionType: payload.sessionType,
+              durationSeconds: payload.totalSeconds,
+              remainingSeconds: payload.remainingSeconds,
+              totalSeconds: payload.totalSeconds,
+              currentCycle: payload.currentCycle,
+              tagId: payload.activeTagId || undefined,
+              timerRunId: payload.timerRunId || `run-${Date.now()}`,
+            }).catch(console.warn);
+          }
         } else if (payload.status === 'PAUSED') {
           convexTimerMutationsRef.current.pauseTimer({
             remainingSeconds: payload.remainingSeconds,
@@ -387,6 +406,16 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, 600);
     return () => clearTimeout(timer);
   }, []);
+
+  // Register device presence eagerly when authenticated so peers detect each other immediately
+  useEffect(() => {
+    if (isConvexConfigured && auth.isAuthenticated) {
+      convexTimerMutationsRef.current.updatePresence({
+        isMobile: IS_MOBILE,
+        isVisible: typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true,
+      }).catch(() => {});
+    }
+  }, [isConvexConfigured, auth.isAuthenticated]);
 
   // Manage screen wake lock: keep screen awake while timer is actively running
   useEffect(() => {
@@ -489,13 +518,18 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (completedType === 'WORK') {
         if (currentCycleRef.current >= settingsRef.current.longBreakInterval) {
           nextType = 'LONG_BREAK';
-          nextCycle = 1;
+          nextCycle = currentCycleRef.current;
         } else {
           nextType = 'SHORT_BREAK';
-          nextCycle = currentCycleRef.current + 1;
+          nextCycle = currentCycleRef.current;
         }
-      } else {
+      } else if (completedType === 'SHORT_BREAK') {
         nextType = 'WORK';
+        nextCycle = currentCycleRef.current + 1;
+      } else {
+        // LONG_BREAK completed
+        nextType = 'WORK';
+        nextCycle = 1;
       }
 
       const nextDuration = getDurationForType(nextType);
@@ -575,15 +609,22 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (remote: RemoteTimerState) => {
       const nowMs = Date.now();
       const isRecentCompletion = nowMs - lastAlertWallMsRef.current < 4000;
+      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 3000;
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
 
       const isAdoptingActiveRemote =
         !isRecentCompletion &&
+        !hasRecentLocalAction &&
         statusRef.current === 'IDLE' &&
-        (remote.status === 'RUNNING' || remote.status === 'PAUSED') &&
-        remote.updatedAtMs >= localUpdatedAtRef.current;
+        (remote.status === 'RUNNING' || remote.status === 'PAUSED');
 
-      if (!isNewer && !isAdoptingActiveRemote) {
+      const isAdoptingActiveRunning =
+        !isRecentCompletion &&
+        !hasRecentLocalAction &&
+        remote.status === 'RUNNING' &&
+        Boolean(remote.targetEndTime && remote.targetEndTime > nowMs);
+
+      if (!isNewer && !isAdoptingActiveRemote && !isAdoptingActiveRunning) {
         return;
       }
 
@@ -730,7 +771,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (remoteTimer.peerPresence) {
       peerPresenceRef.current = remoteTimer.peerPresence;
     }
-    if (remoteTimer.updatedAtMs > localUpdatedAtRef.current) {
+    const now = Date.now();
+    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 3000;
+    const isNewer = remoteTimer.updatedAtMs > localUpdatedAtRef.current;
+    const isAdoptingActive =
+      !hasRecentLocalAction &&
+      ((statusRef.current === 'IDLE' && (remoteTimer.status === 'RUNNING' || remoteTimer.status === 'PAUSED')) ||
+       (remoteTimer.status === 'RUNNING' && remoteTimer.targetEndTime !== null && remoteTimer.targetEndTime !== undefined && remoteTimer.targetEndTime > now));
+
+    if (isNewer || isAdoptingActive) {
       applyRemoteState({
         sessionType: remoteTimer.sessionType,
         status: remoteTimer.status,
@@ -1035,13 +1084,18 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (sessionTypeRef.current === 'WORK') {
       if (currentCycleRef.current >= settingsRef.current.longBreakInterval) {
         nextType = 'LONG_BREAK';
-        nextCycle = 1;
+        nextCycle = currentCycleRef.current;
       } else {
         nextType = 'SHORT_BREAK';
-        nextCycle = currentCycleRef.current + 1;
+        nextCycle = currentCycleRef.current;
       }
-    } else {
+    } else if (sessionTypeRef.current === 'SHORT_BREAK') {
       nextType = 'WORK';
+      nextCycle = currentCycleRef.current + 1;
+    } else {
+      // LONG_BREAK skipped
+      nextType = 'WORK';
+      nextCycle = 1;
     }
 
     const nextDuration = getDurationForType(nextType);

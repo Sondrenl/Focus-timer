@@ -12,3 +12,15 @@ export const isConvexConfigured = Boolean(
 );
 
 export const convexClient = new ConvexReactClient(convexUrl);
+
+// Eagerly restore auth token from localStorage if valid, avoiding delayed sync on startup
+if (isConvexConfigured && typeof window !== "undefined") {
+  try {
+    const storedToken = localStorage.getItem("auth_token_v1");
+    if (storedToken) {
+      convexClient.setAuth(async () => storedToken);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}

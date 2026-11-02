@@ -272,8 +272,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     if (!auth.isAuthenticated || !Array.isArray(convexSessions)) return;
-    setSessions(convexSessions as CompletedSession[]);
-    sessionRepository.saveAll(convexSessions as CompletedSession[]);
+    const sorted = [...(convexSessions as CompletedSession[])].sort(
+      (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+    );
+    setSessions(sorted);
+    sessionRepository.saveAll(sorted);
   }, [convexSessions, auth.isAuthenticated]);
 
   // Stubs for cross-component compatibility

@@ -49,11 +49,12 @@ export const list = query({
         .collect();
     } else {
       const limit = args.limit ?? 500;
-      sessions = await ctx.db
+      const descSessions = await ctx.db
         .query("sessions")
         .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
         .order("desc")
         .take(limit);
+      sessions = descSessions.reverse();
     }
 
     return sessions.map((s) => formatSessionRecord(s._id, s));
