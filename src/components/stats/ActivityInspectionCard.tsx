@@ -7,14 +7,18 @@ interface ActivityInspectionCardProps {
   inspectedBar: ActivityBarStat | null;
   peakDay: ActivityBarStat | null;
   formatInspectedDate: (key: string) => string;
+  peakLabel?: string;
   emptyPrompt?: string;
+  noDataText?: string;
 }
 
 export const ActivityInspectionCard: React.FC<ActivityInspectionCardProps> = ({
   inspectedBar,
   peakDay,
   formatInspectedDate,
+  peakLabel = 'Peak Day',
   emptyPrompt = 'Hover or tap any day to inspect focus duration.',
+  noDataText = 'No focus sessions logged',
 }) => {
   return (
     <div className="mt-2 p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
@@ -33,7 +37,7 @@ export const ActivityInspectionCard: React.FC<ActivityInspectionCardProps> = ({
                 {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'}
               </span>
             ) : (
-              <span>No focus sessions logged</span>
+              <span>{noDataText}</span>
             )}
           </div>
         </>
@@ -42,7 +46,7 @@ export const ActivityInspectionCard: React.FC<ActivityInspectionCardProps> = ({
           <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
             <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
             <span>
-              Peak Day:{' '}
+              {peakLabel}:{' '}
               <span className="text-md-primary font-bold">
                 {formatInspectedDate(peakDay.key)}
               </span>

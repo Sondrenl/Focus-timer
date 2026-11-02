@@ -373,92 +373,59 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Work Duration */}
-          <div className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
-            <label className="text-xs font-bold text-md-on-surface">
-              Focus Duration
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={workInput}
-                onFocus={() => setFocusedField('work')}
-                onChange={(e) => handleDecimalDurationChange('workDurationMinutes', e.target.value, setWorkInput, 120)}
-                onBlur={() => {
-                  setFocusedField(null);
-                  handleDecimalDurationBlur(
-                    'workDurationMinutes',
-                    workInput,
-                    setWorkInput,
-                    120,
-                    settings.workDurationMinutes || DEFAULT_SETTINGS.workDurationMinutes
-                  );
-                }}
-                className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
-              />
-              <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
+          {[
+            {
+              key: 'workDurationMinutes' as const,
+              label: 'Focus Duration',
+              value: workInput,
+              setter: setWorkInput,
+              fieldId: 'work' as 'work' | 'shortBreak' | 'longBreak',
+              maxVal: 120,
+              fallback: settings.workDurationMinutes || DEFAULT_SETTINGS.workDurationMinutes,
+            },
+            {
+              key: 'shortBreakDurationMinutes' as const,
+              label: 'Short Break',
+              value: shortBreakInput,
+              setter: setShortBreakInput,
+              fieldId: 'shortBreak' as 'work' | 'shortBreak' | 'longBreak',
+              maxVal: 60,
+              fallback: settings.shortBreakDurationMinutes || DEFAULT_SETTINGS.shortBreakDurationMinutes,
+            },
+            {
+              key: 'longBreakDurationMinutes' as const,
+              label: 'Long Break',
+              value: longBreakInput,
+              setter: setLongBreakInput,
+              fieldId: 'longBreak' as 'work' | 'shortBreak' | 'longBreak',
+              maxVal: 60,
+              fallback: settings.longBreakDurationMinutes || DEFAULT_SETTINGS.longBreakDurationMinutes,
+            },
+          ].map((df) => (
+            <div key={df.key} className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
+              <label className="text-xs font-bold text-md-on-surface">
+                {df.label}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={df.value}
+                  onFocus={() => setFocusedField(df.fieldId)}
+                  onChange={(e) => handleDecimalDurationChange(df.key, e.target.value, df.setter, df.maxVal)}
+                  onBlur={() => {
+                    setFocusedField(null);
+                    handleDecimalDurationBlur(df.key, df.value, df.setter, df.maxVal, df.fallback);
+                  }}
+                  className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
+                />
+                <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
+              </div>
             </div>
-          </div>
-
-          {/* Short Break */}
-          <div className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
-            <label className="text-xs font-bold text-md-on-surface">
-              Short Break
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={shortBreakInput}
-                onFocus={() => setFocusedField('shortBreak')}
-                onChange={(e) => handleDecimalDurationChange('shortBreakDurationMinutes', e.target.value, setShortBreakInput, 60)}
-                onBlur={() => {
-                  setFocusedField(null);
-                  handleDecimalDurationBlur(
-                    'shortBreakDurationMinutes',
-                    shortBreakInput,
-                    setShortBreakInput,
-                    60,
-                    settings.shortBreakDurationMinutes || DEFAULT_SETTINGS.shortBreakDurationMinutes
-                  );
-                }}
-                className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
-              />
-              <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
-            </div>
-          </div>
-
-          {/* Long Break */}
-          <div className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
-            <label className="text-xs font-bold text-md-on-surface">
-              Long Break
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={longBreakInput}
-                onFocus={() => setFocusedField('longBreak')}
-                onChange={(e) => handleDecimalDurationChange('longBreakDurationMinutes', e.target.value, setLongBreakInput, 60)}
-                onBlur={() => {
-                  setFocusedField(null);
-                  handleDecimalDurationBlur(
-                    'longBreakDurationMinutes',
-                    longBreakInput,
-                    setLongBreakInput,
-                    60,
-                    settings.longBreakDurationMinutes || DEFAULT_SETTINGS.longBreakDurationMinutes
-                  );
-                }}
-                className="w-full px-3 py-2 text-base md:text-sm bg-md-surface-container-highest rounded-xl text-center font-bold text-md-on-surface border border-md-outline-variant/30 focus:border-md-primary focus:outline-none"
-              />
-              <span className="text-xs font-semibold text-md-on-surface-variant">min</span>
-            </div>
-          </div>
+          ))}
         </div>
 
-        {/* Long Break Interval */}
+                {/* Long Break Interval */}
         <div className="flex items-center justify-between pt-2 border-t border-md-outline-variant/15">
           <div className="text-sm font-semibold text-md-on-surface">Long Break Interval</div>
           <div className="flex items-center gap-2">

@@ -2,7 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { MONTH_NAMES } from '../../utils/dates';
-import { Calendar as CalendarIcon, PieChart, Award } from 'lucide-react';
+import { Calendar as CalendarIcon, PieChart } from 'lucide-react';
+import { ActivityInspectionCard } from './ActivityInspectionCard';
+import { ActivityBarRow } from './ActivityBarRow';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -221,96 +223,32 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
           </div>
 
           {/* Dynamic Month Inspector Bar */}
-          <div className="mt-2 p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
-            {inspectedBar ? (
-              <>
-                <div className="font-semibold text-md-on-surface">
-                  {getFullMonthName(inspectedBar.key)}
-                </div>
-                <div className="font-medium text-md-on-surface-variant">
-                  {inspectedBar.totalSeconds > 0 ? (
-                    <span>
-                      <strong className="text-md-primary font-bold">
-                        {formatDurationHoursMins(inspectedBar.totalSeconds)}
-                      </strong>{' '}
-                      focused across {inspectedBar.sessionCount}{' '}
-                      {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'}
-                    </span>
-                  ) : (
-                    <span>No focus recorded in this month</span>
-                  )}
-                </div>
-              </>
-            ) : peakMonth ? (
-              <>
-                <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
-                  <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                  <span>
-                    Peak Month:{' '}
-                    <span className="text-md-primary font-bold">
-                      {getFullMonthName(peakMonth.key)}
-                    </span>
-                  </span>
-                </div>
-                <div className="text-md-on-surface-variant font-medium">
-                  {formatDurationHoursMins(peakMonth.totalSeconds)} focused ({peakMonth.sessionCount}{' '}
-                  {peakMonth.sessionCount === 1 ? 'session' : 'sessions'})
-                </div>
-              </>
-            ) : (
-              <div className="text-md-outline">
-                Hover or tap any month to inspect focus duration.
-              </div>
-            )}
-          </div>
+          <ActivityInspectionCard
+            inspectedBar={inspectedBar}
+            peakDay={peakMonth}
+            formatInspectedDate={getFullMonthName}
+            peakLabel="Peak Month"
+            noDataText="No focus recorded in this month"
+            emptyPrompt="Hover or tap any month to inspect focus duration."
+          />
         </div>
       ) : (
         /* Quarters Mode */
         <div className="flex flex-col gap-2.5">
-          {quarters.map((q) => {
-            const widthPct = maxQuarterSeconds > 0 ? Math.min(100, Math.round((q.totalSeconds / maxQuarterSeconds) * 100)) : 0;
-            const hasHours = q.totalSeconds > 0;
-
-            return (
-              <div
-                key={q.quarter}
-                className="flex items-center gap-3 p-3.5 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
-              >
-                <div className="w-28 sm:w-32 shrink-0 flex flex-col">
-                  <span className="text-xs font-bold text-md-on-surface truncate">
-                    {q.quarter}
-                  </span>
-                  <span className="text-[11px] text-md-outline truncate">
-                    {q.label}
-                  </span>
-                </div>
-
-                <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
-                  <div
-                    className={clsx(
-                      'h-full rounded-lg transition-all duration-500 ease-out',
-                      hasHours ? 'bg-md-primary' : 'bg-transparent'
-                    )}
-                    style={{ width: `${Math.max(hasHours ? 8 : 0, widthPct)}%` }}
-                  />
-                </div>
-
-                <div className="w-28 shrink-0 text-right flex flex-col items-end">
-                  <span
-                    className={clsx(
-                      'text-xs font-bold tabular-nums',
-                      hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                    )}
-                  >
-                    {hasHours ? formatDurationHoursMins(q.totalSeconds) : '0m'}
-                  </span>
-                  <span className="text-[10px] text-md-on-surface-variant">
-                    {q.activeMonths} active {q.activeMonths === 1 ? 'month' : 'months'}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+          {quarters.map((q) => (
+            <ActivityBarRow
+              key={q.quarter}
+              label={q.quarter}
+              subLabel={q.label}
+              totalSeconds={q.totalSeconds}
+              maxSeconds={maxQuarterSeconds}
+              secondaryText={
+                <span className="text-[10px] text-md-on-surface-variant">
+                  {q.activeMonths} active {q.activeMonths === 1 ? 'month' : 'months'}
+                </span>
+              }
+            />
+          ))}
         </div>
       )}
     </div>

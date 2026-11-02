@@ -4,6 +4,7 @@ import { formatDurationHoursMins } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
 import { ActivityInspectionCard } from './ActivityInspectionCard';
+import { ActivityBarRow } from './ActivityBarRow';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -212,53 +213,17 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
         /* List / Bars View Mode */
         <div className="flex flex-col gap-2.5">
           {activityBars.map((bar) => {
-            const widthPct = maxDaySeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxDaySeconds) * 100)) : 0;
-            const hasHours = bar.totalSeconds > 0;
             const isToday = bar.key === todayKey;
-
             return (
-              <div
+              <ActivityBarRow
                 key={bar.key}
-                className={clsx(
-                  'flex items-center gap-3 p-3 rounded-2xl transition-all',
-                  isToday ? 'bg-md-primary/5 border border-md-primary/20' : 'bg-md-surface-container/60 hover:bg-md-surface-container'
-                )}
-              >
-                <div className="w-24 sm:w-28 shrink-0 flex flex-col">
-                  <span className={clsx('text-xs font-bold truncate', isToday ? 'text-md-primary' : 'text-md-on-surface')}>
-                    {bar.label} {bar.subLabel}
-                  </span>
-                  {isToday && (
-                    <span className="text-[10px] text-md-primary font-semibold">Today</span>
-                  )}
-                </div>
-
-                <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
-                  <div
-                    className={clsx(
-                      'h-full rounded-lg transition-all duration-500 ease-out',
-                      hasHours ? 'bg-md-primary' : 'bg-transparent'
-                    )}
-                    style={{ width: `${Math.max(hasHours ? 8 : 0, widthPct)}%` }}
-                  />
-                </div>
-
-                <div className="w-24 shrink-0 text-right flex flex-col items-end">
-                  <span
-                    className={clsx(
-                      'text-xs font-bold tabular-nums',
-                      hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                    )}
-                  >
-                    {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
-                  </span>
-                  {bar.sessionCount > 0 && (
-                    <span className="text-[10px] text-md-on-surface-variant">
-                      {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                    </span>
-                  )}
-                </div>
-              </div>
+                label={`${bar.label} ${bar.subLabel || ''}`.trim()}
+                badge={isToday ? <span className="text-[10px] text-md-primary font-semibold">Today</span> : undefined}
+                totalSeconds={bar.totalSeconds}
+                sessionCount={bar.sessionCount}
+                maxSeconds={maxDaySeconds}
+                isHighlighted={isToday}
+              />
             );
           })}
         </div>

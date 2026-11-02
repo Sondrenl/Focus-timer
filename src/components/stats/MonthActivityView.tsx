@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
-import { WEEKDAY_NAMES, MONTH_NAMES } from '../../utils/dates';
+import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
 import { ActivityInspectionCard } from './ActivityInspectionCard';
+import { ActivityBarRow } from './ActivityBarRow';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -99,7 +100,7 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
     for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
       const d = new Date(year, monthIndex, dayNum);
       const dow = (d.getDay() + 6) % 7; // Monday = 0, Sunday = 6
-      const dateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      const dateKey = toDateKey(d);
       const bar = dayMap.get(dateKey) || {
         key: dateKey,
         label: String(dayNum),
@@ -283,52 +284,16 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
       ) : (
         /* Weekly Breakdown Mode */
         <div className="flex flex-col gap-2.5">
-          {weeklyGroups.map((week) => {
-            const widthPct = maxWeekSeconds > 0 ? Math.min(100, Math.round((week.totalSeconds / maxWeekSeconds) * 100)) : 0;
-            const hasHours = week.totalSeconds > 0;
-
-            return (
-              <div
-                key={`week-${week.weekIndex}`}
-                className="flex items-center gap-3 p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
-              >
-                <div className="w-28 sm:w-32 shrink-0 flex flex-col">
-                  <span className="text-xs font-bold text-md-on-surface truncate">
-                    Week {week.weekIndex}
-                  </span>
-                  <span className="text-[11px] text-md-outline truncate">
-                    {week.label}
-                  </span>
-                </div>
-
-                <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
-                  <div
-                    className={clsx(
-                      'h-full rounded-lg transition-all duration-500 ease-out',
-                      hasHours ? 'bg-md-primary' : 'bg-transparent'
-                    )}
-                    style={{ width: `${Math.max(hasHours ? 8 : 0, widthPct)}%` }}
-                  />
-                </div>
-
-                <div className="w-24 shrink-0 text-right flex flex-col items-end">
-                  <span
-                    className={clsx(
-                      'text-xs font-bold tabular-nums',
-                      hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                    )}
-                  >
-                    {hasHours ? formatDurationHoursMins(week.totalSeconds) : '0m'}
-                  </span>
-                  {week.sessionCount > 0 && (
-                    <span className="text-[10px] text-md-on-surface-variant">
-                      {week.sessionCount} {week.sessionCount === 1 ? 'session' : 'sessions'}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {weeklyGroups.map((week) => (
+            <ActivityBarRow
+              key={`week-${week.weekIndex}`}
+              label={`Week ${week.weekIndex}`}
+              subLabel={week.label}
+              totalSeconds={week.totalSeconds}
+              sessionCount={week.sessionCount}
+              maxSeconds={maxWeekSeconds}
+            />
+          ))}
         </div>
       )}
     </div>
