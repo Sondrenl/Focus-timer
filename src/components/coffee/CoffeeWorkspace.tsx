@@ -104,8 +104,8 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Controls */}
-      <div className="flex items-center justify-center gap-6 mt-4 mb-4">
+      {/* 3. Controls (Minus and Plus Buttons) */}
+      <div className="flex items-center justify-center gap-6 mt-4 mb-2">
         {/* Left: Minus Button */}
         <button
           onClick={handleRemove}
@@ -143,25 +143,25 @@ export const CoffeeWorkspace: React.FC = () => {
         </button>
       </div>
 
-      {/* 4. Visual Cup Tray (Color-coded cups logged today - below controls) */}
+      {/* Helper Cue directly below plus/minus buttons */}
+      <div className="text-[11px] text-md-outline mb-4 select-none text-center">
+        Tapping <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> logs a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
+      </div>
+
+      {/* 4. Visual Cup Tray (Uniform cups logged today - click any cup to select its tag) */}
       {totalCount > 0 && (
-        <div className="flex flex-wrap items-center justify-center gap-2 md:gap-1.5 max-w-sm mb-3 px-3 py-2 md:px-2 md:py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
+        <div className="flex flex-wrap items-center justify-center gap-2 md:gap-1.5 max-w-sm mb-4 px-3 py-2 md:px-2 md:py-1.5 rounded-2xl bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs">
           {cupsForDate.map((cup, idx) => {
             const cupTag = tags.find((t) => t.id === cup.tagId);
             const cupColor = cupTag ? cupTag.color : '#8D6E63';
             const cupName = cupTag ? cupTag.name : 'No Tag';
-            const isCupTagSelected = cup.tagId ? selectedTagId === cup.tagId : selectedTagId === null;
 
             return (
               <button
                 key={cup.id}
                 type="button"
                 onClick={() => setSelectedTagId(cup.tagId ?? null)}
-                className={`flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-all duration-150 hover:scale-115 active:scale-95 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary ${
-                  isCupTagSelected
-                    ? 'ring-2 ring-md-primary ring-offset-2 ring-offset-md-background shadow-xs scale-105'
-                    : 'hover:ring-1 hover:ring-md-outline/30'
-                }`}
+                className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-all duration-150 hover:scale-110 active:scale-95 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary hover:ring-1 hover:ring-md-outline/30"
                 style={{ backgroundColor: `${cupColor}25` }}
                 title={`Cup #${idx + 1}: ${cupName} (Click to select this tag)`}
                 aria-label={`Select tag ${cupName} from Cup #${idx + 1}`}
@@ -205,11 +205,6 @@ export const CoffeeWorkspace: React.FC = () => {
             No coffee logged for this day yet.
           </span>
         )}
-      </div>
-
-      {/* Bottom Cue */}
-      <div className="text-[11px] text-md-outline mt-5 select-none text-center">
-        Tapping <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> logs a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
       </div>
     </div>
   );

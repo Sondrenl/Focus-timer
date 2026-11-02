@@ -60,7 +60,8 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
+      {/* Header with invariant height to prevent layout shifts when navigating between periods */}
+      <div className="flex items-center justify-between h-7">
         <div className="flex items-center gap-2">
           <Lightbulb className="w-4 h-4 text-amber-600" />
           <h3 className="text-sm font-bold text-md-on-surface tracking-wide uppercase">
@@ -68,31 +69,39 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
           </h3>
         </div>
 
-        {insights.length > 1 && (
-          <div className="flex items-center gap-1.5 text-xs text-md-on-surface-variant font-medium">
-            <span>
-              {safeIndex + 1} of {insights.length}
-            </span>
-            <div className="flex items-center gap-1 ml-1">
-              <button
-                type="button"
-                onClick={handlePrev}
-                aria-label="Previous insight"
-                className="w-7 h-7 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high active:scale-95 transition-all text-md-on-surface-variant hover:text-md-on-surface"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={handleNext}
-                aria-label="Next insight"
-                className="w-7 h-7 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high active:scale-95 transition-all text-md-on-surface-variant hover:text-md-on-surface"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
+        {/* Navigation controls: always in layout to preserve exact height, invisible when only 1 insight */}
+        <div
+          className={`flex items-center gap-1.5 text-xs text-md-on-surface-variant font-medium transition-opacity ${
+            insights.length > 1
+              ? 'visible opacity-100'
+              : 'invisible pointer-events-none opacity-0 select-none'
+          }`}
+          aria-hidden={insights.length <= 1}
+        >
+          <span>
+            {safeIndex + 1} of {Math.max(1, insights.length)}
+          </span>
+          <div className="flex items-center gap-1 ml-1">
+            <button
+              type="button"
+              onClick={handlePrev}
+              disabled={insights.length <= 1}
+              aria-label="Previous insight"
+              className="w-7 h-7 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high active:scale-95 transition-all text-md-on-surface-variant hover:text-md-on-surface disabled:opacity-0"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleNext}
+              disabled={insights.length <= 1}
+              aria-label="Next insight"
+              className="w-7 h-7 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high active:scale-95 transition-all text-md-on-surface-variant hover:text-md-on-surface disabled:opacity-0"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
-        )}
+        </div>
       </div>
 
       <Card

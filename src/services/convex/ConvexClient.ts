@@ -22,7 +22,22 @@ export const isConvexConfigured = Boolean(
   convexUrl && !convexUrl.includes("dummy") && !convexUrl.includes("proud-otter")
 );
 
-export const convexClient = new ConvexReactClient(convexUrl);
+// Disable Convex's default unsavedChangesWarning to avoid "Reload site? Changes you made may not be saved" prompts
+export const convexClient = new ConvexReactClient(convexUrl, {
+  unsavedChangesWarning: false,
+});
+
+// Intercept beforeunload at the root level to suppress any unwanted reload dialogs
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "beforeunload",
+    (e) => {
+      // Prevent browser "unsaved changes" prompts on refresh or tab navigation
+      e.stopImmediatePropagation();
+    },
+    { capture: true }
+  );
+}
 
 // Eagerly restore auth token from localStorage if valid, avoiding delayed sync on startup
 if (isConvexConfigured && typeof window !== "undefined") {
