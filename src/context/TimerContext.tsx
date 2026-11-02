@@ -8,6 +8,7 @@ import { AuthService } from '../services/auth/AuthService';
 import { broadcastTimerState, subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
 import { useConvexTimer } from '../services/convex/useConvexTimer';
+import { formatTime } from '../utils/formatters';
 
 const WORKER_SCRIPT = `
   let timerId = null;
@@ -481,6 +482,29 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       sound.stopSilentKeepAlive(false);
     };
   }, [status, sound]);
+
+  // Synchronize document tab title with timer progress, status, and remaining time
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const mode =
+      sessionType === 'WORK'
+        ? 'Focus'
+        : sessionType === 'SHORT_BREAK'
+        ? 'Short Break'
+        : 'Long Break';
+    const timeFormatted = formatTime(remainingSeconds);
+
+    if (status === 'RUNNING') {
+      document.title = `(${timeFormatted}) ${mode} — Pomodor`;
+    } else if (status === 'PAUSED') {
+      document.title = `(Paused ${timeFormatted}) ${mode} — Pomodor`;
+    } else if (status === 'COMPLETED') {
+      document.title = `🎉 Complete! — Pomodor`;
+    } else {
+      document.title = 'Pomodor - Focus timer';
+    }
+  }, [status, remainingSeconds, sessionType]);
 
   // Completion handler callback
   const handleComplete = useCallback(
