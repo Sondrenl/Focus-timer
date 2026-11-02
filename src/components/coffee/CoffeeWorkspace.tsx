@@ -53,16 +53,17 @@ export const CoffeeWorkspace: React.FC = () => {
     await addCoffeeCup(selectedTagId, todayKey);
   };
 
+  // Find cups logged for today matching the currently selected tag (or untagged if selectedTagId is null)
+  const cupsOfSelectedTag = useMemo(() => {
+    return cupsForDate.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
+  }, [cupsForDate, selectedTagId]);
+
+  const canRemove = cupsOfSelectedTag.length > 0;
+
   const handleRemove = async () => {
-    if (totalCount <= 0) return;
+    if (!canRemove) return;
 
-    // Prioritize removing cup of the selected tag if one exists today
-    const cupsOfSelectedTag = cupsForDate.filter((c) => (selectedTagId ? c.tagId === selectedTagId : !c.tagId));
-    const targetCup =
-      cupsOfSelectedTag.length > 0
-        ? cupsOfSelectedTag[cupsOfSelectedTag.length - 1]
-        : cupsForDate[cupsForDate.length - 1];
-
+    const targetCup = cupsOfSelectedTag[cupsOfSelectedTag.length - 1];
     if (!targetCup) return;
 
     await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
@@ -108,14 +109,24 @@ export const CoffeeWorkspace: React.FC = () => {
         {/* Left: Minus Button */}
         <button
           onClick={handleRemove}
-          disabled={totalCount <= 0}
-          title="Remove cup"
+          disabled={!canRemove}
+          title={
+            !canRemove
+              ? selectedTagId
+                ? `No cups logged with tag "${currentTagName}" to remove`
+                : 'No untagged cups to remove'
+              : `Remove cup (${currentTagName})`
+          }
           className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
-            totalCount <= 0
-              ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed'
+            !canRemove
+              ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed opacity-50'
               : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
           }`}
-          aria-label="Remove cup of coffee"
+          aria-label={
+            !canRemove
+              ? 'No cups available to remove for the selected tag'
+              : `Remove cup of coffee (${currentTagName})`
+          }
         >
           <Minus className="w-7 h-7 md:w-6 md:h-6" />
         </button>
