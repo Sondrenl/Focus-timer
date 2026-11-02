@@ -5,6 +5,7 @@ import { requireUser, getAuthenticatedUser } from "./authHelper";
 /**
  * Returns coffee cups. Optionally filters by date (e.g. today "YYYY-MM-DD")
  * or returns recent cups up to an optional limit in chronological ascending order.
+ * Returns null if user is not authenticated yet.
  */
 export const list = query({
   args: {
@@ -13,7 +14,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const user = await getAuthenticatedUser(ctx);
-    if (!user) return [];
+    if (!user) return null;
 
     let cups;
     if (args.date) {
@@ -24,7 +25,7 @@ export const list = query({
         )
         .collect();
     } else {
-      const limit = args.limit ?? 500;
+      const limit = args.limit ?? 2000;
       const descCups = await ctx.db
         .query("coffee_cups")
         .withIndex("by_user_date", (q) => q.eq("userId", user._id))

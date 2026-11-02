@@ -344,3 +344,29 @@ export const importD1Data = mutation({
     };
   },
 });
+
+
+export const debugInspectData = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query('users').collect();
+    const sessions = await ctx.db.query('sessions').take(10);
+    const totalSessions = (await ctx.db.query('sessions').collect()).length;
+    const totalCups = (await ctx.db.query('coffee_cups').collect()).length;
+    return {
+      totalSessions,
+      totalCups,
+      users: users.map(u => ({ id: u._id, email: u.email, tokenIdentifier: u.tokenIdentifier, tagsCount: (u.tags || []).length })),
+      sampleSessionUserIds: sessions.map(s => s.userId),
+    };
+  },
+});
+
+export const debugInspectActiveTimers = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const timers = await ctx.db.query('active_timers').collect();
+    const users = await ctx.db.query('users').collect();
+    return { timers, users };
+  },
+});

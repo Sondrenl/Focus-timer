@@ -6,9 +6,12 @@ import { isMobileDevice } from '../../utils/environment';
 export type { RemoteTimerState, PeerPresence, GoogleJwtPayload };
 export { isMobileDevice };
 
-const TOKEN_KEY = 'focus_timer_auth_token';
-const USER_KEY = 'focus_timer_user_profile';
-const LAST_SYNC_KEY = 'focus_timer_last_synced_at';
+export const AUTH_TOKEN_KEY = 'focus_timer_auth_token';
+export const USER_PROFILE_KEY = 'focus_timer_user_profile';
+export const LAST_SYNC_KEY = 'focus_timer_last_synced_at';
+
+const TOKEN_KEY = AUTH_TOKEN_KEY;
+const USER_KEY = USER_PROFILE_KEY;
 
 /**
  * Decodes and parses a standard Google identity JWT.
@@ -75,7 +78,7 @@ export class AuthService {
 
   public getStoredToken(): string | null {
     try {
-      return localStorage.getItem(TOKEN_KEY);
+      return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('auth_token_v1');
     } catch {
       return null;
     }
@@ -124,6 +127,7 @@ export class AuthService {
   public logout(): void {
     try {
       localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem('auth_token_v1');
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem(LAST_SYNC_KEY);
     } catch (e) {

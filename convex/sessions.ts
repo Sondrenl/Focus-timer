@@ -22,6 +22,7 @@ function formatSessionRecord(id: string, s: SessionData) {
 /**
  * Returns completed focus/break sessions.
  * Supports date-range filtering or returning recent sessions up to a limit.
+ * Returns null if user is not authenticated yet.
  */
 export const list = query({
   args: {
@@ -31,7 +32,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const user = await getAuthenticatedUser(ctx);
-    if (!user) return [];
+    if (!user) return null;
 
     let sessions;
     if (args.startDate || args.endDate) {
@@ -48,7 +49,7 @@ export const list = query({
         )
         .collect();
     } else {
-      const limit = args.limit ?? 500;
+      const limit = args.limit ?? 2000;
       const descSessions = await ctx.db
         .query("sessions")
         .withIndex("by_user_completed", (q) => q.eq("userId", user._id))

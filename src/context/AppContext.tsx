@@ -450,15 +450,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // If already logged in, verify session and trigger background sync
       const storedToken = authService.getStoredToken();
-      let isAuthenticatedSession = false;
+      const storedUser = authService.getStoredUser();
 
       if (storedToken && isConvexConfigured) {
         const payload = parseGoogleJwt(storedToken);
-        if (payload && payload.sub && (!payload.exp || payload.exp * 1000 > Date.now())) {
-          isAuthenticatedSession = true;
+        if (payload && payload.sub) {
           notificationService.setAuthToken(storedToken);
           setAuthToken(storedToken);
-          const verifiedUser = buildProfileFromJwt(payload, profileRef.current);
+          const verifiedUser = buildProfileFromJwt(payload, storedUser || profileRef.current);
           setAuth({
             isAuthenticated: true,
             user: verifiedUser,
@@ -468,15 +467,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             syncError: null,
           });
         }
-      }
-
-      if (!isAuthenticatedSession) {
+      } else if (!storedToken && !storedUser) {
         logout();
       }
     }
 
     init();
   }, []);
+
+  // Google Identity Services auto-selection & silent token refresh
+  useEffect(() => {
+    const initGoogleAccounts = () => {
+      if (typeof window === 'undefined' || !(window as any).google?.accounts?.id) return;
+      try {
+        (window as any).google.accounts.id.initialize({
+          client_id:
+            import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+            '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com',
+          auto_select: true,
+          callback: async (response: any) => {
+            if (response.credential) {
+              await loginWithGoogle(response.credential);
+            }
+          },
+        });
+      } catch (e) {
+        // Ignore initialization error
+      }
+    };
+
+    initGoogleAccounts();
+    const interval = setInterval(() => {
+      if ((window as any).google?.accounts?.id) {
+        initGoogleAccounts();
+        clearInterval(interval);
+      }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [loginWithGoogle]);
 
   // Profile Operations: save locally and push directly to cloud
   const updateProfile = async (newProfile: Partial<UserProfile>): Promise<void> => {
