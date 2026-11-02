@@ -1,32 +1,34 @@
 # Focus Timer (Pomodor)
 
-A fast, modern Pomodoro and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and a real-time reactive Convex backend. Designed for frictionless flow state, zero-latency multi-device synchronization, and deep productivity insights.
+A fast, modern Pomodoro and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and a real-time reactive backend. Designed for frictionless flow state, zero-latency multi-device synchronization, and deep productivity insights.
 
-[![Version](https://img.shields.io/badge/version-2.3.1-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
 ---
 
 ## Highlights
 
-- **Reactive Multi-Device Sync (<50ms)**: Powered by Convex WebSockets. Timers, coffee logs, custom tags, and user settings synchronize seamlessly across your phone, tablet, and laptop in real-time without polling.
-- **Drift-Free Background Timer**: Server-authoritative `targetEndTime` with a client background Web Worker and high-precision timestamps. Never drifts when switching tabs or minimizing.
-- **Sleep & Lid-Closed Detection**: Heartbeat presence detection pauses gracefully when your laptop lid is closed or system sleeps, while keeping active peer devices running uninterrupted.
-- **Zero-Latency Multi-Tab Sync**: Instant synchronization across tabs on the same computer using the `BroadcastChannel` API.
-- **Coffee & Caffeine Tracker**: Log coffee cups with associated project tags. Reactive cloud sync with instant updates and comprehensive coffee analytics.
-- **Keep Screen Awake (Mobile & Desktop)**: Uses the Screen Wake Lock API to prevent displays from going to sleep during active work sessions.
-- **Productivity & Coffee Analytics**: Timeframe breakdowns (Day, Week, Month, Year, All-Time), peak productivity hours, daily coffee averages, and tag distribution donuts.
-- **Local-First & Privacy Conscious**: Runs seamlessly offline with `localStorage`. Cloud sync is activated automatically when signed in or when `VITE_CONVEX_URL` is configured. Full JSON export/import backups are available at any time.
-- **Customizable Intervals & Audio Alerts**: Adjustable work/break lengths, auto-start options, synthesized Web Audio chimes (no audio asset downloads needed), and desktop notifications.
+- **Reactive Multi-Device Synchronization (<50ms)**: Powered by real-time WebSocket subscriptions. Timers, coffee logs, custom tags, and user settings synchronize seamlessly across your phone, tablet, and laptop without manual refreshing or polling.
+- **Smart Device Arbitration & Alert Routing**: Intelligently detects whether you are active on mobile or desktop. Completion chimes and notifications route to the device you are actively using, avoiding annoying duplicate alarms.
+- **Drift-Free Background Timer**: Server-anchored timestamps combined with a dedicated background Web Worker maintain millisecond accuracy even when tabs are minimized, mobile screens lock, or the browser throttles timers.
+- **Sleep & Lid-Closed Detection**: Gracefully detects when your laptop lid closes or system sleeps, pausing local ticks while allowing connected peer devices to continue running smoothly.
+- **Instant Multi-Tab Communication**: Instant synchronization across tabs on the same computer using the browser's native `BroadcastChannel` API.
+- **Tag-Scoped Coffee & Caffeine Logging**: Visual, interactive coffee tray where clicking any cup selects its associated tag. Strict tag scoping, instant cloud logging, and detailed daily caffeine statistics.
+- **Keep Screen Awake (Mobile & Desktop)**: Leverages the Screen Wake Lock API to prevent device displays from dimming or sleeping during active focus intervals.
+- **Deep Productivity Analytics**: Comprehensive timeframe breakdowns (Day, Week, Month, Year, All-Time), interactive calendar inspector, peak productivity hours, daily coffee averages, and tag distribution donuts.
+- **Local-First with Seamless Cloud Continuity**: Operates 100% offline via local storage. Signing in with Google automatically connects cloud synchronization with automatic account linking and zero data loss.
+- **Synthesized Web Audio Alerts**: Clean, synthesized harmonic chime alerts powered by the Web Audio API without requiring external audio asset downloads.
+- **Customizable Intervals**: Configurable focus, short break, and long break durations, long break intervals, auto-start options, sound volumes, and daily focus goals.
 
 ---
 
 ## Tech Stack
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide React, Canvas Confetti
-- **Backend**: [Convex](https://www.convex.dev/) (Reactive real-time database, server functions, scheduled actions, compound indexes)
+- **Backend Database & Functions**: [Convex](https://www.convex.dev/) (Reactive real-time database, compound indexes, server-side scheduled actions)
 - **Authentication**: Google OAuth 2.0 Identity Services / OIDC JWT
-- **APIs**: Screen Wake Lock API, Web Audio API, BroadcastChannel, Notifications API, Web Workers
+- **Browser APIs**: Screen Wake Lock API, Web Audio API, BroadcastChannel, Notifications API, Web Workers
 
 ---
 
@@ -48,12 +50,12 @@ cd Focus-timer
 npm install
 ```
 
-### Backend Setup (Convex)
+### Backend Setup
 1. Initialize or connect your Convex project:
 ```bash
 npx convex dev
 ```
-This will log you in, configure your dev deployment, and create `.env.local` containing `VITE_CONVEX_URL`.
+This configures your backend environment and writes the deployment URL to `.env.local`.
 
 2. Add your Google OAuth Web Client ID to `.env.local`:
 ```env
@@ -65,7 +67,7 @@ To run both the Vite frontend and the Convex backend development server concurre
 ```bash
 npm run dev
 ```
-Open `http://localhost:5173` in your browser.
+Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 You can also run them individually:
 - `npm run dev:frontend` – Starts the Vite dev server only
@@ -90,27 +92,27 @@ npm run build
 
 ---
 
-## Project Structure
+## Architecture & Project Structure
 
 ```
-├── public/                 # Static assets & SVG favicon
-├── convex/                 # Convex reactive backend
-│   ├── schema.ts           # Convex schema definitions & indexes
+├── public/                 # Static assets, Web App Manifest, and Service Worker
+├── convex/                 # Reactive real-time backend
+│   ├── schema.ts           # Database schema definitions & compound indexes
 │   ├── users.ts            # User profile, preferences & embedded tags
-│   ├── timer.ts            # Real-time timer state & presence heartbeat
-│   ├── sessions.ts         # Pomodoro session history
-│   ├── coffee.ts           # Coffee intake tracking
-│   ├── tags.ts             # Tag CRUD mutations on user document
-│   ├── push.ts             # Web Push subscription management
-│   ├── migrations.ts       # Backup JSON import mutations
-│   └── auth.config.ts      # Google OIDC authentication provider
+│   ├── timer.ts            # Active timer state, server scheduler, and presence heartbeat
+│   ├── sessions.ts         # Pomodoro session history with time-window deduplication
+│   ├── coffee.ts           # Timestamped coffee intake tracking with strict tag scoping
+│   ├── tags.ts             # Tag operations and preference persistence
+│   ├── push.ts             # Multi-device push notification registrations
+│   ├── migrations.ts       # Atomic backup import/export and data ingestion routines
+│   └── auth.config.ts      # Google OIDC authentication provider config
 └── src/
-    ├── components/         # UI views (Timer, Coffee, Stats, Tags, Settings, Profile)
+    ├── components/         # UI modules (Timer, Coffee, Stats, Tags, Settings, Profile)
     ├── context/            # React state providers (AppContext, TimerContext)
     ├── hooks/              # Reactive hooks (useConvexSync, useConvexTimer, useTimer)
-    ├── services/           # Convex client, Auth, Repositories, WakeLock, Sound, Notifications
-    ├── types/              # TypeScript models (Timer, Session, Tag, Settings, Coffee, User)
-    └── utils/              # Math, date formatting, and confetti helpers
+    ├── services/           # Repositories, AuthService, WakeLockService, SoundService, NotificationService
+    ├── types/              # TypeScript definitions (Timer, Session, Tag, Settings, Coffee, User)
+    └── utils/              # Math, environment detection, formatting, and visual effects
 ```
 
 ---

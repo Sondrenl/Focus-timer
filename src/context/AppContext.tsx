@@ -728,7 +728,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
     return {
-      version: '2.3.1',
+      version: '3.0.0',
       exportedAt: new Date().toISOString(),
       profile,
       tags,
