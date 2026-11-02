@@ -8,7 +8,9 @@
     "dev:frontend": "vite",
     "dev:convex": "convex dev",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@auth/core": "^0.41.3",
@@ -34,6 +36,7 @@
     "tailwindcss": "^3.4.17",
     "typescript": "~5.7.2",
     "vite": "^6.1.0",
+    "vitest": "^5.0.5",
     "wrangler": "^4.156.0"
   }
 }

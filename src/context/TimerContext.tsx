@@ -9,6 +9,8 @@ import { broadcastTimerState, subscribeTimerState, subscribeReset, TAB_ID } from
 import { wakeLockService } from '../services/screen/WakeLockService';
 import { useConvexTimer } from '../services/convex/useConvexTimer';
 import { formatTime } from '../utils/formatters';
+import { computeNextInterval, getDurationForType as getBaseDurationForType } from '../utils/timerTransitions';
+import { evaluateDeviceAlert } from '../utils/arbitration';
 
 const WORKER_SCRIPT = `
   let timerId = null;
@@ -113,14 +115,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Retrieve initial duration configured in user preferences
   const getDurationForType = useCallback(
     (type: SessionType): number => {
-      switch (type) {
-        case 'WORK':
-          return Math.round(settings.workDurationMinutes * 60);
-        case 'SHORT_BREAK':
-          return Math.round(settings.shortBreakDurationMinutes * 60);
-        case 'LONG_BREAK':
-          return Math.round(settings.longBreakDurationMinutes * 60);
-      }
+      return getBaseDurationForType(type, settings);
     },
     [settings]
   );
@@ -247,29 +242,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
    */
   const shouldThisDeviceAlert = useCallback((type: SessionType): boolean => {
     const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-    const peer = peerPresenceRef.current;
-
-    if (IS_MOBILE) {
-      if (isVisible) return true;
-      if (type === 'WORK') {
-        if (peer.desktopActive && !peer.desktopVisible) {
-          return true;
-        }
-        return !peer.desktopActive;
-      } else {
-        if (peer.desktopActive && peer.desktopVisible) {
-          return false;
-        }
-        return true;
-      }
-    } else {
-      if (type === 'WORK') {
-        return true;
-      } else {
-        if (isVisible) return true;
-        return !peer.mobileActive;
-      }
-    }
+    return evaluateDeviceAlert({
+      isMobile: IS_MOBILE,
+      isVisible,
+      peer: peerPresenceRef.current,
+      type,
+    });
   }, []);
 
   const lastAlertWallMsRef = useRef<number>(0);
@@ -532,31 +510,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         completedAt: new Date().toISOString(),
       });
 
-      let nextType: SessionType;
-      let nextCycle = currentCycleRef.current;
-
-      if (completedType === 'WORK') {
-        if (currentCycleRef.current >= settingsRef.current.longBreakInterval) {
-          nextType = 'LONG_BREAK';
-          nextCycle = currentCycleRef.current;
-        } else {
-          nextType = 'SHORT_BREAK';
-          nextCycle = currentCycleRef.current;
-        }
-      } else if (completedType === 'SHORT_BREAK') {
-        nextType = 'WORK';
-        nextCycle = currentCycleRef.current + 1;
-      } else {
-        // LONG_BREAK completed
-        nextType = 'WORK';
-        nextCycle = 1;
-      }
-
-      const nextDuration = getDurationForType(nextType);
-      const shouldAutoStart =
-        nextType === 'WORK'
-          ? settingsRef.current.autoStartPomodoros
-          : settingsRef.current.autoStartBreaks;
+      const next = computeNextInterval(completedType, currentCycleRef.current, settingsRef.current);
+      const nextType = next.nextType;
+      const nextCycle = next.nextCycle;
+      const nextDuration = next.nextDuration;
+      const shouldAutoStart = next.shouldAutoStart;
 
       const now = Date.now();
       sessionTypeRef.current = nextType;
