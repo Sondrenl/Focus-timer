@@ -72,7 +72,7 @@ export const start = mutation({
     remainingSeconds: v.optional(v.number()),
     totalSeconds: v.optional(v.number()),
     currentCycle: v.number(),
-    tagId: v.optional(v.string()),
+    tagId: v.optional(v.union(v.string(), v.null())),
     timerRunId: v.string(),
   },
   handler: async (ctx, args): Promise<any> => {
@@ -81,6 +81,7 @@ export const start = mutation({
     const remaining = Math.max(1, args.remainingSeconds ?? args.durationSeconds);
     const total = Math.max(remaining, args.totalSeconds ?? args.durationSeconds);
     const targetEndTime = now + remaining * 1000;
+    const sanitizedTagId = args.tagId || undefined;
 
     const existing = await ctx.db
       .query("active_timers")
@@ -107,7 +108,7 @@ export const start = mutation({
       totalSeconds: total,
       targetEndTime,
       currentCycle: args.currentCycle,
-      tagId: args.tagId,
+      tagId: sanitizedTagId,
       timerRunId: args.timerRunId,
       updatedAtMs: now,
       scheduledCompletionId,
@@ -136,11 +137,17 @@ export const pause = mutation({
 
     if (!existing) return null;
 
+    const sanitizedRemaining = Math.max(0, args.remainingSeconds);
+    // Capacity optimization: skip redundant patch if already paused at identical remaining seconds
+    if (existing.status === "PAUSED" && existing.remainingSeconds === sanitizedRemaining) {
+      return existing;
+    }
+
     await cancelScheduledJob(ctx, existing.scheduledCompletionId);
 
     const updates = {
       status: "PAUSED" as const,
-      remainingSeconds: Math.max(0, args.remainingSeconds),
+      remainingSeconds: sanitizedRemaining,
       targetEndTime: undefined,
       scheduledCompletionId: undefined,
       updatedAtMs: Date.now(),
@@ -203,14 +210,29 @@ export const reset = mutation({
     ),
     durationSeconds: v.number(),
     currentCycle: v.number(),
-    tagId: v.optional(v.string()),
+    tagId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
+    const sanitizedTagId = args.tagId || undefined;
+
     const existing = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .first();
+
+    // Capacity optimization: skip redundant patch if already IDLE with identical parameters
+    if (
+      existing &&
+      existing.status === "IDLE" &&
+      existing.sessionType === args.sessionType &&
+      existing.remainingSeconds === args.durationSeconds &&
+      existing.totalSeconds === args.durationSeconds &&
+      existing.currentCycle === args.currentCycle &&
+      (existing.tagId ?? undefined) === sanitizedTagId
+    ) {
+      return existing;
+    }
 
     await cancelScheduledJob(ctx, existing?.scheduledCompletionId);
 
@@ -221,7 +243,7 @@ export const reset = mutation({
       totalSeconds: args.durationSeconds,
       targetEndTime: undefined,
       currentCycle: args.currentCycle,
-      tagId: args.tagId,
+      tagId: sanitizedTagId,
       timerRunId: undefined,
       scheduledCompletionId: undefined,
       updatedAtMs: Date.now(),
@@ -262,13 +284,28 @@ export const updatePresence = mutation({
       lastSeenMs: 0,
     };
 
+    const newDesktopActive = args.isMobile ? currentPresence.desktopActive : true;
+    const newDesktopVisible = args.isMobile ? currentPresence.desktopVisible : args.isVisible;
+    const newMobileActive = args.isMobile ? true : currentPresence.mobileActive;
+    const newMobileVisible = args.isMobile ? args.isVisible : currentPresence.mobileVisible;
+
+    const flagsChanged =
+      newDesktopActive !== currentPresence.desktopActive ||
+      newDesktopVisible !== currentPresence.desktopVisible ||
+      newMobileActive !== currentPresence.mobileActive ||
+      newMobileVisible !== currentPresence.mobileVisible;
+
     const now = Date.now();
+    // Capacity optimization: skip redundant patch if presence flags didn't change and heartbeat is fresh (<60s)
+    if (!flagsChanged && now - currentPresence.lastSeenMs < 60000) {
+      return currentPresence;
+    }
+
     const updatedPresence = {
-      ...currentPresence,
-      desktopActive: args.isMobile ? currentPresence.desktopActive : true,
-      desktopVisible: args.isMobile ? currentPresence.desktopVisible : args.isVisible,
-      mobileActive: args.isMobile ? true : currentPresence.mobileActive,
-      mobileVisible: args.isMobile ? args.isVisible : currentPresence.mobileVisible,
+      desktopActive: newDesktopActive,
+      desktopVisible: newDesktopVisible,
+      mobileActive: newMobileActive,
+      mobileVisible: newMobileVisible,
       lastSeenMs: now,
     };
 

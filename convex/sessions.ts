@@ -63,7 +63,7 @@ export const list = query({
 
 export const record = mutation({
   args: {
-    tagId: v.optional(v.string()),
+    tagId: v.optional(v.union(v.string(), v.null())),
     sessionType: v.union(
       v.literal("WORK"),
       v.literal("SHORT_BREAK"),
@@ -75,6 +75,7 @@ export const record = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const completedAt = args.completedAt ?? new Date().toISOString();
+    const sanitizedTagId = args.tagId || undefined;
 
     const completedAtMs = new Date(completedAt).getTime();
     const recent = await ctx.db
@@ -94,14 +95,14 @@ export const record = mutation({
 
     const sessionId = await ctx.db.insert("sessions", {
       userId: user._id,
-      tagId: args.tagId,
+      tagId: sanitizedTagId,
       sessionType: args.sessionType,
       durationSeconds: args.durationSeconds,
       completedAt,
     });
 
     return formatSessionRecord(sessionId, {
-      tagId: args.tagId,
+      tagId: sanitizedTagId,
       sessionType: args.sessionType,
       durationSeconds: args.durationSeconds,
       completedAt,

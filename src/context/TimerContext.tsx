@@ -383,6 +383,27 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [isConvexConfigured]
   );
 
+  const lastReportedPresenceRef = useRef<{ isMobile: boolean; isVisible: boolean; time: number } | null>(null);
+
+  const reportPresence = useCallback((isVisible: boolean) => {
+    if (!isConvexConfigured || !isAuthenticatedRef.current) return;
+    const now = Date.now();
+    const last = lastReportedPresenceRef.current;
+    if (
+      last &&
+      last.isMobile === IS_MOBILE &&
+      last.isVisible === isVisible &&
+      now - last.time < 60000
+    ) {
+      return;
+    }
+    lastReportedPresenceRef.current = { isMobile: IS_MOBILE, isVisible, time: now };
+    convexTimerMutationsRef.current.updatePresence({
+      isMobile: IS_MOBILE,
+      isVisible,
+    }).catch(() => {});
+  }, [isConvexConfigured]);
+
   // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -394,12 +415,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Register device presence eagerly when authenticated so peers detect each other immediately
   useEffect(() => {
     if (isConvexConfigured && auth.isAuthenticated) {
-      convexTimerMutationsRef.current.updatePresence({
-        isMobile: IS_MOBILE,
-        isVisible: typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true,
-      }).catch(() => {});
+      reportPresence(typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true);
     }
-  }, [isConvexConfigured, auth.isAuthenticated]);
+  }, [isConvexConfigured, auth.isAuthenticated, reportPresence]);
 
   // Manage screen wake lock: keep screen awake while timer is actively running
   useEffect(() => {
@@ -443,20 +461,14 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const handlePageHide = (e: PageTransitionEvent) => {
       wakeLockService.release();
       if (e.persisted) return;
-
-      if (isConvexConfigured && isAuthenticatedRef.current) {
-        convexTimerMutationsRef.current.updatePresence({
-          isMobile: IS_MOBILE,
-          isVisible: false,
-        }).catch(() => {});
-      }
+      reportPresence(false);
     };
 
     window.addEventListener('pagehide', handlePageHide);
     return () => {
       window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [isConvexConfigured]);
+  }, [reportPresence]);
 
   // Keep audio silent keep-alive running while timer is active
   useEffect(() => {
@@ -837,12 +849,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sound.prepareForPlayback();
       }
 
-      if (isConvexConfigured && isAuthenticatedRef.current) {
-        convexTimerMutationsRef.current.updatePresence({
-          isMobile: IS_MOBILE,
-          isVisible: !isHidden,
-        }).catch(() => {});
-      }
+      reportPresence(!isHidden);
 
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
         const nowWall = Date.now();
@@ -895,7 +902,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
-  }, [sound, syncScheduledNotification, isConvexConfigured]);
+  }, [sound, syncScheduledNotification, reportPresence, authService]);
 
   // Main-thread backup countdown timer
   useEffect(() => {

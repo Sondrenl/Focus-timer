@@ -174,46 +174,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           tagRepository.getAll(),
         ]);
 
-        if (Array.isArray(convexSessions)) {
-          const remoteCompletedTimes = new Set(convexSessions.map((s) => s.completedAt));
-          const missingSessions = localSessions.filter(
-            (s) =>
-              !s.id.startsWith('seed-session-') &&
-              !s.id.startsWith('sample-session-') &&
-              !remoteCompletedTimes.has(s.completedAt)
-          );
-          for (const s of missingSessions) {
-            convexMutations.recordSession({
+        const remoteCompletedTimes = new Set(
+          Array.isArray(convexSessions) ? convexSessions.map((s) => s.completedAt) : []
+        );
+        const missingSessions = Array.isArray(convexSessions)
+          ? localSessions.filter(
+              (s) =>
+                !s.id.startsWith('seed-session-') &&
+                !s.id.startsWith('sample-session-') &&
+                !remoteCompletedTimes.has(s.completedAt)
+            )
+          : [];
+
+        const remoteCupTimes = new Set(
+          Array.isArray(convexCoffee) ? convexCoffee.map((c) => c.createdAt) : []
+        );
+        const missingCups = Array.isArray(convexCoffee)
+          ? localCoffee.filter((c) => !remoteCupTimes.has(c.createdAt))
+          : [];
+
+        const remoteTagNames = new Set(
+          (convexUser?.tags || []).map((t) => t.name.toLowerCase().trim())
+        );
+        const missingTags = localTags.filter(
+          (t) => !remoteTagNames.has(t.name.toLowerCase().trim())
+        );
+
+        if (missingSessions.length > 0 || missingCups.length > 0 || missingTags.length > 0) {
+          await convexMutations.importBackup({
+            mode: 'merge',
+            tags: missingTags.map((t) => ({
+              id: t.id,
+              name: t.name,
+              color: t.color,
+              isArchived: t.isArchived,
+            })),
+            sessions: missingSessions.map((s) => ({
               tagId: s.tagId || undefined,
               sessionType: s.sessionType,
               durationSeconds: s.durationSeconds,
               completedAt: s.completedAt,
-            }).catch(console.warn);
-          }
-        }
-
-        if (Array.isArray(convexCoffee)) {
-          const remoteCupTimes = new Set(convexCoffee.map((c) => c.createdAt));
-          const missingCups = localCoffee.filter((c) => !remoteCupTimes.has(c.createdAt));
-          for (const c of missingCups) {
-            convexMutations.addCup({
+            })),
+            coffeeCups: missingCups.map((c) => ({
               date: c.date,
               tagId: c.tagId || undefined,
               createdAt: c.createdAt,
-            }).catch(console.warn);
-          }
-        }
-
-        if (convexUser?.tags) {
-          const remoteTagIds = new Set(convexUser.tags.map((t) => t.id));
-          const missingTags = localTags.filter((t) => !remoteTagIds.has(t.id));
-          for (const t of missingTags) {
-            convexMutations.createTag({
-              id: t.id,
-              name: t.name,
-              color: t.color,
-            }).catch(console.warn);
-          }
+            })),
+          });
         }
       } catch (err) {
         console.warn('Initial local-to-Convex migration check failed', err);
@@ -480,7 +487,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProfile(merged);
     await profileRepository.save(merged);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.updateProfile({
         displayName: newProfile.displayName,
         avatarEmoji: newProfile.avatarEmoji,
@@ -497,7 +504,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTagId(created.id);
     broadcastTags(updated);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.createTag({
         id: created.id,
         name: input.name,
@@ -513,7 +520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTags(updated);
     broadcastTags(updated);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.updateTag({
         id,
         name: updates.name,
@@ -534,7 +541,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     broadcastTags(updated);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.updateTag({ id, isArchived: true }).catch(console.warn);
     }
     return result;
@@ -546,7 +553,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTags(updated);
     broadcastTags(updated);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.updateTag({ id, isArchived: false }).catch(console.warn);
     }
     return result;
@@ -574,7 +581,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     broadcastTags(updatedTags);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.removeTag({ id }).catch(console.warn);
     }
     return success;
@@ -668,7 +675,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       broadcastSession(created);
 
-      if (isConvexConfigured) {
+      if (isConvexConfigured && auth.isAuthenticated) {
         convexMutations.recordSession({
           tagId: sessionData.tagId || undefined,
           sessionType: sessionData.sessionType,
@@ -678,13 +685,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return created;
     },
-    [isConvexConfigured, convexMutations]
+    [isConvexConfigured, auth.isAuthenticated, convexMutations]
   );
 
   const clearSessions = async (): Promise<void> => {
     await sessionRepository.clear();
     setSessions([]);
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.clearSessions({}).catch(console.warn);
     }
   };
@@ -704,7 +711,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSettings(merged);
     await settingsRepository.save(merged);
 
-    if (isConvexConfigured) {
+    if (isConvexConfigured && auth.isAuthenticated) {
       convexMutations.updateSettings(newValues).catch(console.warn);
     }
   };
@@ -948,7 +955,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (scope === 'sessions-only') {
       await sessionRepository.clear();
       setSessions([]);
-      if (isConvexConfigured) {
+      if (isConvexConfigured && auth.isAuthenticated) {
         convexMutations.clearSessions({}).catch(console.warn);
       }
     } else {
@@ -967,7 +974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       profileRef.current = defaultProfile;
       setActiveTagId(defaultTags[0]?.id || null);
 
-      if (isConvexConfigured) {
+      if (isConvexConfigured && auth.isAuthenticated) {
         convexMutations.clearSessions({}).catch(console.warn);
         convexMutations.clearCoffee({}).catch(console.warn);
         convexMutations.resetTags({}).catch(console.warn);

@@ -45,24 +45,25 @@ export const list = query({
 export const addCup = mutation({
   args: {
     date: v.string(), // "YYYY-MM-DD"
-    tagId: v.optional(v.string()),
+    tagId: v.optional(v.union(v.string(), v.null())),
     createdAt: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const now = args.createdAt ?? new Date().toISOString();
+    const sanitizedTagId = args.tagId || undefined;
 
     const cupId = await ctx.db.insert("coffee_cups", {
       userId: user._id,
       date: args.date,
-      tagId: args.tagId,
+      tagId: sanitizedTagId,
       createdAt: now,
     });
 
     return {
       id: cupId,
       date: args.date,
-      tagId: args.tagId ?? null,
+      tagId: sanitizedTagId ?? null,
       createdAt: now,
     };
   },
@@ -72,7 +73,7 @@ export const removeCup = mutation({
   args: {
     id: v.optional(v.string()),
     date: v.optional(v.string()),
-    tagId: v.optional(v.string()),
+    tagId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -113,7 +114,8 @@ export const removeCup = mutation({
       }
     }
 
-    if (!target && cups.length > 0) {
+    // Strict tag scoping: only fall back to deleting the latest cup if no specific tag was requested
+    if (!target && args.tagId === undefined && cups.length > 0) {
       target = cups[cups.length - 1];
     }
 

@@ -15,7 +15,7 @@ export const importBackup = mutation({
     ),
     sessions: v.array(
       v.object({
-        tagId: v.optional(v.string()),
+        tagId: v.optional(v.union(v.string(), v.null())),
         sessionType: v.union(
           v.literal("WORK"),
           v.literal("SHORT_BREAK"),
@@ -29,7 +29,7 @@ export const importBackup = mutation({
       v.array(
         v.object({
           date: v.string(),
-          tagId: v.optional(v.string()),
+          tagId: v.optional(v.union(v.string(), v.null())),
           createdAt: v.optional(v.string()),
         })
       )
@@ -76,7 +76,7 @@ export const importBackup = mutation({
       for (const session of args.sessions) {
         await ctx.db.insert("sessions", {
           userId: user._id,
-          tagId: session.tagId,
+          tagId: session.tagId || undefined,
           sessionType: session.sessionType,
           durationSeconds: session.durationSeconds,
           completedAt: session.completedAt,
@@ -89,7 +89,7 @@ export const importBackup = mutation({
           await ctx.db.insert("coffee_cups", {
             userId: user._id,
             date: cup.date,
-            tagId: cup.tagId,
+            tagId: cup.tagId || undefined,
             createdAt: cup.createdAt ?? now,
           });
         }
@@ -121,7 +121,9 @@ export const importBackup = mutation({
       }
     }
 
-    await ctx.db.patch(user._id, { tags: mergedTags });
+    if (mergedTags.length !== existingTags.length) {
+      await ctx.db.patch(user._id, { tags: mergedTags });
+    }
 
     // 2. Ingest sessions with deduplication by (sessionType + completedAt)
     const existingSessions = await ctx.db
@@ -138,7 +140,7 @@ export const importBackup = mutation({
         existingSessionKeys.add(key);
         await ctx.db.insert("sessions", {
           userId: user._id,
-          tagId: session.tagId,
+          tagId: session.tagId || undefined,
           sessionType: session.sessionType,
           durationSeconds: session.durationSeconds,
           completedAt: session.completedAt,
@@ -164,7 +166,7 @@ export const importBackup = mutation({
           await ctx.db.insert("coffee_cups", {
             userId: user._id,
             date: cup.date,
-            tagId: cup.tagId,
+            tagId: cup.tagId || undefined,
             createdAt: cupCreatedAt,
           });
         }

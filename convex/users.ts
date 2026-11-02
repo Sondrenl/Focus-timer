@@ -35,12 +35,21 @@ export const updateProfile = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const updates: Record<string, any> = {};
-    if (args.displayName !== undefined) updates.displayName = args.displayName.trim();
-    if (args.avatarEmoji !== undefined) updates.avatarEmoji = args.avatarEmoji;
-    if (args.dailyGoalMinutes !== undefined) updates.dailyGoalMinutes = args.dailyGoalMinutes;
+    if (args.displayName !== undefined && args.displayName.trim() !== user.displayName) {
+      updates.displayName = args.displayName.trim();
+    }
+    if (args.avatarEmoji !== undefined && args.avatarEmoji !== user.avatarEmoji) {
+      updates.avatarEmoji = args.avatarEmoji;
+    }
+    if (args.dailyGoalMinutes !== undefined && args.dailyGoalMinutes !== user.dailyGoalMinutes) {
+      updates.dailyGoalMinutes = args.dailyGoalMinutes;
+    }
 
-    await ctx.db.patch(user._id, updates);
-    return await ctx.db.get(user._id);
+    if (Object.keys(updates).length > 0) {
+      await ctx.db.patch(user._id, updates);
+      return await ctx.db.get(user._id);
+    }
+    return user;
   },
 });
 
@@ -65,8 +74,17 @@ export const updateSettings = mutation({
       Object.entries(args).filter(([_, val]) => val !== undefined)
     );
 
+    const currentSettings = user.settings ?? DEFAULT_SETTINGS;
+    const hasChanges = Object.entries(cleanUpdates).some(
+      ([key, val]) => (currentSettings as any)[key] !== val
+    );
+
+    if (!hasChanges) {
+      return currentSettings;
+    }
+
     const mergedSettings = {
-      ...(user.settings ?? DEFAULT_SETTINGS),
+      ...currentSettings,
       ...cleanUpdates,
       updatedAt: now,
     };

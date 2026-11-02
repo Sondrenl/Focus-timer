@@ -53,16 +53,24 @@ export const update = mutation({
     const currentTags = user.tags ?? DEFAULT_TAGS;
 
     let found = false;
+    let hasChanges = false;
     const updatedTags = currentTags.map((tag) => {
       if (tag.id === args.id) {
         found = true;
-        return {
-          ...tag,
-          name: args.name !== undefined ? args.name.trim() : tag.name,
-          color: args.color !== undefined ? args.color.trim() : tag.color,
-          isArchived: args.isArchived !== undefined ? args.isArchived : tag.isArchived,
-          updatedAt: now,
-        };
+        const newName = args.name !== undefined ? args.name.trim() : tag.name;
+        const newColor = args.color !== undefined ? args.color.trim() : tag.color;
+        const newArchived = args.isArchived !== undefined ? args.isArchived : tag.isArchived;
+
+        if (newName !== tag.name || newColor !== tag.color || newArchived !== tag.isArchived) {
+          hasChanges = true;
+          return {
+            ...tag,
+            name: newName,
+            color: newColor,
+            isArchived: newArchived,
+            updatedAt: now,
+          };
+        }
       }
       return tag;
     });
@@ -71,9 +79,11 @@ export const update = mutation({
       throw new Error(`Tag with ID "${args.id}" not found.`);
     }
 
-    await ctx.db.patch(user._id, {
-      tags: updatedTags,
-    });
+    if (hasChanges) {
+      await ctx.db.patch(user._id, {
+        tags: updatedTags,
+      });
+    }
 
     return updatedTags.find((t) => t.id === args.id);
   },
@@ -88,9 +98,11 @@ export const remove = mutation({
     const currentTags = user.tags ?? DEFAULT_TAGS;
     const filtered = currentTags.filter((t) => t.id !== args.id);
 
-    await ctx.db.patch(user._id, {
-      tags: filtered,
-    });
+    if (filtered.length !== currentTags.length) {
+      await ctx.db.patch(user._id, {
+        tags: filtered,
+      });
+    }
 
     return true;
   },
