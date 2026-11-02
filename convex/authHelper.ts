@@ -26,6 +26,24 @@ export async function getAuthenticatedUser(
     return user;
   }
 
+  // Fallback: match by email (for users migrated from Cloudflare D1 or pre-seeded)
+  if (identity.email) {
+    const existingByEmail = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("email"), identity.email))
+      .first();
+
+    if (existingByEmail) {
+      if ("patch" in ctx.db) {
+        await (ctx.db as MutationCtx["db"]).patch(existingByEmail._id, {
+          tokenIdentifier: identity.tokenIdentifier,
+          avatarUrl: identity.pictureUrl || existingByEmail.avatarUrl,
+        });
+      }
+      return existingByEmail;
+    }
+  }
+
   if (autoCreate && "insert" in ctx.db) {
     const mutationDb = ctx.db as MutationCtx["db"];
     const now = new Date().toISOString();

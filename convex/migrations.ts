@@ -176,3 +176,171 @@ export const importBackup = mutation({
     return { success: true };
   },
 });
+
+
+export const importD1Data = mutation({
+  args: {
+    users: v.array(
+      v.object({
+        email: v.string(),
+        googleId: v.string(),
+        displayName: v.string(),
+        avatarUrl: v.optional(v.string()),
+        avatarEmoji: v.string(),
+        dailyGoalMinutes: v.number(),
+        createdAt: v.string(),
+        settings: v.object({
+          workDurationMinutes: v.number(),
+          shortBreakDurationMinutes: v.number(),
+          longBreakDurationMinutes: v.number(),
+          longBreakInterval: v.number(),
+          autoStartBreaks: v.boolean(),
+          autoStartPomodoros: v.boolean(),
+          soundVolume: v.number(),
+          soundEnabled: v.boolean(),
+          notificationsEnabled: v.boolean(),
+          keepAwake: v.boolean(),
+          updatedAt: v.string(),
+        }),
+        tags: v.array(
+          v.object({
+            id: v.string(),
+            name: v.string(),
+            color: v.string(),
+            isArchived: v.boolean(),
+            createdAt: v.string(),
+            updatedAt: v.optional(v.string()),
+          })
+        ),
+      })
+    ),
+    sessions: v.array(
+      v.object({
+        userEmail: v.string(),
+        tagId: v.optional(v.union(v.string(), v.null())),
+        sessionType: v.union(
+          v.literal("WORK"),
+          v.literal("SHORT_BREAK"),
+          v.literal("LONG_BREAK")
+        ),
+        durationSeconds: v.number(),
+        completedAt: v.string(),
+      })
+    ),
+    coffeeCups: v.array(
+      v.object({
+        userEmail: v.string(),
+        tagId: v.optional(v.union(v.string(), v.null())),
+        date: v.string(),
+        createdAt: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userMap = new Map<string, any>();
+
+    for (const u of args.users) {
+      const tokenIdentifier = `https://accounts.google.com|${u.googleId}`;
+      let user = await ctx.db
+        .query("users")
+        .withIndex("by_token", (q) => q.eq("tokenIdentifier", tokenIdentifier))
+        .unique();
+
+      if (!user) {
+        user = await ctx.db
+          .query("users")
+          .filter((q) => q.eq(q.field("email"), u.email))
+          .first();
+      }
+
+      if (user) {
+        // Merge tags
+        const existingTags = user.tags || [];
+        const tagMap = new Map<string, typeof existingTags[0]>();
+        existingTags.forEach((t) => tagMap.set(t.name.toLowerCase().trim(), t));
+        const mergedTags = [...existingTags];
+        for (const t of u.tags) {
+          if (!tagMap.has(t.name.toLowerCase().trim())) {
+            tagMap.set(t.name.toLowerCase().trim(), t);
+            mergedTags.push(t);
+          }
+        }
+
+        await ctx.db.patch(user._id, {
+          tokenIdentifier,
+          displayName: user.displayName || u.displayName,
+          avatarUrl: user.avatarUrl || u.avatarUrl,
+          tags: mergedTags,
+        });
+        userMap.set(u.email, user._id);
+      } else {
+        const userId = await ctx.db.insert("users", {
+          tokenIdentifier,
+          email: u.email,
+          displayName: u.displayName,
+          avatarUrl: u.avatarUrl,
+          avatarEmoji: u.avatarEmoji || "",
+          dailyGoalMinutes: u.dailyGoalMinutes || 120,
+          createdAt: u.createdAt,
+          settings: u.settings,
+          tags: u.tags,
+        });
+        userMap.set(u.email, userId);
+      }
+    }
+
+    let sessionsImported = 0;
+    for (const s of args.sessions) {
+      const userId = userMap.get(s.userEmail);
+      if (!userId) continue;
+
+      const existing = await ctx.db
+        .query("sessions")
+        .withIndex("by_user_completed", (q) =>
+          q.eq("userId", userId).eq("completedAt", s.completedAt)
+        )
+        .first();
+
+      if (!existing) {
+        await ctx.db.insert("sessions", {
+          userId,
+          tagId: s.tagId || undefined,
+          sessionType: s.sessionType,
+          durationSeconds: s.durationSeconds,
+          completedAt: s.completedAt,
+        });
+        sessionsImported++;
+      }
+    }
+
+    let cupsImported = 0;
+    for (const c of args.coffeeCups) {
+      const userId = userMap.get(c.userEmail);
+      if (!userId) continue;
+
+      const existing = await ctx.db
+        .query("coffee_cups")
+        .withIndex("by_user_date", (q) =>
+          q.eq("userId", userId).eq("date", c.date)
+        )
+        .filter((q) => q.eq(q.field("createdAt"), c.createdAt))
+        .first();
+
+      if (!existing) {
+        await ctx.db.insert("coffee_cups", {
+          userId,
+          date: c.date,
+          tagId: c.tagId || undefined,
+          createdAt: c.createdAt,
+        });
+        cupsImported++;
+      }
+    }
+
+    return {
+      usersMigrated: args.users.length,
+      sessionsImported,
+      cupsImported,
+    };
+  },
+});
