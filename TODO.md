@@ -59,15 +59,14 @@ This document tracks upcoming features, UX refinements, and architectural enhanc
 * **Completed:** Implemented deep multi-point correlation analytics engine in `src/utils/insights.ts` and enhanced `SmartInsightPanel.tsx`.
 * **Delivered:**
   * **Precision Peak Focus Window:** Sliding 2.5h flow state window identifying exact hours (e.g., *"Your peak focus window is 09:00–11:30"*).
-  * **Caffeine Kick-in Latency:** Tracks the minute-level transition from brewing coffee to deep work (e.g., *"Focus kicks in ~18m after coffee"*).
-  * **Afternoon Slump Defense:** Correlates post-lunch caffeine timing with sustained afternoon focus blocks.
+  * **Day-Level & Tag-Level Caffeine Correlations:** Coffee tracking is strictly modeled by whole days and tags (no intraday time data). Highlights daily coffee vs. zero-coffee days (+X% focus), the daily sweet spot (1–2 cups/day outperforming 3+ cups/day), Pomodoro fuel efficiency per cup, and daily coffee rituals (presence on X% of active focus days).
+  * **Tag-Caffeine Affinity & Clean Energy:** Quantifies the exact share of coffee logged for specific tags, as well as tags sustained entirely through caffeine-free deep work.
   * **Break Fatigue & Cadence:** Detects drop in stamina after 3+ continuous sessions without breaks (*"Focus drops after 3 consecutive sessions without a break"*), marathon flow, and healthy work-rest pacing.
   * **Day-of-Week Powerhouse & Distribution:** Identifies top-performing weekdays (*"Tuesday is your Powerhouse Day"*) and contrasts weekend focus vs. clean workweek boundaries.
   * **Consistency Streaks & Milestones:** Detects multi-day focus streaks and major volume landmarks (10h, 20h, 25+ sessions).
   * **Context Switching vs. Deep Dive Mode:** Compares single-project focus output against fragmented multi-tag days (*"+45% focus on single-topic days"*).
-  * **Caffeine Sweet Spot & Efficiency:** Analyzes moderate (1–2 cups) vs heavy caffeine impact, Pomodoro-to-cup fuel efficiency, and 100% caffeine-free clean energy tags.
   * **Enhanced UI:** Added category badge pills, color-coordinated icons, and carousel dot indicators in `SmartInsightPanel.tsx`.
-  * **Unit Tests:** 10 comprehensive tests in `tests/insights.test.ts`.
+  * **Unit Tests:** 11 comprehensive unit tests in `tests/insights.test.ts`.
 
 ---
 

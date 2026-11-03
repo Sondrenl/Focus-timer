@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generatePeriodInsights, InterestingStat } from '../src/utils/insights';
+import { generatePeriodInsights } from '../src/utils/insights';
 import { CompletedSession } from '../src/types/session';
 import { CoffeeCup } from '../src/types/coffee';
 import { Tag } from '../src/types/tag';
@@ -102,37 +102,16 @@ describe('generatePeriodInsights', () => {
     expect(peakWindow?.description).toContain('deep work');
   });
 
-  it('detects caffeine kick-in latency within ~15-30m', () => {
+  it('detects tag-coffee affinity using day and tag correlations', () => {
     const coffee: CoffeeCup[] = [
-      {
-        id: 'c1',
-        date: '2026-11-02',
-        tagId: 'tag-code',
-        createdAt: '2026-11-02T09:00:00.000Z',
-      },
-      {
-        id: 'c2',
-        date: '2026-11-03',
-        tagId: 'tag-code',
-        createdAt: '2026-11-03T09:00:00.000Z',
-      },
+      { id: 'c1', date: '2026-11-01', tagId: 'tag-code', createdAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'c2', date: '2026-11-02', tagId: 'tag-code', createdAt: '2026-11-02T00:00:00.000Z' },
+      { id: 'c3', date: '2026-11-03', tagId: 'tag-write', createdAt: '2026-11-03T00:00:00.000Z' },
     ];
 
     const sessions: CompletedSession[] = [
-      {
-        id: 's1',
-        tagId: 'tag-code',
-        sessionType: 'WORK',
-        durationSeconds: 1500, // 25m, started at 09:15
-        completedAt: '2026-11-02T09:40:00.000Z',
-      },
-      {
-        id: 's2',
-        tagId: 'tag-code',
-        sessionType: 'WORK',
-        durationSeconds: 1500, // 25m, started at 09:20
-        completedAt: '2026-11-03T09:45:00.000Z',
-      },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-01T10:00:00.000Z' },
+      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-02T10:00:00.000Z' },
     ];
 
     const insights = generatePeriodInsights({
@@ -140,47 +119,27 @@ describe('generatePeriodInsights', () => {
       coffeeCups: coffee,
       tags: testTags,
       periodType: 'week',
-      totalFocusSeconds: 3000,
-      totalCoffeeCups: 2,
+      totalFocusSeconds: 7200,
+      totalCoffeeCups: 3,
     });
 
-    const latencyInsight = insights.find((i) => i.type === 'caffeine-latency');
-    expect(latencyInsight).toBeDefined();
-    expect(latencyInsight?.badge).toBe('Caffeine Kick-in');
-    expect(latencyInsight?.headline).toContain('Focus kicks in ~');
+    const affinity = insights.find((i) => i.type === 'tag-coffee-affinity');
+    expect(affinity).toBeDefined();
+    expect(affinity?.badge).toBe('Caffeine Affinity');
+    expect(affinity?.headline).toContain('% of coffee was logged for Coding');
   });
 
-  it('detects afternoon slump defense when coffee is logged post-lunch', () => {
+  it('detects daily coffee ritual when logged on majority of active focus days', () => {
     const coffee: CoffeeCup[] = [
-      {
-        id: 'c1',
-        date: '2026-11-02',
-        tagId: null,
-        createdAt: '2026-11-02T14:00:00.000Z',
-      },
-      {
-        id: 'c2',
-        date: '2026-11-03',
-        tagId: null,
-        createdAt: '2026-11-03T15:00:00.000Z',
-      },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
+      { id: 'c3', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
     ];
 
     const sessions: CompletedSession[] = [
-      {
-        id: 's1',
-        tagId: 'tag-code',
-        sessionType: 'WORK',
-        durationSeconds: 1800,
-        completedAt: '2026-11-02T15:00:00.000Z',
-      },
-      {
-        id: 's2',
-        tagId: 'tag-code',
-        sessionType: 'WORK',
-        durationSeconds: 1800,
-        completedAt: '2026-11-03T16:00:00.000Z',
-      },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-01T10:00:00.000Z' },
+      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-02T10:00:00.000Z' },
+      { id: 's3', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-03T10:00:00.000Z' },
     ];
 
     const insights = generatePeriodInsights({
@@ -188,14 +147,14 @@ describe('generatePeriodInsights', () => {
       coffeeCups: coffee,
       tags: testTags,
       periodType: 'week',
-      totalFocusSeconds: 3600,
-      totalCoffeeCups: 2,
+      totalFocusSeconds: 4500,
+      totalCoffeeCups: 3,
     });
 
-    const afternoonInsight = insights.find((i) => i.type === 'afternoon-slump-defense');
-    expect(afternoonInsight).toBeDefined();
-    expect(afternoonInsight?.badge).toBe('Slump Defense');
-    expect(afternoonInsight?.headline).toContain('Afternoon Coffee Shield');
+    const ritualInsight = insights.find((i) => i.type === 'coffee-ritual');
+    expect(ritualInsight).toBeDefined();
+    expect(ritualInsight?.badge).toBe('Daily Ritual');
+    expect(ritualInsight?.headline).toContain('Coffee Ritual: Logged on 100% of focus days');
   });
 
   it('detects break fatigue after 3 consecutive sessions without a break', () => {
@@ -431,8 +390,8 @@ describe('generatePeriodInsights', () => {
 
   it('detects coffee productivity boost on coffee days vs zero-coffee days', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T09:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T09:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
     ];
 
     const sessions: CompletedSession[] = [
@@ -457,5 +416,41 @@ describe('generatePeriodInsights', () => {
     expect(boost).toBeDefined();
     expect(boost?.badge).toBe('Productivity Correlation');
     expect(boost?.headline).toContain('more focus on coffee days');
+  });
+
+  it('detects coffee sweet spot (1-2 cups vs 3+ cups daily)', () => {
+    const coffee: CoffeeCup[] = [
+      // Day 1: 1 cup, 4000s
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      // Day 2: 2 cups, 4500s
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
+      { id: 'c3', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
+      // Day 3: 3 cups, 2000s
+      { id: 'c4', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+      { id: 'c5', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+      { id: 'c6', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+      // Day 4: 0 cups
+    ];
+
+    const sessions: CompletedSession[] = [
+      { id: 's1', tagId: null, sessionType: 'WORK', durationSeconds: 4000, completedAt: '2026-11-01T10:00:00.000Z' },
+      { id: 's2', tagId: null, sessionType: 'WORK', durationSeconds: 4500, completedAt: '2026-11-02T10:00:00.000Z' },
+      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 2000, completedAt: '2026-11-03T10:00:00.000Z' },
+      { id: 's4', tagId: null, sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-04T10:00:00.000Z' },
+    ];
+
+    const insights = generatePeriodInsights({
+      sessions,
+      coffeeCups: coffee,
+      tags: testTags,
+      periodType: 'week',
+      totalFocusSeconds: 12000,
+      totalCoffeeCups: 6,
+    });
+
+    const sweetSpot = insights.find((i) => i.type === 'coffee-sweet-spot');
+    expect(sweetSpot).toBeDefined();
+    expect(sweetSpot?.badge).toBe('Caffeine Sweet Spot');
+    expect(sweetSpot?.headline).toContain('1–2 cups yielded your highest daily focus');
   });
 });

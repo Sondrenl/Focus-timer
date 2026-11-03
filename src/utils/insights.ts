@@ -6,8 +6,6 @@ import { formatDurationHoursMins } from './formatters';
 
 export type InsightType =
   | 'peak-focus-window'
-  | 'caffeine-latency'
-  | 'afternoon-slump-defense'
   | 'break-fatigue'
   | 'break-cadence'
   | 'marathon-streak'
@@ -21,9 +19,9 @@ export type InsightType =
   | 'coffee-productivity-boost'
   | 'coffee-productivity-dip'
   | 'coffee-sweet-spot'
+  | 'coffee-ritual'
   | 'fuel-efficiency'
   | 'clean-energy'
-  | 'time-of-day-focus'
   | 'tag-dominance'
   | 'tag-diversity'
   | 'focus-momentum'
@@ -63,7 +61,8 @@ export interface GenerateInsightsParams {
 
 /**
  * Generates an array of ranked, deeply analytical insights by cross-referencing
- * focus sessions, caffeine intake timestamps, tags, and temporal rhythms for the selected period.
+ * focus sessions, daily caffeine intake, tags, and temporal rhythms for the selected period.
+ * NOTE: Coffee intake is strictly tracked by day and tag (no intraday timestamp data is used).
  */
 export function generatePeriodInsights({
   sessions,
@@ -83,7 +82,7 @@ export function generatePeriodInsights({
     return tagMap.get(tagId)?.name || 'Unknown Tag';
   };
 
-  // Group data by date
+  // Group data strictly by date (YYYY-MM-DD)
   const dateFocusMap = new Map<string, { seconds: number; count: number }>();
   const dateCoffeeMap = new Map<string, number>();
 
@@ -106,8 +105,8 @@ export function generatePeriodInsights({
 
   // -------------------------------------------------------------
   // 1. Precision Peak Focus Window (Golden Hours)
-  // Divides the 24-hour day into 30-minute slots and evaluates a
-  // sliding 2.5-hour window to pinpoint exact flow state hours (e.g. 09:00–11:30).
+  // Evaluates focus session timestamps using a sliding 2.5-hour
+  // window to pinpoint exact flow state hours (e.g. 09:00–11:30).
   // -------------------------------------------------------------
   if (sessions.length >= 3 && totalFocusSeconds >= 3600) {
     const slotSeconds = new Array(48).fill(0);
@@ -169,98 +168,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 2. Caffeine Kick-In Latency (Transition from brew to focus)
-  // -------------------------------------------------------------
-  if (coffeeCups.length >= 2 && sessions.length >= 2) {
-    const latencies: number[] = [];
-
-    coffeeCups.forEach((c) => {
-      if (!c.createdAt) return;
-      const cTime = new Date(c.createdAt).getTime();
-      if (isNaN(cTime)) return;
-
-      // Find first work session starting within -5m to +60m of coffee creation
-      let closestLatency: number | null = null;
-      sessions.forEach((s) => {
-        const sEnd = new Date(s.completedAt).getTime();
-        if (isNaN(sEnd)) return;
-        const sStart = sEnd - Math.max(0, s.durationSeconds) * 1000;
-        const diffMins = Math.round((sStart - cTime) / 60000);
-
-        if (diffMins >= -5 && diffMins <= 60) {
-          const lat = Math.max(0, diffMins);
-          if (closestLatency === null || lat < closestLatency) {
-            closestLatency = lat;
-          }
-        }
-      });
-
-      if (closestLatency !== null) {
-        latencies.push(closestLatency);
-      }
-    });
-
-    if (latencies.length >= 2 && latencies.length / coffeeCups.length >= 0.4) {
-      const avgLatency = Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length);
-      insights.push({
-        id: 'caffeine-latency',
-        type: 'caffeine-latency',
-        badge: 'Caffeine Kick-in',
-        headline: `Focus kicks in ~${avgLatency}m after logging coffee`,
-        description: `You started a focus session shortly after ${latencies.length} of your coffee cups, transitioning swiftly from your brew into deep work.`,
-        iconName: 'zap',
-        score: 94,
-      });
-    }
-  }
-
-  // -------------------------------------------------------------
-  // 3. Afternoon Slump Defense
-  // Detects if coffee is strategically used to overcome the post-lunch dip
-  // -------------------------------------------------------------
-  if (coffeeCups.length >= 2 && sessions.length >= 2) {
-    let afternoonCoffeeCount = 0;
-    coffeeCups.forEach((c) => {
-      if (!c.createdAt) return;
-      const d = new Date(c.createdAt);
-      if (isNaN(d.getTime())) return;
-      const h = d.getHours();
-      const m = d.getMinutes();
-      const totalMin = h * 60 + m;
-      if (totalMin >= 780 && totalMin <= 1050) {
-        // 13:00 to 17:30
-        afternoonCoffeeCount += 1;
-      }
-    });
-
-    if (afternoonCoffeeCount >= 2 && afternoonCoffeeCount / coffeeCups.length >= 0.5) {
-      let afternoonFocusSec = 0;
-      sessions.forEach((s) => {
-        const d = new Date(s.completedAt);
-        if (isNaN(d.getTime())) return;
-        const h = d.getHours();
-        if (h >= 13 && h < 18) {
-          afternoonFocusSec += s.durationSeconds > 0 ? s.durationSeconds : 0;
-        }
-      });
-
-      if (afternoonFocusSec >= 1800) {
-        const pctAfternoon = Math.round((afternoonCoffeeCount / coffeeCups.length) * 100);
-        insights.push({
-          id: 'afternoon-slump-defense',
-          type: 'afternoon-slump-defense',
-          badge: 'Slump Defense',
-          headline: `Afternoon Coffee Shield: ${pctAfternoon}% cups post-lunch`,
-          description: `You deployed coffee strategically in the afternoon, fueling ${formatDurationHoursMins(afternoonFocusSec)} of sustained deep work.`,
-          iconName: 'coffee',
-          score: 89,
-        });
-      }
-    }
-  }
-
-  // -------------------------------------------------------------
-  // 4. Break Cadence & Fatigue Detection
+  // 2. Break Cadence & Fatigue Detection
   // Analyzes session sequences, fatigue after 3+ consecutive sessions without breaks,
   // and marathon flow states.
   // -------------------------------------------------------------
@@ -370,7 +278,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 5. Day-of-Week Powerhouse & Distribution
+  // 3. Day-of-Week Powerhouse & Distribution
   // -------------------------------------------------------------
   if (periodType !== 'day' && allActiveDates.length >= 3 && sessions.length >= 4) {
     const weekdaySeconds = new Array(7).fill(0);
@@ -448,7 +356,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 6. Consistency Streaks & Milestones
+  // 4. Consistency Streaks & Milestones
   // -------------------------------------------------------------
   if (allActiveDates.length >= 3) {
     let maxStreak = 0;
@@ -522,7 +430,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 7. Context Switching vs. Deep Dive Mode
+  // 5. Context Switching vs. Deep Dive Mode
   // Compares focus output on single-tag days vs multi-tag days
   // -------------------------------------------------------------
   if (sessions.length >= 4 && activeFocusDays >= 2) {
@@ -573,7 +481,8 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 8. Tag & Coffee Affinity
+  // 6. Tag & Coffee Affinity (Tagged Coffee)
+  // Which project/tag receives the highest share of logged coffee?
   // -------------------------------------------------------------
   if (coffeeCups.length >= 2) {
     const coffeeTagCounts = new Map<string | null, number>();
@@ -615,7 +524,8 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 9. Coffee & Productivity Correlation (With vs without coffee)
+  // 7. Coffee vs. Zero-Coffee Days (Daily Focus Comparison)
+  // Compares total focus time on days with coffee vs zero-coffee days.
   // -------------------------------------------------------------
   if (allActiveDates.length >= 3 && sessions.length >= 3 && coffeeCups.length >= 2) {
     let coffeeDaysTotalSec = 0;
@@ -671,7 +581,8 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 10. Coffee Sweet Spot (1–2 cups vs 3+ cups)
+  // 8. Coffee Sweet Spot (1–2 cups/day vs 3+ cups/day)
+  // Evaluates daily coffee count tiers against daily focus output.
   // -------------------------------------------------------------
   if (allActiveDates.length >= 4 && coffeeCups.length >= 4) {
     const bucketModerate: number[] = []; // 1-2 cups
@@ -708,7 +619,33 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 11. Focus Fuel Efficiency (Ratio of Pomodoros per cup)
+  // 9. Daily Coffee Ritual (Presence across active focus days)
+  // -------------------------------------------------------------
+  if (activeFocusDays >= 3 && coffeeCups.length >= 2) {
+    let coffeeFocusDaysCount = 0;
+    dateFocusMap.forEach((_, dateKey) => {
+      if ((dateCoffeeMap.get(dateKey) || 0) > 0) {
+        coffeeFocusDaysCount += 1;
+      }
+    });
+
+    const ritualRate = coffeeFocusDaysCount / activeFocusDays;
+    if (ritualRate >= 0.7) {
+      const pct = Math.round(ritualRate * 100);
+      insights.push({
+        id: 'coffee-ritual',
+        type: 'coffee-ritual',
+        badge: 'Daily Ritual',
+        headline: `Coffee Ritual: Logged on ${pct}% of focus days`,
+        description: `Caffeine is a steady companion in your routine, present on ${coffeeFocusDaysCount} of your ${activeFocusDays} active deep work days.`,
+        iconName: 'coffee',
+        score: 91,
+      });
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 10. Focus Fuel Efficiency (Ratio of Pomodoros per cup)
   // -------------------------------------------------------------
   if (sessions.length >= 3 && coffeeCups.length >= 1) {
     const ratio = Number((sessions.length / coffeeCups.length).toFixed(1));
@@ -726,7 +663,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 12. Clean Energy (Tag with deep focus and ZERO coffee)
+  // 11. Clean Energy (Tag with deep focus and ZERO coffee)
   // -------------------------------------------------------------
   if (coffeeCups.length >= 2) {
     const tagFocusSecondsMap = new Map<string, number>();
@@ -762,7 +699,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 13. Tag Dominance (Single tag dominating >= 55% of focus)
+  // 12. Tag Dominance (Single tag dominating >= 55% of focus)
   // -------------------------------------------------------------
   if (sessions.length >= 2 && totalFocusSeconds >= 3600) {
     const tagTotals = new Map<string, { sec: number; count: number }>();
@@ -801,7 +738,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 14. Tag Diversity (Balanced focus across 3+ tags)
+  // 13. Tag Diversity (Balanced focus across 3+ tags)
   // -------------------------------------------------------------
   if (sessions.length >= 4 && totalFocusSeconds >= 3600) {
     const tagTotals = new Map<string, number>();
@@ -828,7 +765,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 15. Focus Momentum (High session velocity)
+  // 14. Focus Momentum (High session velocity)
   // -------------------------------------------------------------
   if (activeFocusDays >= 2 && sessions.length >= 4) {
     const avgSessionsPerDay = (sessions.length / activeFocusDays).toFixed(1);
@@ -846,7 +783,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 16. Daily Summary (For single day view)
+  // 15. Daily Summary (For single day view)
   // -------------------------------------------------------------
   if (periodType === 'day' && (sessions.length > 0 || coffeeCups.length > 0)) {
     if (sessions.length > 0 && coffeeCups.length > 0) {
@@ -883,7 +820,7 @@ export function generatePeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 17. Fallback / Empty State
+  // 16. Fallback / Empty State
   // -------------------------------------------------------------
   if (insights.length === 0) {
     if (sessions.length === 0 && coffeeCups.length === 0) {
