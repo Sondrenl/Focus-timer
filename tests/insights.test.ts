@@ -24,6 +24,7 @@ describe('generatePeriodInsights', () => {
     expect(insights.length).toBeGreaterThan(0);
     expect(insights[0].type).toBe('empty-state');
     expect(insights[0].headline).toContain('No activity logged');
+    expect(insights[0].description).toBe('Complete a session or log a cup of coffee to view insights');
   });
 
   it('generates a daily summary for day view', () => {

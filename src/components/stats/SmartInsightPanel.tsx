@@ -112,7 +112,7 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
 
       <Card
         variant="filled"
-        className="p-5 bg-gradient-to-br from-md-surface-container-low via-md-surface-container-low to-md-surface-container/60 border border-md-outline-variant/30 shadow-xs relative overflow-hidden transition-all duration-200"
+        className="p-5 bg-md-surface-container-low border border-md-outline-variant/20 shadow-xs relative overflow-hidden transition-all duration-200"
       >
         <div className="flex items-start gap-4">
           <div
@@ -122,14 +122,6 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
           </div>
 
           <div className="flex-1 min-w-0">
-            {currentInsight.badge && (
-              <span
-                className={`inline-flex items-center text-[10px] sm:text-xs font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full mb-1.5 ${bg} ${color}`}
-              >
-                {currentInsight.badge}
-              </span>
-            )}
-
             <h4 className="text-base sm:text-lg font-bold text-md-on-surface tracking-tight leading-snug">
               {currentInsight.headline}
             </h4>

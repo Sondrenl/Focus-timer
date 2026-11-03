@@ -829,7 +829,7 @@ export function generatePeriodInsights({
         type: 'empty-state',
         badge: 'Smart Insights',
         headline: 'No activity logged for this period',
-        description: 'Complete a session or log a cup of coffee to uncover fascinating focus rhythms and caffeine correlations.',
+        description: 'Complete a session or log a cup of coffee to view insights',
         iconName: 'sparkles',
         score: 10,
       });
