@@ -216,15 +216,16 @@ export function useStatistics() {
       periodLabel = 'All Time History';
     }
 
-    // Filter work sessions within period with robust timestamp validation
-    const filteredSessions = sessions.filter((s) => {
-      if (s.sessionType !== 'WORK') return false;
+    // Filter work sessions and all sessions within period with robust timestamp validation
+    const periodAllSessions = sessions.filter((s) => {
       if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) return false;
       if (!s.completedAt) return false;
       const d = new Date(s.completedAt);
       if (isNaN(d.getTime())) return false;
       return d >= startDate && d <= endDate;
     });
+
+    const filteredSessions = periodAllSessions.filter((s) => s.sessionType === 'WORK');
 
     // 1. Total Metrics
     const totalFocusSeconds = filteredSessions.reduce(
@@ -884,6 +885,7 @@ export function useStatistics() {
       periodType,
       totalFocusSeconds,
       totalCoffeeCups,
+      allSessions: periodAllSessions,
     });
     const topInsight = insights.length > 0 ? insights[0] : null;
 

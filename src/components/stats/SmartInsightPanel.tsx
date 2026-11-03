@@ -10,6 +10,9 @@ import {
   Flame,
   TrendingUp,
   Layers,
+  Calendar,
+  Award,
+  BatteryCharging,
   ChevronLeft,
   ChevronRight,
   Lightbulb,
@@ -24,14 +27,17 @@ const INSIGHT_ICONS: Record<
   NonNullable<InterestingStat['iconName']>,
   { Icon: LucideIcon; color: string; bg: string }
 > = {
-  coffee: { Icon: Coffee, color: 'text-amber-700', bg: 'bg-amber-700/10' },
-  zap: { Icon: Zap, color: 'text-amber-600', bg: 'bg-amber-600/10' },
-  'trending-up': { Icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-600/10' },
-  target: { Icon: Target, color: 'text-blue-600', bg: 'bg-blue-600/10' },
-  clock: { Icon: Clock, color: 'text-indigo-600', bg: 'bg-indigo-600/10' },
-  flame: { Icon: Flame, color: 'text-orange-600', bg: 'bg-orange-600/10' },
-  layers: { Icon: Layers, color: 'text-purple-600', bg: 'bg-purple-600/10' },
-  sparkles: { Icon: Sparkles, color: 'text-emerald-600', bg: 'bg-emerald-600/10' },
+  coffee: { Icon: Coffee, color: 'text-amber-700 dark:text-amber-400', bg: 'bg-amber-700/10' },
+  zap: { Icon: Zap, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-600/10' },
+  'trending-up': { Icon: TrendingUp, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-600/10' },
+  target: { Icon: Target, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-600/10' },
+  clock: { Icon: Clock, color: 'text-indigo-600 dark:text-indigo-400', bg: 'bg-indigo-600/10' },
+  flame: { Icon: Flame, color: 'text-orange-600 dark:text-orange-400', bg: 'bg-orange-600/10' },
+  layers: { Icon: Layers, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-600/10' },
+  sparkles: { Icon: Sparkles, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-600/10' },
+  calendar: { Icon: Calendar, color: 'text-sky-600 dark:text-sky-400', bg: 'bg-sky-600/10' },
+  award: { Icon: Award, color: 'text-amber-500 dark:text-amber-300', bg: 'bg-amber-500/10' },
+  'battery-charging': { Icon: BatteryCharging, color: 'text-teal-600 dark:text-teal-400', bg: 'bg-teal-600/10' },
 };
 
 export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }) => {
@@ -116,6 +122,14 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
           </div>
 
           <div className="flex-1 min-w-0">
+            {currentInsight.badge && (
+              <span
+                className={`inline-flex items-center text-[10px] sm:text-xs font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full mb-1.5 ${bg} ${color}`}
+              >
+                {currentInsight.badge}
+              </span>
+            )}
+
             <h4 className="text-base sm:text-lg font-bold text-md-on-surface tracking-tight leading-snug">
               {currentInsight.headline}
             </h4>
@@ -125,6 +139,25 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insights }
             </p>
           </div>
         </div>
+
+        {/* Carousel dot indicators for quick visual glance */}
+        {insights.length > 1 && (
+          <div className="flex items-center justify-center gap-1.5 pt-3 mt-3 border-t border-md-outline-variant/15">
+            {insights.slice(0, 8).map((_, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setCurrentIndex(idx)}
+                className={`h-1.5 rounded-full transition-all duration-200 ${
+                  idx === safeIndex
+                    ? 'w-5 bg-md-primary'
+                    : 'w-1.5 bg-md-outline-variant/50 hover:bg-md-outline-variant'
+                }`}
+                aria-label={`Jump to insight ${idx + 1}`}
+              />
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );
