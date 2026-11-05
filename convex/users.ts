@@ -19,7 +19,7 @@ export const current = query({
       avatarUrl: user.avatarUrl || user.image,
       avatarEmoji: user.avatarEmoji || "",
       dailyGoalMinutes: user.dailyGoalMinutes || 120,
-      createdAt: user.createdAt || new Date().toISOString(),
+      createdAt: user.createdAt || new Date(user._creationTime).toISOString(),
       settings: user.settings || DEFAULT_SETTINGS,
       tags: user.tags ?? DEFAULT_TAGS,
     };
@@ -117,16 +117,17 @@ export const getOrCreateUserForAuth = internalMutation({
       .first();
 
     if (existingByEmail) {
-      const patchData: Record<string, any> = {
-        emailVerificationTime: Date.now(),
-      };
+      const patchData: Record<string, any> = {};
+      if (!existingByEmail.emailVerificationTime) {
+        patchData.emailVerificationTime = Date.now();
+      }
       if (!existingByEmail.displayName && args.name) {
         patchData.displayName = args.name;
       }
       if (!existingByEmail.name && args.name) {
         patchData.name = args.name;
       }
-      if (args.avatarUrl && (!existingByEmail.avatarUrl || existingByEmail.avatarUrl !== args.avatarUrl)) {
+      if (args.avatarUrl && existingByEmail.avatarUrl !== args.avatarUrl) {
         patchData.avatarUrl = args.avatarUrl;
         patchData.image = args.avatarUrl;
       }
@@ -143,11 +144,20 @@ export const getOrCreateUserForAuth = internalMutation({
       .first();
 
     if (existingByToken) {
-      await ctx.db.patch(existingByToken._id, {
-        email: args.email,
-        emailVerificationTime: Date.now(),
-        ...(args.avatarUrl ? { avatarUrl: args.avatarUrl, image: args.avatarUrl } : {}),
-      });
+      const patchData: Record<string, any> = {};
+      if (existingByToken.email !== args.email) {
+        patchData.email = args.email;
+      }
+      if (!existingByToken.emailVerificationTime) {
+        patchData.emailVerificationTime = Date.now();
+      }
+      if (args.avatarUrl && existingByToken.avatarUrl !== args.avatarUrl) {
+        patchData.avatarUrl = args.avatarUrl;
+        patchData.image = args.avatarUrl;
+      }
+      if (Object.keys(patchData).length > 0) {
+        await ctx.db.patch(existingByToken._id, patchData);
+      }
       return existingByToken._id;
     }
 

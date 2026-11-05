@@ -49,10 +49,15 @@ export async function getAuthenticatedUser(
       .first();
 
     if (existingByEmail) {
-      if ("patch" in ctx.db) {
+      const nextAvatar = identity.pictureUrl || existingByEmail.avatarUrl;
+      if (
+        "patch" in ctx.db &&
+        (existingByEmail.tokenIdentifier !== identity.tokenIdentifier ||
+          existingByEmail.avatarUrl !== nextAvatar)
+      ) {
         await (ctx.db as MutationCtx["db"]).patch(existingByEmail._id, {
           tokenIdentifier: identity.tokenIdentifier,
-          avatarUrl: identity.pictureUrl || existingByEmail.avatarUrl,
+          avatarUrl: nextAvatar,
         });
       }
       return existingByEmail;

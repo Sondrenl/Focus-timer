@@ -58,25 +58,41 @@ export const importBackup = mutation({
         await ctx.db.delete(c._id);
       }
 
-      // 3. Format and replace tags
-      const formattedTags = args.tags.map((t) => ({
-        id: t.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        name: t.name.trim(),
-        color: t.color,
-        isArchived: t.isArchived ?? false,
-        createdAt: now,
-        updatedAt: now,
-      }));
+      // 3. Format and replace tags, keeping track of valid/remapped tag IDs
+      const tagIdRemap = new Map<string, string>();
+      const validTagIds = new Set<string>();
+      const formattedTags = args.tags.map((t) => {
+        const canonicalId =
+          t.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        if (t.id) {
+          tagIdRemap.set(t.id, canonicalId);
+        }
+        validTagIds.add(canonicalId);
+        return {
+          id: canonicalId,
+          name: t.name.trim(),
+          color: t.color,
+          isArchived: t.isArchived ?? false,
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
 
       await ctx.db.patch(user._id, {
         tags: formattedTags,
       });
 
+      const resolveTagId = (rawTagId?: string | null): string | undefined => {
+        if (!rawTagId) return undefined;
+        const mapped = tagIdRemap.get(rawTagId) ?? rawTagId;
+        return validTagIds.has(mapped) ? mapped : undefined;
+      };
+
       // 4. Ingest sessions
       for (const session of args.sessions) {
         await ctx.db.insert("sessions", {
           userId: user._id,
-          tagId: session.tagId || undefined,
+          tagId: resolveTagId(session.tagId),
           sessionType: session.sessionType,
           durationSeconds: session.durationSeconds,
           completedAt: session.completedAt,
@@ -89,7 +105,7 @@ export const importBackup = mutation({
           await ctx.db.insert("coffee_cups", {
             userId: user._id,
             date: cup.date,
-            tagId: cup.tagId || undefined,
+            tagId: resolveTagId(cup.tagId),
             createdAt: cup.createdAt ?? now,
           });
         }
@@ -99,17 +115,31 @@ export const importBackup = mutation({
     }
 
     // MERGE MODE
-    // 1. Merge tags without duplicating existing names
+    // 1. Merge tags without duplicating existing names, and remap incoming tag IDs to canonical tag IDs
     const existingTags = user.tags || [];
     const tagMap = new Map<string, typeof existingTags[0]>();
-    existingTags.forEach((t) => tagMap.set(t.name.toLowerCase().trim(), t));
+    const tagIdRemap = new Map<string, string>();
+    const validTagIds = new Set<string>();
+
+    existingTags.forEach((t) => {
+      tagMap.set(t.name.toLowerCase().trim(), t);
+      tagIdRemap.set(t.id, t.id);
+      validTagIds.add(t.id);
+    });
 
     const mergedTags = [...existingTags];
     for (const incoming of args.tags) {
       const key = incoming.name.toLowerCase().trim();
-      if (!tagMap.has(key)) {
+      const existingMatch = tagMap.get(key);
+      if (existingMatch) {
+        if (incoming.id) {
+          tagIdRemap.set(incoming.id, existingMatch.id);
+        }
+      } else {
+        const canonicalId =
+          incoming.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const newTag = {
-          id: incoming.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: canonicalId,
           name: incoming.name.trim(),
           color: incoming.color,
           isArchived: incoming.isArchived ?? false,
@@ -117,6 +147,10 @@ export const importBackup = mutation({
           updatedAt: now,
         };
         tagMap.set(key, newTag);
+        if (incoming.id) {
+          tagIdRemap.set(incoming.id, canonicalId);
+        }
+        validTagIds.add(canonicalId);
         mergedTags.push(newTag);
       }
     }
@@ -125,7 +159,13 @@ export const importBackup = mutation({
       await ctx.db.patch(user._id, { tags: mergedTags });
     }
 
-    // 2. Ingest sessions with deduplication by (sessionType + completedAt)
+    const resolveMergedTagId = (rawTagId?: string | null): string | undefined => {
+      if (!rawTagId) return undefined;
+      const mapped = tagIdRemap.get(rawTagId) ?? rawTagId;
+      return validTagIds.has(mapped) ? mapped : undefined;
+    };
+
+    // 2. Ingest sessions with deduplication by (sessionType + completedAt within ±45s)
     const existingSessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
@@ -133,14 +173,34 @@ export const importBackup = mutation({
     const existingSessionKeys = new Set(
       existingSessions.map((s) => `${s.sessionType}-${s.completedAt}`)
     );
+    const existingSessionTimestamps = existingSessions.map((s) => ({
+      sessionType: s.sessionType,
+      ms: new Date(s.completedAt).getTime(),
+    }));
 
     for (const session of args.sessions) {
       const key = `${session.sessionType}-${session.completedAt}`;
-      if (!existingSessionKeys.has(key)) {
+      const incomingMs = new Date(session.completedAt).getTime();
+      const isNearDuplicate =
+        !isNaN(incomingMs) &&
+        existingSessionTimestamps.some(
+          (e) =>
+            e.sessionType === session.sessionType &&
+            !isNaN(e.ms) &&
+            Math.abs(e.ms - incomingMs) <= 45000
+        );
+
+      if (!existingSessionKeys.has(key) && !isNearDuplicate) {
         existingSessionKeys.add(key);
+        if (!isNaN(incomingMs)) {
+          existingSessionTimestamps.push({
+            sessionType: session.sessionType,
+            ms: incomingMs,
+          });
+        }
         await ctx.db.insert("sessions", {
           userId: user._id,
-          tagId: session.tagId || undefined,
+          tagId: resolveMergedTagId(session.tagId),
           sessionType: session.sessionType,
           durationSeconds: session.durationSeconds,
           completedAt: session.completedAt,
@@ -166,7 +226,7 @@ export const importBackup = mutation({
           await ctx.db.insert("coffee_cups", {
             userId: user._id,
             date: cup.date,
-            tagId: cup.tagId || undefined,
+            tagId: resolveMergedTagId(cup.tagId),
             createdAt: cupCreatedAt,
           });
         }

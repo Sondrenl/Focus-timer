@@ -510,5 +510,102 @@ describe('generatePeriodInsights & tiered insight selection', () => {
     const pickedTier3 = selectTieredInsight([tier3A], () => 0.5);
     expect(pickedTier3?.id).toBe('t3-a');
   });
+
+  it('does not trigger focus-streak from coffee-only days', () => {
+    const coffee: CoffeeCup[] = [
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
+      { id: 'c3', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+    ];
+    const sessions: CompletedSession[] = [
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-01T10:00:00.000Z' },
+    ];
+
+    const allInsights = generateAllPeriodInsights({
+      sessions,
+      coffeeCups: coffee,
+      tags: testTags,
+      periodType: 'week',
+      totalFocusSeconds: 1500,
+      totalCoffeeCups: 3,
+    });
+
+    expect(allInsights.find((i) => i.type === 'focus-streak')).toBeUndefined();
+  });
+
+  it('does not trigger break-fatigue when comparison days had zero breaks', () => {
+    const sessions: CompletedSession[] = [
+      // Day 1: 3 unbroken sessions (total 3000s)
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: '2026-11-01T09:00:00.000Z' },
+      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: '2026-11-01T09:30:00.000Z' },
+      { id: 's3', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: '2026-11-01T10:00:00.000Z' },
+      // Day 2: 2 sessions, NO breaks (total 5000s)
+      { id: 's4', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 2500, completedAt: '2026-11-02T09:00:00.000Z' },
+      { id: 's5', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 2500, completedAt: '2026-11-02T14:00:00.000Z' },
+    ];
+
+    const allInsights = generateAllPeriodInsights({
+      sessions,
+      allSessions: sessions,
+      coffeeCups: [],
+      tags: testTags,
+      periodType: 'week',
+      totalFocusSeconds: 8000,
+      totalCoffeeCups: 0,
+    });
+
+    expect(allInsights.find((i) => i.type === 'break-fatigue')).toBeUndefined();
+  });
+
+  it('does not claim clean-energy when untagged coffee was logged on the same work day', () => {
+    const coffee: CoffeeCup[] = [
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'c2', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+    ];
+    const sessions: CompletedSession[] = [
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-01T10:00:00.000Z' },
+    ];
+
+    const allInsights = generateAllPeriodInsights({
+      sessions,
+      coffeeCups: coffee,
+      tags: testTags,
+      periodType: 'week',
+      totalFocusSeconds: 3600,
+      totalCoffeeCups: 2,
+    });
+
+    expect(allInsights.find((i) => i.type === 'clean-energy')).toBeUndefined();
+  });
+
+  it('normalizes deleted/unknown tagIds and does not generate Unknown Tag or Unassigned tag dominance insights', () => {
+    const sessions: CompletedSession[] = [
+      { id: 's1', tagId: 'deleted-tag-id', sessionType: 'WORK', durationSeconds: 2400, completedAt: '2026-11-01T09:00:00.000Z' },
+      { id: 's2', tagId: 'deleted-tag-id', sessionType: 'WORK', durationSeconds: 2400, completedAt: '2026-11-02T10:00:00.000Z' },
+      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 2400, completedAt: '2026-11-03T11:00:00.000Z' },
+    ];
+    const coffee: CoffeeCup[] = [
+      { id: 'c1', date: '2026-11-01', tagId: 'deleted-tag-id', createdAt: '2026-11-01T09:00:00.000Z' },
+      { id: 'c2', date: '2026-11-02', tagId: 'deleted-tag-id', createdAt: '2026-11-02T10:00:00.000Z' },
+    ];
+
+    const allInsights = generateAllPeriodInsights({
+      sessions,
+      coffeeCups: coffee,
+      tags: testTags,
+      periodType: 'week',
+      totalFocusSeconds: 7200,
+      totalCoffeeCups: 2,
+    });
+
+    expect(allInsights.find((i) => i.type === 'tag-dominance')).toBeUndefined();
+    expect(allInsights.find((i) => i.type === 'tag-coffee-affinity')).toBeUndefined();
+    expect(allInsights.find((i) => i.type === 'clean-energy')).toBeUndefined();
+    allInsights.forEach((insight) => {
+      expect(insight.headline).not.toContain('Unknown Tag');
+      expect(insight.description).not.toContain('Unknown Tag');
+    });
+  });
 });
+
 

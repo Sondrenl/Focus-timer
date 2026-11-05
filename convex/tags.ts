@@ -104,6 +104,33 @@ export const remove = mutation({
       });
     }
 
+    // Clear orphaned tagId references in sessions, coffee_cups, and active_timers
+    const sessionsWithTag = await ctx.db
+      .query("sessions")
+      .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
+      .filter((q) => q.eq(q.field("tagId"), args.id))
+      .collect();
+    for (const s of sessionsWithTag) {
+      await ctx.db.patch(s._id, { tagId: undefined });
+    }
+
+    const cupsWithTag = await ctx.db
+      .query("coffee_cups")
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+      .filter((q) => q.eq(q.field("tagId"), args.id))
+      .collect();
+    for (const c of cupsWithTag) {
+      await ctx.db.patch(c._id, { tagId: undefined });
+    }
+
+    const activeTimer = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .unique();
+    if (activeTimer && activeTimer.tagId === args.id) {
+      await ctx.db.patch(activeTimer._id, { tagId: undefined });
+    }
+
     return true;
   },
 });

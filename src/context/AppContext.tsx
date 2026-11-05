@@ -26,6 +26,7 @@ import {
   broadcastReset,
 } from '../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../utils/environment';
+import { toDateKey } from '../utils/dates';
 
 interface AppContextValue {
   // Environment
@@ -179,16 +180,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           tagRepository.getAll(),
         ]);
 
-        const remoteCompletedTimes = new Set(
-          Array.isArray(convexSessions) ? convexSessions.map((s) => s.completedAt) : []
-        );
+        const remoteSessionTimes = Array.isArray(convexSessions)
+          ? convexSessions.map((s) => ({
+              sessionType: s.sessionType,
+              completedAt: s.completedAt,
+              ms: new Date(s.completedAt).getTime(),
+            }))
+          : [];
         const missingSessions = Array.isArray(convexSessions)
-          ? localSessions.filter(
-              (s) =>
-                !s.id.startsWith('seed-session-') &&
-                !s.id.startsWith('sample-session-') &&
-                !remoteCompletedTimes.has(s.completedAt)
-            )
+          ? localSessions.filter((s) => {
+              if (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-')) {
+                return false;
+              }
+              const sMs = new Date(s.completedAt).getTime();
+              return !remoteSessionTimes.some(
+                (r) =>
+                  r.completedAt === s.completedAt ||
+                  (r.sessionType === s.sessionType &&
+                    !isNaN(sMs) &&
+                    !isNaN(r.ms) &&
+                    Math.abs(r.ms - sMs) <= 45000)
+              );
+            })
           : [];
 
         const remoteCupTimes = new Set(
@@ -198,31 +211,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? localCoffee.filter((c) => !remoteCupTimes.has(c.createdAt))
           : [];
 
-        const remoteTagNames = new Set(
-          (convexUser?.tags || []).map((t) => t.name.toLowerCase().trim())
+        const remoteTagByName = new Map(
+          (convexUser?.tags || []).map((t) => [t.name.toLowerCase().trim(), t.id])
         );
+        const remoteTagIds = new Set((convexUser?.tags || []).map((t) => t.id));
+        const localTagIdRemap = new Map<string, string>();
+        localTags.forEach((t) => {
+          const remoteId = remoteTagByName.get(t.name.toLowerCase().trim());
+          if (remoteId) {
+            localTagIdRemap.set(t.id, remoteId);
+          } else {
+            localTagIdRemap.set(t.id, t.id);
+          }
+        });
+
         const missingTags = localTags.filter(
-          (t) => !remoteTagNames.has(t.name.toLowerCase().trim())
+          (t) => !remoteTagByName.has(t.name.toLowerCase().trim())
         );
+
+        const resolveMigratedTagId = (rawTagId?: string | null): string | undefined => {
+          if (!rawTagId) return undefined;
+          const mapped = localTagIdRemap.get(rawTagId) ?? rawTagId;
+          if (remoteTagIds.has(mapped) || missingTags.some((t) => t.id === mapped)) {
+            return mapped;
+          }
+          return undefined;
+        };
 
         if (missingSessions.length > 0 || missingCups.length > 0 || missingTags.length > 0) {
           await convexMutations.importBackup({
             mode: 'merge',
-            tags: missingTags.map((t) => ({
+            tags: localTags.map((t) => ({
               id: t.id,
               name: t.name,
               color: t.color,
               isArchived: t.isArchived,
             })),
             sessions: missingSessions.map((s) => ({
-              tagId: s.tagId || undefined,
+              tagId: resolveMigratedTagId(s.tagId),
               sessionType: s.sessionType,
               durationSeconds: s.durationSeconds,
               completedAt: s.completedAt,
             })),
             coffeeCups: missingCups.map((c) => ({
               date: c.date,
-              tagId: c.tagId || undefined,
+              tagId: resolveMigratedTagId(c.tagId),
               createdAt: c.createdAt,
             })),
           });
@@ -236,33 +269,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Reactive adoption of Convex state (for authenticated cloud users)
   useEffect(() => {
     if (!isEffectiveAuthenticated || !convexUser) return;
-    if (convexUser.tags && convexUser.tags.length > 0) {
-      setTags(convexUser.tags as Tag[]);
-      tagRepository.saveAll(convexUser.tags as Tag[]);
+    if (Array.isArray(convexUser.tags)) {
+      const nextTags = convexUser.tags as Tag[];
+      setTags((prev) => {
+        if (
+          prev.length === nextTags.length &&
+          prev.every(
+            (t, i) =>
+              t.id === nextTags[i].id &&
+              t.name === nextTags[i].name &&
+              t.color === nextTags[i].color &&
+              t.isArchived === nextTags[i].isArchived
+          )
+        ) {
+          return prev;
+        }
+        tagRepository.saveAll(nextTags);
+        return nextTags;
+      });
     }
-    if (convexUser.settings) {
-      setSettings(convexUser.settings);
-      settingsRepository.save(convexUser.settings);
-    }
-    const updatedProfile: UserProfile = {
-      ...profileRef.current,
-      id: convexUser.id,
-      email: convexUser.email,
-      displayName: convexUser.displayName,
-      avatarUrl: convexUser.avatarUrl,
-      avatarEmoji: convexUser.avatarEmoji,
-      dailyGoalMinutes: convexUser.dailyGoalMinutes,
-    };
-    setProfile(updatedProfile);
-    profileRepository.save(updatedProfile);
+    if (
+      convexUser.settings &&
+      Date.now() - lastLocalSettingsEditMsRef.current >= 2000
+    ) {
+      const s = convexUser.settings;
+      const cur = settingsRef.current;
+      const settingsChanged =
+        cur.workDurationMinutes !== s.workDurationMinutes ||
+        cur.shortBreakDurationMinutes !== s.shortBreakDurationMinutes ||
+        cur.longBreakDurationMinutes !== s.longBreakDurationMinutes ||
+        cur.longBreakInterval !== s.longBreakInterval ||
+        cur.autoStartBreaks !== s.autoStartBreaks ||
+        cur.autoStartPomodoros !== s.autoStartPomodoros ||
+        cur.soundVolume !== s.soundVolume ||
+        cur.soundEnabled !== s.soundEnabled ||
+        cur.notificationsEnabled !== s.notificationsEnabled ||
+        cur.keepAwake !== s.keepAwake;
 
-    // Keep auth state aligned with persistent Convex profile
-    setAuth((prev) => ({
-      ...prev,
-      isAuthenticated: true,
-      isTokenExpired: false,
-      user: updatedProfile,
-    }));
+      if (settingsChanged) {
+        settingsRef.current = s;
+        setSettings(s);
+        settingsRepository.save(s);
+      }
+    }
+
+    if (Date.now() - lastLocalProfileEditMsRef.current >= 2000) {
+      const curProf = profileRef.current;
+      const updatedProfile: UserProfile = {
+        ...curProf,
+        id: convexUser.id,
+        email: convexUser.email,
+        displayName: convexUser.displayName,
+        avatarUrl: convexUser.avatarUrl,
+        avatarEmoji: convexUser.avatarEmoji,
+        dailyGoalMinutes: convexUser.dailyGoalMinutes,
+      };
+      const profileChanged =
+        curProf.id !== updatedProfile.id ||
+        curProf.email !== updatedProfile.email ||
+        curProf.displayName !== updatedProfile.displayName ||
+        curProf.avatarUrl !== updatedProfile.avatarUrl ||
+        curProf.avatarEmoji !== updatedProfile.avatarEmoji ||
+        curProf.dailyGoalMinutes !== updatedProfile.dailyGoalMinutes;
+
+      if (profileChanged) {
+        profileRef.current = updatedProfile;
+        setProfile(updatedProfile);
+        profileRepository.save(updatedProfile);
+      }
+
+      // Keep auth state aligned with persistent Convex profile
+      setAuth((prev) => {
+        if (
+          prev.isAuthenticated &&
+          !prev.isTokenExpired &&
+          prev.user?.id === updatedProfile.id &&
+          prev.user?.email === updatedProfile.email &&
+          prev.user?.displayName === updatedProfile.displayName &&
+          prev.user?.avatarUrl === updatedProfile.avatarUrl &&
+          prev.user?.avatarEmoji === updatedProfile.avatarEmoji &&
+          prev.user?.dailyGoalMinutes === updatedProfile.dailyGoalMinutes
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          isAuthenticated: true,
+          isTokenExpired: false,
+          user: updatedProfile,
+        };
+      });
+    }
   }, [convexUser, isEffectiveAuthenticated]);
 
   useEffect(() => {
@@ -286,8 +383,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const merged = [...remainingServer, ...unconfirmedAdds].sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
-    setCoffeeCups(merged);
-    coffeeRepository.saveAll(merged);
+    setCoffeeCups((prev) => {
+      if (
+        prev.length === merged.length &&
+        prev.every(
+          (c, i) =>
+            c.id === merged[i].id &&
+            c.date === merged[i].date &&
+            c.tagId === merged[i].tagId &&
+            c.createdAt === merged[i].createdAt
+        )
+      ) {
+        return prev;
+      }
+      coffeeRepository.saveAll(merged);
+      return merged;
+    });
   }, [convexCoffee, isEffectiveAuthenticated]);
 
   useEffect(() => {
@@ -295,8 +406,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sorted = [...(convexSessions as CompletedSession[])].sort(
       (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
     );
-    setSessions(sorted);
-    sessionRepository.saveAll(sorted);
+    setSessions((prev) => {
+      if (
+        prev.length === sorted.length &&
+        prev.every(
+          (s, i) =>
+            s.id === sorted[i].id &&
+            s.sessionType === sorted[i].sessionType &&
+            s.durationSeconds === sorted[i].durationSeconds &&
+            s.completedAt === sorted[i].completedAt &&
+            s.tagId === sorted[i].tagId
+        )
+      ) {
+        return prev;
+      }
+      sessionRepository.saveAll(sorted);
+      return sorted;
+    });
   }, [convexSessions, isEffectiveAuthenticated]);
 
   // Stubs for cross-component compatibility
@@ -717,7 +843,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Coffee Operations
   const addCoffeeCup = async (tagId: string | null, dateStr?: string): Promise<CoffeeCup> => {
-    const today = dateStr || new Date().toISOString().slice(0, 10);
+    const today = dateStr || toDateKey(new Date());
     const created = await coffeeRepository.addCup(today, tagId);
 
     // Track optimistic in-flight addition
@@ -761,7 +887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeCoffeeCup = async (dateStr?: string, tagId?: string | null, cupId?: string): Promise<boolean> => {
-    const today = dateStr || new Date().toISOString().slice(0, 10);
+    const today = dateStr || toDateKey(new Date());
     const removedCup = await coffeeRepository.removeCup(today, tagId, cupId);
     if (removedCup) {
       // Track optimistic in-flight deletion
@@ -804,12 +930,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       broadcastSession(created);
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations.recordSession({
-          tagId: sessionData.tagId || undefined,
-          sessionType: sessionData.sessionType,
-          durationSeconds: sessionData.durationSeconds,
-          completedAt: created.completedAt,
-        }).catch(console.warn);
+        convexMutations
+          .recordSession({
+            tagId: sessionData.tagId || undefined,
+            sessionType: sessionData.sessionType,
+            durationSeconds: sessionData.durationSeconds,
+            completedAt: created.completedAt,
+          })
+          .then((serverSession) => {
+            if (serverSession && serverSession.id) {
+              setSessions((prev) =>
+                prev.map((s) =>
+                  s.id === created.id
+                    ? { ...s, id: serverSession.id, completedAt: serverSession.completedAt }
+                    : s
+                )
+              );
+              sessionRepository.getAll().then((all) => {
+                const updated = all.map((s) =>
+                  s.id === created.id
+                    ? { ...s, id: serverSession.id, completedAt: serverSession.completedAt }
+                    : s
+                );
+                sessionRepository.saveAll(updated);
+              });
+            }
+          })
+          .catch(console.warn);
       }
       return created;
     },

@@ -34,6 +34,8 @@ export const list = query({
       cups = descCups.reverse();
     }
 
+    cups.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
     return cups.map((c) => ({
       id: c._id,
       date: c.date,
@@ -98,6 +100,8 @@ export const removeCup = mutation({
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id).eq("date", date))
       .collect();
+
+    cups.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
     let target = null;
     for (let i = cups.length - 1; i >= 0; i--) {

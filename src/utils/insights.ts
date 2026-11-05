@@ -141,9 +141,15 @@ export function generateAllPeriodInsights({
   const tagMap = new Map<string, Tag>();
   tags.forEach((t) => tagMap.set(t.id, t));
 
+  const resolveValidTagId = (tagId: string | null | undefined): string | null => {
+    if (!tagId) return null;
+    return tagMap.has(tagId) ? tagId : null;
+  };
+
   const getTagName = (tagId: string | null | undefined): string => {
-    if (!tagId) return 'Unassigned';
-    return tagMap.get(tagId)?.name || 'Unknown Tag';
+    const validId = resolveValidTagId(tagId);
+    if (!validId) return 'Unassigned';
+    return tagMap.get(validId)!.name;
   };
 
   // Group data strictly by date (YYYY-MM-DD)
@@ -152,9 +158,13 @@ export function generateAllPeriodInsights({
 
   sessions.forEach((s) => {
     if (!s.completedAt) return;
+    const d = new Date(s.completedAt);
+    if (isNaN(d.getTime())) return;
+    const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+    if (dur <= 0) return;
     const key = toDateKey(s.completedAt);
     const curr = dateFocusMap.get(key) || { seconds: 0, count: 0 };
-    curr.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
+    curr.seconds += dur;
     curr.count += 1;
     dateFocusMap.set(key, curr);
   });
@@ -164,8 +174,9 @@ export function generateAllPeriodInsights({
     dateCoffeeMap.set(c.date, (dateCoffeeMap.get(c.date) || 0) + 1);
   });
 
-  const allActiveDates = Array.from(new Set([...dateFocusMap.keys(), ...dateCoffeeMap.keys()])).sort();
-  const activeFocusDays = Array.from(dateFocusMap.keys()).length;
+  const activeFocusDates = Array.from(dateFocusMap.keys()).sort();
+  const allActiveDates = Array.from(new Set([...activeFocusDates, ...dateCoffeeMap.keys()])).sort();
+  const activeFocusDays = activeFocusDates.length;
 
   // -------------------------------------------------------------
   // 1. Precision Peak Focus Window (Golden Hours)
@@ -178,17 +189,19 @@ export function generateAllPeriodInsights({
     sessions.forEach((s) => {
       const d = new Date(s.completedAt);
       if (isNaN(d.getTime())) return;
-      const endMin = d.getHours() * 60 + d.getMinutes();
-      const durMin = Math.max(1, Math.round(s.durationSeconds / 60));
-      const startMin = Math.max(0, endMin - durMin);
+      const durSec = Math.min(86400, Math.max(0, s.durationSeconds));
+      if (durSec <= 0) return;
+
+      const endSec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+      const startSec = Math.max(0, endSec - durSec);
 
       for (let k = 0; k < 48; k++) {
-        const slotStart = k * 30;
-        const slotEnd = (k + 1) * 30;
-        const overlapStart = Math.max(startMin, slotStart);
-        const overlapEnd = Math.min(endMin, slotEnd);
+        const slotStart = k * 1800;
+        const slotEnd = (k + 1) * 1800;
+        const overlapStart = Math.max(startSec, slotStart);
+        const overlapEnd = Math.min(endSec, slotEnd);
         if (overlapEnd > overlapStart) {
-          slotSeconds[k] += (overlapEnd - overlapStart) * 60;
+          slotSeconds[k] += overlapEnd - overlapStart;
         }
       }
     });
@@ -208,7 +221,8 @@ export function generateAllPeriodInsights({
     }
 
     if (bestSlot >= 0 && maxWindowSec >= 1800) {
-      const pct = Math.round((maxWindowSec / totalFocusSeconds) * 100);
+      const clampedWindowSec = Math.min(totalFocusSeconds, Math.round(maxWindowSec));
+      const pct = Math.min(100, Math.round((clampedWindowSec / totalFocusSeconds) * 100));
       if (pct >= 28) {
         const startH = Math.floor(bestSlot / 2);
         const startM = (bestSlot % 2) * 30;
@@ -223,7 +237,7 @@ export function generateAllPeriodInsights({
           type: 'peak-focus-window',
           badge: 'Peak Flow Window',
           headline: `Your peak focus window is ${timeWindowStr}`,
-          description: `You concentrated ${formatDurationHoursMins(maxWindowSec)} (${pct}% of your deep work) during this golden window. Best reserved for your highest-priority tasks.`,
+          description: `You concentrated ${formatDurationHoursMins(clampedWindowSec)} (${pct}% of your deep work) during this golden window. Best reserved for your highest-priority tasks.`,
           iconName: 'target',
           score: 97,
         });
@@ -261,17 +275,26 @@ export function generateAllPeriodInsights({
       let currentStreak = 0;
       let currentStreakSec = 0;
       let dayHadLongUnbrokenStreak = false;
+      let dayHadBreak = false;
+      let dayWorkCount = 0;
       let dayFocusSec = 0;
 
       for (let i = 0; i < daySessions.length; i++) {
         const s = daySessions[i];
         if (s.sessionType === 'WORK') {
-          dayFocusSec += s.durationSeconds > 0 ? s.durationSeconds : 0;
+          const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+          dayFocusSec += dur;
+          dayWorkCount += 1;
           currentStreak += 1;
-          currentStreakSec += s.durationSeconds > 0 ? s.durationSeconds : 0;
+          currentStreakSec += dur;
 
           if (currentStreak > maxConsecutiveWorkStreak) {
             maxConsecutiveWorkStreak = currentStreak;
+            maxStreakSeconds = currentStreakSec;
+          } else if (
+            currentStreak === maxConsecutiveWorkStreak &&
+            currentStreakSec > maxStreakSeconds
+          ) {
             maxStreakSeconds = currentStreakSec;
           }
 
@@ -280,6 +303,7 @@ export function generateAllPeriodInsights({
           }
         } else {
           // Break logged (SHORT_BREAK or LONG_BREAK)
+          dayHadBreak = true;
           currentStreak = 0;
           currentStreakSec = 0;
         }
@@ -288,7 +312,7 @@ export function generateAllPeriodInsights({
       if (dayHadLongUnbrokenStreak) {
         consecutiveUnbrokenWorkDays += 1;
         unbrokenFocusSecTotal += dayFocusSec;
-      } else if (dayFocusSec > 0) {
+      } else if (dayFocusSec > 0 && dayHadBreak && dayWorkCount >= 2) {
         brokenWorkDays += 1;
         brokenFocusSecTotal += dayFocusSec;
       }
@@ -344,44 +368,49 @@ export function generateAllPeriodInsights({
   // -------------------------------------------------------------
   // 3. Day-of-Week Powerhouse & Distribution
   // -------------------------------------------------------------
-  if (periodType !== 'day' && allActiveDates.length >= 3 && sessions.length >= 4) {
+  if (periodType !== 'day' && activeFocusDays >= 3 && sessions.length >= 4) {
     const weekdaySeconds = new Array(7).fill(0);
-    const weekdayCounts = new Array(7).fill(0);
+    const weekdayDates: Set<string>[] = Array.from({ length: 7 }, () => new Set<string>());
 
     sessions.forEach((s) => {
       const d = new Date(s.completedAt);
       if (isNaN(d.getTime())) return;
+      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+      if (dur <= 0) return;
       const dayIdx = d.getDay();
-      weekdaySeconds[dayIdx] += s.durationSeconds > 0 ? s.durationSeconds : 0;
-      weekdayCounts[dayIdx] += 1;
+      weekdaySeconds[dayIdx] += dur;
+      weekdayDates[dayIdx].add(toDateKey(d));
     });
 
     let bestDayIdx = 1;
-    let highestTotalSec = -1;
+    let highestAvgWeekdaySec = -1;
     let activeWeekdaysCount = 0;
     let totalWeekdaySec = 0;
 
     for (let i = 0; i < 7; i++) {
-      if (weekdayCounts[i] > 0) {
+      const daysForWeekday = weekdayDates[i].size;
+      if (daysForWeekday > 0) {
         activeWeekdaysCount += 1;
         totalWeekdaySec += weekdaySeconds[i];
-        if (weekdaySeconds[i] > highestTotalSec) {
-          highestTotalSec = weekdaySeconds[i];
+        const avgForWeekday = weekdaySeconds[i] / daysForWeekday;
+        if (avgForWeekday > highestAvgWeekdaySec) {
+          highestAvgWeekdaySec = avgForWeekday;
           bestDayIdx = i;
         }
       }
     }
 
-    if (activeWeekdaysCount >= 2 && highestTotalSec >= 1800) {
-      const avgActiveSec = totalWeekdaySec / activeWeekdaysCount;
-      if (highestTotalSec >= avgActiveSec * 1.25) {
-        const pctAbove = Math.round(((highestTotalSec - avgActiveSec) / avgActiveSec) * 100);
+    if (activeWeekdaysCount >= 2 && highestAvgWeekdaySec >= 1800) {
+      const avgActiveDaySec = totalWeekdaySec / activeFocusDays;
+      if (highestAvgWeekdaySec >= avgActiveDaySec * 1.25) {
+        const pctAbove = Math.round(((highestAvgWeekdaySec - avgActiveDaySec) / avgActiveDaySec) * 100);
+        const bestDayTotalSec = weekdaySeconds[bestDayIdx];
         insights.push({
           id: 'powerhouse-day',
           type: 'powerhouse-day',
           badge: 'Productivity Rhythm',
           headline: `${WEEKDAY_NAMES[bestDayIdx]} is your Powerhouse Day`,
-          description: `You logged ${formatDurationHoursMins(highestTotalSec)} on ${WEEKDAY_NAMES[bestDayIdx]}s (+${pctAbove}% above your typical active day in this period).`,
+          description: `You logged ${formatDurationHoursMins(bestDayTotalSec)} on ${WEEKDAY_NAMES[bestDayIdx]}s (+${pctAbove}% above your typical active day in this period).`,
           iconName: 'calendar',
           score: 93,
         });
@@ -390,10 +419,10 @@ export function generateAllPeriodInsights({
 
     // Weekend vs Weekday analysis
     const weekendSec = weekdaySeconds[0] + weekdaySeconds[6];
-    const weekdaySec = totalFocusSeconds - weekendSec;
+    const weekdaySec = totalWeekdaySec - weekendSec;
 
-    if (totalFocusSeconds >= 7200) {
-      const weekendRatio = weekendSec / totalFocusSeconds;
+    if (totalWeekdaySec >= 7200) {
+      const weekendRatio = weekendSec / totalWeekdaySec;
       if (weekendRatio >= 0.3) {
         const pctWeekend = Math.round(weekendRatio * 100);
         insights.push({
@@ -405,7 +434,7 @@ export function generateAllPeriodInsights({
           iconName: 'calendar',
           score: 84,
         });
-      } else if (weekendRatio <= 0.05 && weekdaySec >= 14400 && allActiveDates.length >= 5) {
+      } else if (weekendRatio <= 0.05 && weekdaySec >= 14400 && activeFocusDays >= 5) {
         insights.push({
           id: 'workweek-boundaries',
           type: 'workweek-boundaries',
@@ -422,12 +451,12 @@ export function generateAllPeriodInsights({
   // -------------------------------------------------------------
   // 4. Consistency Streaks & Milestones
   // -------------------------------------------------------------
-  if (allActiveDates.length >= 3) {
+  if (activeFocusDates.length >= 3) {
     let maxStreak = 0;
     let currentStreak = 0;
     let prevTime: number | null = null;
 
-    allActiveDates.forEach((dateStr) => {
+    activeFocusDates.forEach((dateStr) => {
       const [y, m, d] = dateStr.split('-').map(Number);
       const curTime = Date.UTC(y, m - 1, d);
 
@@ -458,39 +487,39 @@ export function generateAllPeriodInsights({
         score: 91,
       });
     }
+  }
 
-    // Milestones
-    if (totalFocusSeconds >= 72000) {
-      insights.push({
-        id: 'milestone',
-        type: 'milestone',
-        badge: 'Milestone Achieved',
-        headline: 'Major Landmark: 20+ hours of deep work!',
-        description: `You logged ${formatDurationHoursMins(totalFocusSeconds)} of focused concentration across ${sessions.length} sessions in this period.`,
-        iconName: 'award',
-        score: 90,
-      });
-    } else if (totalFocusSeconds >= 36000) {
-      insights.push({
-        id: 'milestone',
-        type: 'milestone',
-        badge: 'Milestone Achieved',
-        headline: 'Milestone: Surpassed 10 hours of deep work!',
-        description: `You logged ${formatDurationHoursMins(totalFocusSeconds)} across ${sessions.length} Pomodoro sessions. Outstanding focus!`,
-        iconName: 'award',
-        score: 88,
-      });
-    } else if (sessions.length >= 25) {
-      insights.push({
-        id: 'milestone',
-        type: 'milestone',
-        badge: 'Milestone Achieved',
-        headline: 'Milestone: 25+ Pomodoros completed!',
-        description: `You achieved ${sessions.length} completed sessions (${formatDurationHoursMins(totalFocusSeconds)} total).`,
-        iconName: 'award',
-        score: 86,
-      });
-    }
+  // Milestones (independent of active date count so intense 1-2 day sprints still qualify)
+  if (totalFocusSeconds >= 72000) {
+    insights.push({
+      id: 'milestone',
+      type: 'milestone',
+      badge: 'Milestone Achieved',
+      headline: 'Major Landmark: 20+ hours of deep work!',
+      description: `You logged ${formatDurationHoursMins(totalFocusSeconds)} of focused concentration across ${sessions.length} ${sessions.length === 1 ? 'session' : 'sessions'} in this period.`,
+      iconName: 'award',
+      score: 90,
+    });
+  } else if (totalFocusSeconds >= 36000) {
+    insights.push({
+      id: 'milestone',
+      type: 'milestone',
+      badge: 'Milestone Achieved',
+      headline: 'Milestone: Surpassed 10 hours of deep work!',
+      description: `You logged ${formatDurationHoursMins(totalFocusSeconds)} across ${sessions.length} Pomodoro ${sessions.length === 1 ? 'session' : 'sessions'}. Outstanding focus!`,
+      iconName: 'award',
+      score: 88,
+    });
+  } else if (sessions.length >= 25) {
+    insights.push({
+      id: 'milestone',
+      type: 'milestone',
+      badge: 'Milestone Achieved',
+      headline: 'Milestone: 25+ Pomodoros completed!',
+      description: `You achieved ${sessions.length} completed sessions (${formatDurationHoursMins(totalFocusSeconds)} total).`,
+      iconName: 'award',
+      score: 86,
+    });
   }
 
   // -------------------------------------------------------------
@@ -500,9 +529,10 @@ export function generateAllPeriodInsights({
   if (sessions.length >= 4 && activeFocusDays >= 2) {
     const dayTagsMap = new Map<string, Set<string>>();
     sessions.forEach((s) => {
+      if (!s.completedAt || s.durationSeconds <= 0) return;
       const key = toDateKey(s.completedAt);
       const set = dayTagsMap.get(key) || new Set<string>();
-      set.add(s.tagId || 'unassigned');
+      set.add(resolveValidTagId(s.tagId) || 'unassigned');
       dayTagsMap.set(key, set);
     });
 
@@ -516,10 +546,10 @@ export function generateAllPeriodInsights({
       const sec = focus ? focus.seconds : 0;
       if (sec === 0) return;
 
-      if (tagSet.size === 1) {
+      if (tagSet.size === 1 && !tagSet.has('unassigned')) {
         singleTagSec += sec;
         singleTagDays += 1;
-      } else {
+      } else if (tagSet.size >= 2) {
         multiTagSec += sec;
         multiTagDays += 1;
       }
@@ -549,10 +579,11 @@ export function generateAllPeriodInsights({
   // Which project/tag receives the highest share of logged coffee?
   // -------------------------------------------------------------
   if (coffeeCups.length >= 2) {
-    const coffeeTagCounts = new Map<string | null, number>();
+    const coffeeTagCounts = new Map<string, number>();
     coffeeCups.forEach((c) => {
-      const tid = c.tagId || null;
-      coffeeTagCounts.set(tid, (coffeeTagCounts.get(tid) || 0) + 1);
+      const validTid = resolveValidTagId(c.tagId);
+      if (!validTid) return;
+      coffeeTagCounts.set(validTid, (coffeeTagCounts.get(validTid) || 0) + 1);
     });
 
     let topCoffeeTagId: string | null = null;
@@ -566,24 +597,26 @@ export function generateAllPeriodInsights({
 
     if (topCoffeeTagId !== null && topCoffeeCount >= 2) {
       const pct = Math.round((topCoffeeCount / coffeeCups.length) * 100);
-      const tagName = getTagName(topCoffeeTagId);
+      if (pct >= 35) {
+        const tagName = getTagName(topCoffeeTagId);
 
-      const tagFocusSec = sessions
-        .filter((s) => (s.tagId || null) === topCoffeeTagId)
-        .reduce((acc, s) => acc + (s.durationSeconds > 0 ? s.durationSeconds : 0), 0);
+        const tagFocusSec = sessions
+          .filter((s) => resolveValidTagId(s.tagId) === topCoffeeTagId)
+          .reduce((acc, s) => acc + (s.durationSeconds > 0 ? s.durationSeconds : 0), 0);
 
-      const focusNote =
-        tagFocusSec > 0 ? ` across ${formatDurationHoursMins(tagFocusSec)} of focused work` : '';
+        const focusNote =
+          tagFocusSec > 0 ? ` across ${formatDurationHoursMins(tagFocusSec)} of focused work` : '';
 
-      insights.push({
-        id: 'tag-coffee-affinity',
-        type: 'tag-coffee-affinity',
-        badge: 'Caffeine Affinity',
-        headline: `${pct}% of coffee was logged for ${tagName}`,
-        description: `You drank ${topCoffeeCount} of your ${coffeeCups.length} cups while working on ${tagName}${focusNote}.`,
-        iconName: 'coffee',
-        score: 95,
-      });
+        insights.push({
+          id: 'tag-coffee-affinity',
+          type: 'tag-coffee-affinity',
+          badge: 'Caffeine Affinity',
+          headline: `${pct}% of coffee was logged for ${tagName}`,
+          description: `You drank ${topCoffeeCount} of your ${coffeeCups.length} cups while working on ${tagName}${focusNote}.`,
+          iconName: 'coffee',
+          score: 95,
+        });
+      }
     }
   }
 
@@ -616,29 +649,32 @@ export function generateAllPeriodInsights({
       const avgZeroCoffeeDaySec = zeroCoffeeDaysTotalSec / zeroCoffeeDaysCount;
 
       if (avgCoffeeDaySec > 0 && avgZeroCoffeeDaySec > 0) {
-        const diffRatio = (avgCoffeeDaySec - avgZeroCoffeeDaySec) / avgZeroCoffeeDaySec;
-        const pctDiff = Math.abs(Math.round(diffRatio * 100));
-
-        if (diffRatio >= 0.15 && pctDiff <= 400) {
-          insights.push({
-            id: 'coffee-productivity-boost',
-            type: 'coffee-productivity-boost',
-            badge: 'Productivity Correlation',
-            headline: `+${pctDiff}% more focus on coffee days`,
-            description: `You averaged ${formatDurationHoursMins(Math.round(avgCoffeeDaySec))} of focus on days with coffee, compared to ${formatDurationHoursMins(Math.round(avgZeroCoffeeDaySec))} on zero-coffee days.`,
-            iconName: 'trending-up',
-            score: 96,
-          });
-        } else if (diffRatio <= -0.15) {
-          insights.push({
-            id: 'coffee-productivity-dip',
-            type: 'coffee-productivity-dip',
-            badge: 'Productivity Pattern',
-            headline: `${pctDiff}% higher focus on caffeine-free days`,
-            description: `You averaged ${formatDurationHoursMins(Math.round(avgZeroCoffeeDaySec))} on zero-coffee days vs ${formatDurationHoursMins(Math.round(avgCoffeeDaySec))} on coffee days.`,
-            iconName: 'zap',
-            score: 94,
-          });
+        if (avgCoffeeDaySec >= avgZeroCoffeeDaySec * 1.15) {
+          const boostPct = Math.round(((avgCoffeeDaySec - avgZeroCoffeeDaySec) / avgZeroCoffeeDaySec) * 100);
+          if (boostPct <= 400) {
+            insights.push({
+              id: 'coffee-productivity-boost',
+              type: 'coffee-productivity-boost',
+              badge: 'Productivity Correlation',
+              headline: `+${boostPct}% more focus on coffee days`,
+              description: `You averaged ${formatDurationHoursMins(Math.round(avgCoffeeDaySec))} of focus on days with coffee, compared to ${formatDurationHoursMins(Math.round(avgZeroCoffeeDaySec))} on zero-coffee days.`,
+              iconName: 'trending-up',
+              score: 96,
+            });
+          }
+        } else if (avgZeroCoffeeDaySec >= avgCoffeeDaySec * 1.15) {
+          const dipPct = Math.round(((avgZeroCoffeeDaySec - avgCoffeeDaySec) / avgCoffeeDaySec) * 100);
+          if (dipPct <= 400) {
+            insights.push({
+              id: 'coffee-productivity-dip',
+              type: 'coffee-productivity-dip',
+              badge: 'Productivity Pattern',
+              headline: `${dipPct}% higher focus on caffeine-free days`,
+              description: `You averaged ${formatDurationHoursMins(Math.round(avgZeroCoffeeDaySec))} on zero-coffee days vs ${formatDurationHoursMins(Math.round(avgCoffeeDaySec))} on coffee days.`,
+              iconName: 'zap',
+              score: 94,
+            });
+          }
         }
       }
     }
@@ -687,7 +723,7 @@ export function generateAllPeriodInsights({
   // -------------------------------------------------------------
   if (activeFocusDays >= 3 && coffeeCups.length >= 2) {
     let coffeeFocusDaysCount = 0;
-    dateFocusMap.forEach((_, dateKey) => {
+    activeFocusDates.forEach((dateKey) => {
       if ((dateCoffeeMap.get(dateKey) || 0) > 0) {
         coffeeFocusDaysCount += 1;
       }
@@ -731,18 +767,34 @@ export function generateAllPeriodInsights({
   // -------------------------------------------------------------
   if (coffeeCups.length >= 2) {
     const tagFocusSecondsMap = new Map<string, number>();
+    const tagDatesMap = new Map<string, Set<string>>();
     sessions.forEach((s) => {
-      if (!s.tagId) return;
-      tagFocusSecondsMap.set(s.tagId, (tagFocusSecondsMap.get(s.tagId) || 0) + s.durationSeconds);
+      const validTid = resolveValidTagId(s.tagId);
+      if (!validTid || !s.completedAt || s.durationSeconds <= 0) return;
+      tagFocusSecondsMap.set(validTid, (tagFocusSecondsMap.get(validTid) || 0) + s.durationSeconds);
+      const dates = tagDatesMap.get(validTid) || new Set<string>();
+      dates.add(toDateKey(s.completedAt));
+      tagDatesMap.set(validTid, dates);
     });
 
-    const coffeeTagSet = new Set(coffeeCups.map((c) => c.tagId).filter(Boolean));
+    const coffeeTagSet = new Set(
+      coffeeCups.map((c) => resolveValidTagId(c.tagId)).filter((tid): tid is string => Boolean(tid))
+    );
+    const untaggedCoffeeDates = new Set(
+      coffeeCups.filter((c) => !resolveValidTagId(c.tagId) && c.date).map((c) => c.date)
+    );
 
     let topCleanTagId: string | null = null;
     let topCleanSeconds = 0;
 
     tagFocusSecondsMap.forEach((sec, tid) => {
-      if (!coffeeTagSet.has(tid) && sec > topCleanSeconds) {
+      if (coffeeTagSet.has(tid)) return;
+      const datesWorked = tagDatesMap.get(tid);
+      const hadUntaggedCoffeeOnWorkDay =
+        datesWorked && Array.from(datesWorked).some((d) => untaggedCoffeeDates.has(d));
+      if (hadUntaggedCoffeeOnWorkDay) return;
+
+      if (sec > topCleanSeconds) {
         topCleanSeconds = sec;
         topCleanTagId = tid;
       }
@@ -763,12 +815,13 @@ export function generateAllPeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 12. Tag Dominance (Single tag dominating >= 55% of focus)
+  // 12. Tag Dominance (Single project tag dominating >= 55% of focus)
   // -------------------------------------------------------------
   if (sessions.length >= 2 && totalFocusSeconds >= 3600) {
     const tagTotals = new Map<string, { sec: number; count: number }>();
     sessions.forEach((s) => {
-      const tid = s.tagId || 'unassigned';
+      const tid = resolveValidTagId(s.tagId);
+      if (!tid) return;
       const cur = tagTotals.get(tid) || { sec: 0, count: 0 };
       cur.sec += s.durationSeconds > 0 ? s.durationSeconds : 0;
       cur.count += 1;
@@ -786,15 +839,15 @@ export function generateAllPeriodInsights({
       }
     });
 
-    const share = Math.round((topSec / totalFocusSeconds) * 100);
-    if (share >= 55) {
-      const tagName = getTagName(topTid === 'unassigned' ? null : topTid);
+    const share = Math.min(100, Math.round((topSec / totalFocusSeconds) * 100));
+    if (topTid && share >= 55) {
+      const tagName = getTagName(topTid);
       insights.push({
         id: 'tag-dominance',
         type: 'tag-dominance',
         badge: 'Core Focus',
         headline: `${tagName} dominated ${share}% of focus time`,
-        description: `You dedicated ${formatDurationHoursMins(topSec)} across ${topCount} sessions entirely to ${tagName}.`,
+        description: `You dedicated ${formatDurationHoursMins(topSec)} across ${topCount} ${topCount === 1 ? 'session' : 'sessions'} entirely to ${tagName}.`,
         iconName: 'target',
         score: 80,
       });
@@ -802,29 +855,32 @@ export function generateAllPeriodInsights({
   }
 
   // -------------------------------------------------------------
-  // 13. Tag Diversity (Balanced focus across 3+ tags)
+  // 13. Tag Diversity (Balanced focus across 3+ project tags)
   // -------------------------------------------------------------
   if (sessions.length >= 4 && totalFocusSeconds >= 3600) {
     const tagTotals = new Map<string, number>();
     sessions.forEach((s) => {
-      const tid = s.tagId || 'unassigned';
+      const tid = resolveValidTagId(s.tagId);
+      if (!tid) return;
       tagTotals.set(tid, (tagTotals.get(tid) || 0) + (s.durationSeconds > 0 ? s.durationSeconds : 0));
     });
 
     const activeTagsCount = tagTotals.size;
-    const maxTagSec = Math.max(...Array.from(tagTotals.values()));
-    const maxShare = totalFocusSeconds > 0 ? maxTagSec / totalFocusSeconds : 0;
+    if (activeTagsCount >= 3) {
+      const maxTagSec = Math.max(...Array.from(tagTotals.values()));
+      const maxShare = totalFocusSeconds > 0 ? maxTagSec / totalFocusSeconds : 0;
 
-    if (activeTagsCount >= 3 && maxShare <= 0.45) {
-      insights.push({
-        id: 'tag-diversity',
-        type: 'tag-diversity',
-        badge: 'Balanced Workflow',
-        headline: `Evenly balanced across ${activeTagsCount} different tags`,
-        description: `No single tag took more than ${Math.round(maxShare * 100)}% of your time, maintaining healthy task variety.`,
-        iconName: 'layers',
-        score: 78,
-      });
+      if (maxShare <= 0.45) {
+        insights.push({
+          id: 'tag-diversity',
+          type: 'tag-diversity',
+          badge: 'Balanced Workflow',
+          headline: `Evenly balanced across ${activeTagsCount} different tags`,
+          description: `No single tag took more than ${Math.round(maxShare * 100)}% of your time, maintaining healthy task variety.`,
+          iconName: 'layers',
+          score: 78,
+        });
+      }
     }
   }
 
@@ -850,12 +906,15 @@ export function generateAllPeriodInsights({
   // 15. Daily Summary (For single day view)
   // -------------------------------------------------------------
   if (periodType === 'day' && (sessions.length > 0 || coffeeCups.length > 0)) {
+    const pomodoroWord = sessions.length === 1 ? 'Pomodoro' : 'Pomodoros';
+    const cupWord = coffeeCups.length === 1 ? 'cup' : 'cups';
+
     if (sessions.length > 0 && coffeeCups.length > 0) {
       insights.push({
         id: 'daily-summary',
         type: 'daily-summary',
         badge: 'Day Summary',
-        headline: `${sessions.length} Pomodoros fueled by ${coffeeCups.length} ${coffeeCups.length === 1 ? 'cup' : 'cups'} of coffee`,
+        headline: `${sessions.length} ${pomodoroWord} fueled by ${coffeeCups.length} ${cupWord} of coffee`,
         description: `You logged ${formatDurationHoursMins(totalFocusSeconds)} of deep work today. Great rhythm!`,
         iconName: 'sparkles',
         score: 99,
@@ -865,7 +924,7 @@ export function generateAllPeriodInsights({
         id: 'daily-summary',
         type: 'daily-summary',
         badge: 'Day Summary',
-        headline: `${sessions.length} Pomodoros completed (${formatDurationHoursMins(totalFocusSeconds)} focus)`,
+        headline: `${sessions.length} ${pomodoroWord} completed (${formatDurationHoursMins(totalFocusSeconds)} focus)`,
         description: 'Solid progress logged today without any coffee. Keep the momentum going!',
         iconName: 'sparkles',
         score: 99,
@@ -875,7 +934,7 @@ export function generateAllPeriodInsights({
         id: 'daily-summary',
         type: 'daily-summary',
         badge: 'Day Summary',
-        headline: `${coffeeCups.length} ${coffeeCups.length === 1 ? 'cup' : 'cups'} of coffee logged today`,
+        headline: `${coffeeCups.length} ${cupWord} of coffee logged today`,
         description: 'Ready to channel that caffeine into your first Pomodoro session of the day?',
         iconName: 'coffee',
         score: 99,

@@ -13,7 +13,11 @@ import {
   formatFriendlyDate,
 } from '../utils/dates';
 import { formatDurationHoursMins } from '../utils/formatters';
-import { generatePeriodInsights, InterestingStat } from '../utils/insights';
+import {
+  generateAllPeriodInsights,
+  selectTieredInsight,
+  InterestingStat,
+} from '../utils/insights';
 export type { InterestingStat };
 
 export type TimePeriodType = 'day' | 'week' | 'month' | 'year' | 'all' | 'custom';
@@ -241,7 +245,7 @@ export function useStatistics() {
 
     const tagSecondsMap = new Map<string, { seconds: number; count: number }>();
     filteredSessions.forEach((s) => {
-      const tagId = s.tagId || 'unassigned';
+      const tagId = s.tagId && tagMap.has(s.tagId) ? s.tagId : 'unassigned';
       const curr = tagSecondsMap.get(tagId) || { seconds: 0, count: 0 };
       curr.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
       curr.count += 1;
@@ -829,7 +833,8 @@ export function useStatistics() {
     } else if (periodType === 'day') {
       const tagCounts = new Map<string | null, number>();
       filteredCoffee.forEach((c) => {
-        tagCounts.set(c.tagId || null, (tagCounts.get(c.tagId || null) || 0) + 1);
+        const validTid = c.tagId && tagMap.has(c.tagId) ? c.tagId : null;
+        tagCounts.set(validTid, (tagCounts.get(validTid) || 0) + 1);
       });
       let topTagId: string | null = null;
       let topTagCount = 0;
@@ -842,8 +847,8 @@ export function useStatistics() {
 
       const isCurrentDay = toDateKey(referenceDate) === todayKey;
       if (topTagCount > 0) {
-        const found = tags.find((t) => t.id === topTagId);
-        const tagName = topTagId ? (found ? found.name : 'Unknown') : 'No Tag';
+        const found = topTagId ? tagMap.get(topTagId) : undefined;
+        const tagName = found ? found.name : 'No Tag';
         coffeePeakMetric = {
           title: isCurrentDay ? 'Top Tag Today' : 'Top Tag For Day',
           value: tagName,
@@ -878,7 +883,7 @@ export function useStatistics() {
       }
     }
 
-    const insights = generatePeriodInsights({
+    const candidateInsights = generateAllPeriodInsights({
       sessions: filteredSessions,
       coffeeCups: filteredCoffee,
       tags,
@@ -887,7 +892,10 @@ export function useStatistics() {
       totalCoffeeCups,
       allSessions: periodAllSessions,
     });
-    const topInsight = insights.length > 0 ? insights[0] : null;
+
+    const insightsSignature = `${periodType}:${periodLabel}:${candidateInsights
+      .map((i) => `${i.id}:${i.tier}:${i.headline}:${i.description}`)
+      .join('|')}`;
 
     return {
       periodLabel,
@@ -901,10 +909,18 @@ export function useStatistics() {
       tagDistribution,
       activityBars,
       productiveMetric,
-      insights,
-      topInsight,
+      candidateInsights,
+      insightsSignature,
     };
   }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange, isCurrentPeriod, todayKey]);
+
+  const topInsight = useMemo(() => {
+    return selectTieredInsight(stats.candidateInsights);
+  }, [stats.insightsSignature]);
+
+  const insights = useMemo(() => {
+    return topInsight ? [topInsight] : [];
+  }, [topInsight]);
 
   return {
     periodType,
@@ -927,7 +943,8 @@ export function useStatistics() {
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,
-    insights: stats.insights,
-    topInsight: stats.topInsight,
+    insights,
+    topInsight,
   };
 }
+

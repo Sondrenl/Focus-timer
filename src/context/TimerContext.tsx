@@ -694,9 +694,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setStatus('PAUSED');
       } else {
         const nextStatus: TimerStatus = remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
-        const dur = remote.remainingSeconds && remote.remainingSeconds > 0
-          ? remote.remainingSeconds
-          : getDurationForType(remote.sessionType);
+        const dur =
+          remote.remainingSeconds && remote.remainingSeconds > 0
+            ? remote.remainingSeconds
+            : remote.status === 'COMPLETED' && remote.totalSeconds && remote.totalSeconds > 0
+            ? remote.totalSeconds
+            : getDurationForType(remote.sessionType);
         const tot = remote.totalSeconds && remote.totalSeconds > 0
           ? remote.totalSeconds
           : dur;
@@ -735,6 +738,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ]
   );
 
+  const applyRemoteStateRef = useRef(applyRemoteState);
+  applyRemoteStateRef.current = applyRemoteState;
+
   // Adopt live Convex WebSocket timer updates instantly
   useEffect(() => {
     if (!isConvexConfigured || !remoteTimer) return;
@@ -748,7 +754,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Adopt remote state unconditionally if no recent local action on this device,
     // or if the remote state timestamp is newer than our local state.
     if (!hasRecentLocalAction || isNewer) {
-      applyRemoteState({
+      applyRemoteStateRef.current({
         sessionType: remoteTimer.sessionType,
         status: remoteTimer.status,
         remainingSeconds: remoteTimer.remainingSeconds,
@@ -760,7 +766,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAtMs: remoteTimer.updatedAtMs,
       });
     }
-  }, [remoteTimer, isConvexConfigured, applyRemoteState]);
+  }, [remoteTimer, isConvexConfigured]);
 
   // Main countdown tick execution
   const executeTick = useCallback(() => {

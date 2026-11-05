@@ -36,8 +36,16 @@ export const list = query({
 
     let sessions;
     if (args.startDate || args.endDate) {
-      const start = args.startDate ?? "1970-01-01";
-      const end = args.endDate ? (args.endDate.length === 10 ? `${args.endDate}T23:59:59.999Z` : args.endDate) : "9999-12-31";
+      const start = args.startDate
+        ? args.startDate.length === 10
+          ? `${args.startDate}T00:00:00.000Z`
+          : args.startDate
+        : "1970-01-01T00:00:00.000Z";
+      const end = args.endDate
+        ? args.endDate.length === 10
+          ? `${args.endDate}T23:59:59.999Z`
+          : args.endDate
+        : "9999-12-31T23:59:59.999Z";
 
       sessions = await ctx.db
         .query("sessions")
@@ -75,10 +83,13 @@ export const record = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
-    const completedAt = args.completedAt ?? new Date().toISOString();
+    const parsedMs = args.completedAt ? new Date(args.completedAt).getTime() : NaN;
+    const completedAtMs = !isNaN(parsedMs) ? parsedMs : Date.now();
+    const completedAt = !isNaN(parsedMs)
+      ? args.completedAt!
+      : new Date(completedAtMs).toISOString();
     const sanitizedTagId = args.tagId || undefined;
 
-    const completedAtMs = new Date(completedAt).getTime();
     const recent = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) =>
