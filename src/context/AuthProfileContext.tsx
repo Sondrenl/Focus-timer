@@ -5,6 +5,7 @@ import { UserProfile, DEFAULT_PROFILE, AuthState } from '../types/user';
 import { parseGoogleJwt, buildProfileFromJwt } from '../services/auth/AuthService';
 import { SoundService } from '../services/audio/SoundService';
 import { NotificationService } from '../services/notification/NotificationService';
+import { subscribeReset } from '../services/timer/TimerBroadcast';
 import { useConvexSync } from '../services/convex/useConvexSync';
 import {
   authService,
@@ -13,6 +14,21 @@ import {
   soundService,
   notificationService,
 } from './services';
+
+function pickConvexSettings(s: Partial<UserSettings>) {
+  return {
+    workDurationMinutes: s.workDurationMinutes,
+    shortBreakDurationMinutes: s.shortBreakDurationMinutes,
+    longBreakDurationMinutes: s.longBreakDurationMinutes,
+    longBreakInterval: s.longBreakInterval,
+    autoStartBreaks: s.autoStartBreaks,
+    autoStartPomodoros: s.autoStartPomodoros,
+    soundVolume: s.soundVolume,
+    soundEnabled: s.soundEnabled,
+    notificationsEnabled: s.notificationsEnabled,
+    keepAwake: s.keepAwake,
+  };
+}
 
 export interface AuthProfileContextValue {
   auth: AuthState;
@@ -233,12 +249,39 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           });
         }
       } else if (!storedToken && !storedUser && !hasConvexSession) {
-        await logout();
+        setAuth({
+          isAuthenticated: false,
+          user: null,
+          token: null,
+          isSyncing: false,
+          lastSyncedAt: null,
+          syncError: null,
+          isTokenExpired: false,
+        });
       }
     }
 
     init();
-  }, [isConvexConfigured, setAuthToken, scheduleTokenRefresh, logout]);
+  }, [isConvexConfigured, setAuthToken, scheduleTokenRefresh]);
+
+  // Multi-tab factory-reset listener for profile & settings
+  useEffect(() => {
+    const unsubReset = subscribeReset((scope) => {
+      if (scope === 'factory-reset') {
+        settingsRepository.get().then((loadedSettings) => {
+          settingsRef.current = loadedSettings;
+          setSettings(loadedSettings);
+        });
+        profileRepository.get().then((loadedProfile) => {
+          profileRef.current = loadedProfile;
+          setProfile(loadedProfile);
+        });
+      }
+    });
+    return () => {
+      unsubReset();
+    };
+  }, []);
 
   // Reactive adoption of Convex user profile & settings
   useEffect(() => {
@@ -259,7 +302,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         cur.autoStartPomodoros !== s.autoStartPomodoros ||
         cur.soundVolume !== s.soundVolume ||
         cur.soundEnabled !== s.soundEnabled ||
-        cur.notificationsEnabled !== s.notificationsEnabled;
+        cur.notificationsEnabled !== s.notificationsEnabled ||
+        Boolean(cur.keepAwake) !== Boolean(s.keepAwake);
 
       if (settingsChanged) {
         settingsRef.current = s;
@@ -401,11 +445,18 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   );
 
   const resetProfileToDefaults = useCallback(async (): Promise<UserProfile> => {
+    lastLocalProfileEditMsRef.current = Date.now();
     const defaultProfile = await profileRepository.resetToDefaults();
     profileRef.current = defaultProfile;
     setProfile(defaultProfile);
     if (isConvexConfigured && isEffectiveAuthenticated) {
-      convexMutations.updateProfile(defaultProfile).catch(console.warn);
+      convexMutations
+        .updateProfile({
+          displayName: defaultProfile.displayName,
+          avatarEmoji: defaultProfile.avatarEmoji,
+          dailyGoalMinutes: defaultProfile.dailyGoalMinutes,
+        })
+        .catch(console.warn);
     }
     return defaultProfile;
   }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);
@@ -413,24 +464,29 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const updateSettings = useCallback(
     async (newValues: Partial<UserSettings>): Promise<void> => {
       lastLocalSettingsEditMsRef.current = Date.now();
-      const merged = { ...settingsRef.current, ...newValues };
+      const cleanValues = pickConvexSettings(newValues);
+      const definedValues = Object.fromEntries(
+        Object.entries(cleanValues).filter(([_, v]) => v !== undefined)
+      ) as Partial<UserSettings>;
+      const merged = { ...settingsRef.current, ...definedValues };
       settingsRef.current = merged;
       setSettings(merged);
       await settingsRepository.save(merged);
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations.updateSettings(newValues).catch(console.warn);
+        convexMutations.updateSettings(cleanValues).catch(console.warn);
       }
     },
     [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
   );
 
   const resetSettingsToDefaults = useCallback(async (): Promise<UserSettings> => {
+    lastLocalSettingsEditMsRef.current = Date.now();
     const defaultSettings = await settingsRepository.resetToDefaults();
     settingsRef.current = defaultSettings;
     setSettings(defaultSettings);
     if (isConvexConfigured && isEffectiveAuthenticated) {
-      convexMutations.updateSettings(defaultSettings).catch(console.warn);
+      convexMutations.updateSettings(pickConvexSettings(defaultSettings)).catch(console.warn);
     }
     return defaultSettings;
   }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);

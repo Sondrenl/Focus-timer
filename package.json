@@ -1,7 +1,7 @@
 {
   "name": "pomodor",
   "private": true,
-  "version": "3.0.0",
+  "version": "3.0.1",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -p \"[{name}]\" -n \"Vite,Convex\" -c \"cyan.bold,magenta.bold\" \"npm:dev:frontend\" \"npm:dev:convex\"",

@@ -18,6 +18,7 @@ export const ProfileView: React.FC = () => {
     reloadSampleData,
     isDemoEnvironment,
     auth,
+    isEffectiveAuthenticated,
     loginWithGoogle,
     logout,
     syncWithCloud,
@@ -37,12 +38,12 @@ export const ProfileView: React.FC = () => {
         updateProfile={updateProfile}
         sessions={sessions}
         tags={tags}
-        isAuthenticated={auth.isAuthenticated}
-        userEmail={auth.user?.email}
+        isAuthenticated={isEffectiveAuthenticated}
+        userEmail={auth.user?.email || profile.email}
       />
 
       <CloudSyncCard
-        auth={auth}
+        auth={{ ...auth, isAuthenticated: isEffectiveAuthenticated }}
         loginWithGoogle={loginWithGoogle}
         logout={logout}
         syncWithCloud={syncWithCloud}
@@ -53,7 +54,7 @@ export const ProfileView: React.FC = () => {
         importBackup={importBackup}
         reloadSampleData={reloadSampleData}
         isDemoEnvironment={isDemoEnvironment}
-        isAuthenticated={auth.isAuthenticated}
+        isAuthenticated={isEffectiveAuthenticated}
         statusMessage={statusMessage}
         errorMessage={errorMessage}
         onStatusMessage={setStatusMessage}
@@ -65,7 +66,7 @@ export const ProfileView: React.FC = () => {
         tags={tags}
         coffeeCups={coffeeCups}
         profile={profile}
-        isAuthenticated={auth.isAuthenticated}
+        isAuthenticated={isEffectiveAuthenticated}
         resetAllData={resetAllData}
         onStatusMessage={setStatusMessage}
         onErrorMessage={setErrorMessage}

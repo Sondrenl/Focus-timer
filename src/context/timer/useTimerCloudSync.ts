@@ -75,7 +75,6 @@ export const useTimerCloudSync = ({
   convexTimerMutationsRef.current = convexTimerMutations;
 
   const isInitialMountDoneRef = useRef<boolean>(false);
-  const passivePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastReportedPresenceRef = useRef<{
     isMobile: boolean;
     isVisible: boolean;
@@ -85,11 +84,6 @@ export const useTimerCloudSync = ({
   // Helper to broadcast and push local timer state changes safely without race conditions
   const publishLocalTimerState = useCallback(
     (payload: RemoteTimerState, isUserAction = false) => {
-      if (passivePushTimerRef.current) {
-        clearTimeout(passivePushTimerRef.current);
-        passivePushTimerRef.current = null;
-      }
-
       localUpdatedAtRef.current = payload.updatedAtMs;
       if (isUserAction) {
         lastLocalActionWallMsRef.current = Date.now();
@@ -114,6 +108,7 @@ export const useTimerCloudSync = ({
           convexTimerMutationsRef.current
             .pauseTimer({
               remainingSeconds: payload.remainingSeconds,
+              tagId: payload.activeTagId || undefined,
             })
             .catch(console.warn);
         } else if (payload.status === 'IDLE') {
@@ -396,5 +391,6 @@ export const useTimerCloudSync = ({
     publishLocalTimerState,
     reportPresence,
     applyRemoteState,
+    isInitialMountDoneRef,
   };
 };

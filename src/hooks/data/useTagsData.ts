@@ -57,6 +57,18 @@ export function useTagsData({
     }
   }, []);
 
+  const ensureValidActiveTag = useCallback(
+    (tagList: Tag[]) => {
+      const currentId = activeTagIdRef.current;
+      if (currentId && tagList.some((t) => t.id === currentId && !t.isArchived)) {
+        return;
+      }
+      const nextActive = tagList.find((t) => !t.isArchived);
+      setActiveTagId(nextActive?.id ?? null);
+    },
+    [setActiveTagId]
+  );
+
   // Initial load of tags from local storage
   useEffect(() => {
     async function initTags() {
@@ -74,9 +86,7 @@ export function useTagsData({
         setActiveTagId(storedTagId);
       } else {
         const firstActive = loadedTags.find((t) => !t.isArchived);
-        if (firstActive) {
-          setActiveTagId(firstActive.id);
-        }
+        setActiveTagId(firstActive?.id ?? null);
       }
     }
 
@@ -104,19 +114,21 @@ export function useTagsData({
         tagRepository.saveAll(nextTags);
         return nextTags;
       });
+      ensureValidActiveTag(nextTags);
     }
-  }, [convexUser, isEffectiveAuthenticated]);
+  }, [convexUser, isEffectiveAuthenticated, ensureValidActiveTag]);
 
   // Multi-tab BroadcastChannel synchronization for tags
   useEffect(() => {
     const unsubTags = subscribeTags((incomingTags) => {
       tagRepository.saveAll(incomingTags);
       setTags(incomingTags);
+      ensureValidActiveTag(incomingTags);
     });
     return () => {
       unsubTags();
     };
-  }, []);
+  }, [ensureValidActiveTag]);
 
   const createTag = useCallback(
     async (input: CreateTagInput): Promise<Tag> => {
@@ -145,6 +157,7 @@ export function useTagsData({
       const result = await tagRepository.update(id, updates);
       const updated = await tagRepository.getAll();
       setTags(updated);
+      ensureValidActiveTag(updated);
       broadcastTags(updated);
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
@@ -159,7 +172,7 @@ export function useTagsData({
       }
       return result;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [isConvexConfigured, isEffectiveAuthenticated, convexMutations, ensureValidActiveTag]
   );
 
   const archiveTag = useCallback(
@@ -167,7 +180,7 @@ export function useTagsData({
       const result = await tagRepository.archive(id);
       const updated = await tagRepository.getAll();
       setTags(updated);
-      if (activeTagId === id) {
+      if (activeTagIdRef.current === id) {
         const nextActive = updated.find((t) => !t.isArchived);
         setActiveTagId(nextActive?.id ?? null);
       }
@@ -178,7 +191,7 @@ export function useTagsData({
       }
       return result;
     },
-    [activeTagId, setActiveTagId, isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [setActiveTagId, isConvexConfigured, isEffectiveAuthenticated, convexMutations]
   );
 
   const unarchiveTag = useCallback(
@@ -186,6 +199,9 @@ export function useTagsData({
       const result = await tagRepository.unarchive(id);
       const updated = await tagRepository.getAll();
       setTags(updated);
+      if (!activeTagIdRef.current) {
+        ensureValidActiveTag(updated);
+      }
       broadcastTags(updated);
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
@@ -193,7 +209,7 @@ export function useTagsData({
       }
       return result;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [isConvexConfigured, isEffectiveAuthenticated, convexMutations, ensureValidActiveTag]
   );
 
   const deleteTag = useCallback(
@@ -217,7 +233,7 @@ export function useTagsData({
 
       const updatedTags = await tagRepository.getAll();
       setTags(updatedTags);
-      if (activeTagId === id) {
+      if (activeTagIdRef.current === id) {
         const nextActive = updatedTags.find((t) => !t.isArchived);
         setActiveTagId(nextActive?.id ?? null);
       }
@@ -229,7 +245,6 @@ export function useTagsData({
       return success;
     },
     [
-      activeTagId,
       setActiveTagId,
       isConvexConfigured,
       isEffectiveAuthenticated,

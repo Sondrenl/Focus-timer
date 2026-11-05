@@ -3,6 +3,7 @@ import { CoffeeCup } from '../../types/coffee';
 import {
   broadcastCoffeeCups,
   subscribeCoffeeCups,
+  subscribeReset,
 } from '../../services/timer/TimerBroadcast';
 import { toDateKey } from '../../utils/dates';
 import { coffeeRepository } from '../../context/services';
@@ -79,8 +80,16 @@ export function useCoffeeData({
       coffeeRepository.saveAll(cups);
       setCoffeeCups(cups);
     });
+
+    const unsubReset = subscribeReset(() => {
+      pendingAddsRef.current.clear();
+      pendingDeletesRef.current.clear();
+      setCoffeeCups([]);
+    });
+
     return () => {
       unsubCoffee();
+      unsubReset();
     };
   }, []);
 

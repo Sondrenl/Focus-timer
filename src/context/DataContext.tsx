@@ -100,6 +100,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     convexSync,
     tags,
     setTags,
+    activeTagId,
     setActiveTagId,
     sessions,
     setSessions,

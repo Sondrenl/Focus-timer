@@ -40,7 +40,7 @@ export type {
 };
 
 export function useStatistics() {
-  const { sessions, tags, coffeeCups, auth } = useApp();
+  const { sessions, tags, coffeeCups, isEffectiveAuthenticated } = useApp();
 
   const [periodType, setPeriodType] = useState<TimePeriodType>('week');
   const [referenceDate, setReferenceDate] = useState<Date>(() => new Date());
@@ -87,7 +87,7 @@ export function useStatistics() {
       customRange
     );
 
-    const shouldExcludeSample = isProduction() || auth.isAuthenticated;
+    const shouldExcludeSample = isProduction() || isEffectiveAuthenticated;
     const { periodAllSessions, filteredSessions } = filterPeriodSessions(
       sessions,
       startDate,
@@ -171,7 +171,7 @@ export function useStatistics() {
     customRange,
     isCurrentPeriod,
     todayKey,
-    auth.isAuthenticated,
+    isEffectiveAuthenticated,
   ]);
 
   const topInsight = useMemo(() => {

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { SessionType, TimerStatus, TimerState, PeerPresence } from '../types/timer';
-import { UserSettings } from '../types/settings';
+import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { useApp } from './AppContext';
 import { AuthService } from '../services/auth/AuthService';
 import { subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
@@ -54,7 +54,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     recordSession,
     sound,
     notifications,
-    auth,
+    isEffectiveAuthenticated,
   } = useApp();
 
   const authService = AuthService.getInstance();
@@ -118,8 +118,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const activeTagIdRef = useRef<string | null>(activeTagId);
   activeTagIdRef.current = activeTagId;
 
-  const isAuthenticatedRef = useRef<boolean>(auth.isAuthenticated);
-  isAuthenticatedRef.current = auth.isAuthenticated;
+  const isAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+  isAuthenticatedRef.current = isEffectiveAuthenticated;
 
   const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
 
@@ -142,8 +142,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     publishLocalTimerState,
     reportPresence,
     applyRemoteState,
+    isInitialMountDoneRef,
   } = useTimerCloudSync({
-    isAuthenticated: auth.isAuthenticated,
+    isAuthenticated: isEffectiveAuthenticated,
     isAuthenticatedRef,
     sessionTypeRef,
     statusRef,
@@ -172,6 +173,75 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     notifications,
     authService,
   });
+
+  // Handle duration settings changes when timer is IDLE
+  useEffect(() => {
+    if (status === 'IDLE') {
+      const newDuration = getDurationForType(sessionType);
+      const changed =
+        totalSecondsRef.current !== newDuration ||
+        remainingSecondsRef.current !== newDuration;
+      if (changed) {
+        totalSecondsRef.current = newDuration;
+        remainingSecondsRef.current = newDuration;
+        setTotalSeconds(newDuration);
+        setRemainingSeconds(newDuration);
+
+        if (isInitialMountDoneRef.current) {
+          const now = Date.now();
+          publishLocalTimerState({
+            sessionType: sessionTypeRef.current,
+            status: 'IDLE',
+            remainingSeconds: newDuration,
+            totalSeconds: newDuration,
+            targetEndTime: null,
+            currentCycle: currentCycleRef.current,
+            activeTagId: activeTagIdRef.current,
+            timerRunId: null,
+            updatedAtMs: now,
+          });
+        }
+      }
+    }
+  }, [
+    sessionType,
+    settings.workDurationMinutes,
+    settings.shortBreakDurationMinutes,
+    settings.longBreakDurationMinutes,
+    status,
+    getDurationForType,
+    publishLocalTimerState,
+    isInitialMountDoneRef,
+  ]);
+
+  // Handle activeTagId changes: sync tag selection across tabs and cloud
+  useEffect(() => {
+    if (prevActiveTagIdRef.current === activeTagId) return;
+    prevActiveTagIdRef.current = activeTagId;
+
+    // Ignore initial tag hydration on mount so a newly opened tab doesn't overwrite a running remote timer
+    if (!isInitialMountDoneRef.current && statusRef.current === 'IDLE') {
+      return;
+    }
+
+    const now = authService.getServerNow();
+    const currentRemaining =
+      statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
+        ? Math.max(1, Math.ceil((targetEndTimeRef.current - now) / 1000))
+        : remainingSecondsRef.current;
+
+    publishLocalTimerState({
+      sessionType: sessionTypeRef.current,
+      status: statusRef.current,
+      remainingSeconds: currentRemaining,
+      totalSeconds: totalSecondsRef.current,
+      targetEndTime: targetEndTimeRef.current,
+      currentCycle: currentCycleRef.current,
+      activeTagId,
+      timerRunId: timerRunIdRef.current,
+      updatedAtMs: Date.now(),
+    });
+  }, [activeTagId, authService, publishLocalTimerState, isInitialMountDoneRef]);
 
   // Persist state to localStorage on updates
   useEffect(() => {
@@ -323,7 +393,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     const unsubscribeReset = subscribeReset((scope) => {
-      const defaultDuration = getDurationForType('WORK');
+      const defaultDuration =
+        scope === 'factory-reset'
+          ? Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60))
+          : getDurationForType('WORK');
+      const nowMs = Date.now();
       sessionTypeRef.current = 'WORK';
       statusRef.current = 'IDLE';
       currentCycleRef.current = 1;
@@ -331,7 +405,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       remainingSecondsRef.current = defaultDuration;
       targetEndTimeRef.current = null;
       timerRunIdRef.current = null;
-      localUpdatedAtRef.current = Date.now();
+      localUpdatedAtRef.current = nowMs;
 
       setSessionType('WORK');
       setStatus('IDLE');
@@ -347,13 +421,28 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (scope === 'factory-reset') {
         prevActiveTagIdRef.current = null;
       }
+
+      publishLocalTimerState(
+        {
+          sessionType: 'WORK',
+          status: 'IDLE',
+          remainingSeconds: defaultDuration,
+          totalSeconds: defaultDuration,
+          targetEndTime: null,
+          currentCycle: 1,
+          activeTagId: activeTagIdRef.current,
+          timerRunId: null,
+          updatedAtMs: nowMs,
+        },
+        true
+      );
     });
 
     return () => {
       unsubscribeState();
       unsubscribeReset();
     };
-  }, [getDurationForType, sound, notifications, applyRemoteState]);
+  }, [getDurationForType, sound, notifications, applyRemoteState, publishLocalTimerState]);
 
   // Action: Start timer
   const start = useCallback(() => {

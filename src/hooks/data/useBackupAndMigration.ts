@@ -31,6 +31,7 @@ interface UseBackupAndMigrationParams {
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
   tags: Tag[];
   setTags: React.Dispatch<React.SetStateAction<Tag[]>>;
+  activeTagId: string | null;
   setActiveTagId: (id: string | null) => void;
   sessions: CompletedSession[];
   setSessions: React.Dispatch<React.SetStateAction<CompletedSession[]>>;
@@ -49,6 +50,7 @@ export function useBackupAndMigration({
   convexSync,
   tags,
   setTags,
+  activeTagId,
   setActiveTagId,
   sessions,
   setSessions,
@@ -244,7 +246,7 @@ export function useBackupAndMigration({
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
     return {
-      version: '3.0.0',
+      version: '3.0.1',
       exportedAt: new Date().toISOString(),
       profile,
       tags,
@@ -365,12 +367,18 @@ export function useBackupAndMigration({
         await coffeeRepository.clear();
 
         finalTags = validTags.length > 0 ? validTags : await tagRepository.resetToDefaults();
-        finalSessions = [...validSessions].sort(
-          (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
-        );
-        finalCoffee = [...validCoffee].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
+        const validTagIds = new Set(finalTags.map((t) => t.id));
+        const resolveReplaceTagId = (rawTagId?: string | null): string | null => {
+          if (!rawTagId) return null;
+          return validTagIds.has(rawTagId) ? rawTagId : null;
+        };
+
+        finalSessions = validSessions
+          .map((s) => ({ ...s, tagId: resolveReplaceTagId(s.tagId) }))
+          .sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+        finalCoffee = validCoffee
+          .map((c) => ({ ...c, tagId: resolveReplaceTagId(c.tagId) }))
+          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
         await tagRepository.saveAll(finalTags);
         await sessionRepository.saveAll(finalSessions);
@@ -380,6 +388,11 @@ export function useBackupAndMigration({
         setSessions(finalSessions);
         setCoffeeCups(finalCoffee);
 
+        if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
+          const nextActive = finalTags.find((t) => !t.isArchived);
+          setActiveTagId(nextActive?.id ?? null);
+        }
+
         broadcastTags(finalTags);
         broadcastCoffeeCups(finalCoffee);
 
@@ -388,21 +401,43 @@ export function useBackupAndMigration({
         coffeeAdded = finalCoffee.length;
       } else {
         const existingTagIds = new Set(tags.map((t) => t.id));
-        const existingTagNames = new Set(tags.map((t) => t.name.toLowerCase().trim()));
+        const existingTagByName = new Map(
+          tags.map((t) => [t.name.toLowerCase().trim(), t.id])
+        );
+        const tagIdRemap = new Map<string, string>();
+        tags.forEach((t) => tagIdRemap.set(t.id, t.id));
+
         const newTagsToKeep: Tag[] = [];
 
         for (const t of validTags) {
           const nameKey = t.name.toLowerCase().trim();
-          if (!existingTagIds.has(t.id) && !existingTagNames.has(nameKey)) {
+          const existingIdByName = existingTagByName.get(nameKey);
+          if (existingIdByName) {
+            tagIdRemap.set(t.id, existingIdByName);
+          } else if (existingTagIds.has(t.id)) {
+            tagIdRemap.set(t.id, t.id);
+          } else {
             newTagsToKeep.push(t);
             existingTagIds.add(t.id);
-            existingTagNames.add(nameKey);
+            existingTagByName.set(nameKey, t.id);
+            tagIdRemap.set(t.id, t.id);
             tagsAdded++;
           }
         }
         finalTags = [...tags, ...newTagsToKeep];
+        const validFinalTagIds = new Set(finalTags.map((t) => t.id));
+        const resolveMergeTagId = (rawTagId?: string | null): string | null => {
+          if (!rawTagId) return null;
+          const mapped = tagIdRemap.get(rawTagId) ?? rawTagId;
+          return validFinalTagIds.has(mapped) ? mapped : null;
+        };
+
         await tagRepository.saveAll(finalTags);
         setTags(finalTags);
+        if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
+          const nextActive = finalTags.find((t) => !t.isArchived);
+          setActiveTagId(nextActive?.id ?? null);
+        }
         broadcastTags(finalTags);
 
         const baseSessions = (isProduction() || isEffectiveAuthenticated)
@@ -417,7 +452,10 @@ export function useBackupAndMigration({
         for (const s of validSessions) {
           const sessionKey = `${s.sessionType}-${s.completedAt}`;
           if (!existingSessionIds.has(s.id) && !existingSessionKeys.has(sessionKey)) {
-            newSessionsToKeep.push(s);
+            newSessionsToKeep.push({
+              ...s,
+              tagId: resolveMergeTagId(s.tagId),
+            });
             existingSessionIds.add(s.id);
             existingSessionKeys.add(sessionKey);
             sessionsAdded++;
@@ -436,7 +474,10 @@ export function useBackupAndMigration({
         for (const c of validCoffee) {
           const cupKey = `${c.date}-${c.createdAt}`;
           if (!existingCupIds.has(c.id) && !existingCupKeys.has(cupKey)) {
-            newCoffeeToKeep.push(c);
+            newCoffeeToKeep.push({
+              ...c,
+              tagId: resolveMergeTagId(c.tagId),
+            });
             existingCupIds.add(c.id);
             existingCupKeys.add(cupKey);
             coffeeAdded++;
@@ -466,22 +507,25 @@ export function useBackupAndMigration({
       }
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
+        const tagsForConvex = mode === 'replace' ? finalTags : validTags;
+        const sessionsForConvex = mode === 'replace' ? finalSessions : validSessions;
+        const coffeeForConvex = mode === 'replace' ? finalCoffee : validCoffee;
         syncBackupToConvexChunked(
           mode,
-          validTags.map((t) => ({
+          tagsForConvex.map((t) => ({
             id: t.id,
             name: t.name,
             color: t.color,
             isArchived: t.isArchived,
           })),
-          validSessions.map((s) => ({
+          sessionsForConvex.map((s) => ({
             id: s.id,
             tagId: s.tagId || undefined,
             sessionType: s.sessionType,
             durationSeconds: s.durationSeconds,
             completedAt: s.completedAt,
           })),
-          validCoffee.map((c) => ({
+          coffeeForConvex.map((c) => ({
             id: c.id,
             date: c.date,
             tagId: c.tagId || undefined,
@@ -500,12 +544,14 @@ export function useBackupAndMigration({
       isEffectiveAuthenticated,
       isConvexConfigured,
       tags,
+      activeTagId,
       sessions,
       coffeeCups,
       updateSettings,
       updateProfile,
       syncBackupToConvexChunked,
       setTags,
+      setActiveTagId,
       setSessions,
       setCoffeeCups,
     ]
@@ -513,12 +559,13 @@ export function useBackupAndMigration({
 
   const resetAllData = useCallback(
     async (scope: 'sessions-only' | 'factory-reset'): Promise<void> => {
-      broadcastReset(scope);
       if (scope === 'sessions-only') {
         await sessionRepository.clear();
         await coffeeRepository.clear();
         setSessions([]);
         setCoffeeCups([]);
+        broadcastCoffeeCups([]);
+        broadcastReset(scope);
         if (isConvexConfigured && isEffectiveAuthenticated) {
           convexMutations.clearSessions({}).catch(console.warn);
           convexMutations.clearCoffee({}).catch(console.warn);
@@ -534,6 +581,10 @@ export function useBackupAndMigration({
         setCoffeeCups([]);
         setTags(defaultTags);
         setActiveTagId(defaultTags[0]?.id || null);
+
+        broadcastCoffeeCups([]);
+        broadcastTags(defaultTags);
+        broadcastReset(scope);
 
         if (isConvexConfigured && isEffectiveAuthenticated) {
           convexMutations.clearSessions({}).catch(console.warn);

@@ -22,6 +22,8 @@ export interface UserSettings {
   soundEnabled: boolean;
   /** Browser notification permission preference */
   notificationsEnabled: boolean;
+  /** Optional screen wake lock preference */
+  keepAwake?: boolean;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {

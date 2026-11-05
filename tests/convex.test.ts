@@ -117,7 +117,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(coffeeCups[0].tagId).toBeNull();
 
     const activeTimer = await asUser.query(api.timer.getActive, {});
-    expect(activeTimer?.tagId).toBeUndefined();
+    expect(activeTimer?.activeTagId).toBeNull();
   });
 
   it("advances active_timers to the next interval in IDLE status when onTimerCompleted fires (Option A)", async () => {
@@ -214,5 +214,79 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     const cloudCoffee = await asUser.query(api.coffee.list, {});
     expect(cloudCoffee).toHaveLength(1);
     expect(cloudCoffee[0].date).toBe("2026-03-12");
+  });
+
+  it("updates tagId when timer.pause is called with a new tag selection while PAUSED", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      remainingSeconds: 1500,
+      totalSeconds: 1500,
+      currentCycle: 1,
+      tagId: "tag-study",
+      timerRunId: "run-pause-tag",
+    });
+
+    await asUser.mutation(api.timer.pause, {
+      remainingSeconds: 1200,
+      tagId: "tag-study",
+    });
+
+    // Change tag while paused
+    await asUser.mutation(api.timer.pause, {
+      remainingSeconds: 1200,
+      tagId: "tag-work",
+    });
+
+    const activeTimer = await asUser.query(api.timer.getActive, {});
+    expect(activeTimer?.status).toBe("PAUSED");
+    expect(activeTimer?.remainingSeconds).toBe(1200);
+    expect(activeTimer?.activeTagId).toBe("tag-work");
+  });
+
+  it("remaps duplicate-named tags and sanitizes orphaned tagIds during migrations.importBackup merge", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    await asUser.mutation(api.migrations.importBackup, {
+      mode: "merge",
+      tags: [{ id: "external-study-id", name: "Study & Learning", color: "#3B82F6" }],
+      sessions: [
+        {
+          id: "s-remapped",
+          tagId: "external-study-id",
+          sessionType: "WORK",
+          durationSeconds: 1500,
+          completedAt: "2026-03-15T10:00:00.000Z",
+        },
+        {
+          id: "s-orphaned",
+          tagId: "non-existent-tag",
+          sessionType: "WORK",
+          durationSeconds: 1500,
+          completedAt: "2026-03-15T11:00:00.000Z",
+        },
+      ],
+      coffeeCups: [
+        {
+          id: "c-remapped",
+          date: "2026-03-15",
+          tagId: "external-study-id",
+          createdAt: "2026-03-15T10:30:00.000Z",
+        },
+      ],
+    });
+
+    const sessions = await asUser.query(api.sessions.list, {});
+    const remappedSession = sessions?.find((s) => s.completedAt === "2026-03-15T10:00:00.000Z");
+    const orphanedSession = sessions?.find((s) => s.completedAt === "2026-03-15T11:00:00.000Z");
+    expect(remappedSession?.tagId).toBe("tag-study");
+    expect(orphanedSession?.tagId).toBeNull();
+
+    const coffee = await asUser.query(api.coffee.list, {});
+    expect(coffee?.[0]?.tagId).toBe("tag-study");
   });
 });

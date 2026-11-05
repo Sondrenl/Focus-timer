@@ -113,6 +113,7 @@ export const start = mutation({
 export const pause = mutation({
   args: {
     remainingSeconds: v.number(),
+    tagId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx);
@@ -124,8 +125,13 @@ export const pause = mutation({
     if (!existing) return null;
 
     const sanitizedRemaining = Math.max(0, args.remainingSeconds);
+    const nextTagId = args.tagId !== undefined ? (args.tagId || undefined) : existing.tagId;
     // Capacity optimization: skip redundant patch if already paused at identical remaining seconds
-    if (existing.status === "PAUSED" && existing.remainingSeconds === sanitizedRemaining) {
+    if (
+      existing.status === "PAUSED" &&
+      existing.remainingSeconds === sanitizedRemaining &&
+      (existing.tagId ?? undefined) === nextTagId
+    ) {
       return existing;
     }
 
@@ -134,6 +140,7 @@ export const pause = mutation({
     const updates = {
       status: "PAUSED" as const,
       remainingSeconds: sanitizedRemaining,
+      tagId: nextTagId,
       targetEndTime: undefined,
       scheduledCompletionId: undefined,
       updatedAtMs: Date.now(),

@@ -4,6 +4,7 @@ import { isSampleSessionId } from '../../services/repository/SessionRepository';
 import {
   broadcastSession,
   subscribeSessions,
+  subscribeReset,
 } from '../../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../../utils/environment';
 import { sessionRepository } from '../../context/services';
@@ -23,6 +24,8 @@ export function useSessionsData({
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
   const sessionsRef = useRef<CompletedSession[]>(sessions);
   sessionsRef.current = sessions;
+
+  const pendingAddsRef = useRef<Map<string, CompletedSession>>(new Map());
 
   const isDemoEnvironment = useMemo(() => isPreviewOrDev(), []);
 
@@ -61,7 +64,30 @@ export function useSessionsData({
   // Reactive adoption of Convex sessions
   useEffect(() => {
     if (!isEffectiveAuthenticated || !Array.isArray(convexSessions)) return;
-    const sorted = [...(convexSessions as CompletedSession[])].sort(
+    const serverSessions = convexSessions as CompletedSession[];
+    const pendingAdds = Array.from(pendingAddsRef.current.values());
+
+    const serverIds = new Set(serverSessions.map((s) => s.id));
+    const serverTimes = serverSessions.map((s) => ({
+      sessionType: s.sessionType,
+      completedAt: s.completedAt,
+      ms: new Date(s.completedAt).getTime(),
+    }));
+
+    const unconfirmedAdds = pendingAdds.filter((a) => {
+      if (serverIds.has(a.id)) return false;
+      const aMs = new Date(a.completedAt).getTime();
+      return !serverTimes.some(
+        (r) =>
+          r.completedAt === a.completedAt ||
+          (r.sessionType === a.sessionType &&
+            !isNaN(aMs) &&
+            !isNaN(r.ms) &&
+            Math.abs(r.ms - aMs) <= 45000)
+      );
+    });
+
+    const sorted = [...serverSessions, ...unconfirmedAdds].sort(
       (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
     );
     setSessions((prev) => {
@@ -94,14 +120,25 @@ export function useSessionsData({
         );
       });
     });
+
+    const unsubReset = subscribeReset(() => {
+      pendingAddsRef.current.clear();
+      setSessions([]);
+    });
+
     return () => {
       unsubSessions();
+      unsubReset();
     };
   }, []);
 
   const recordSession = useCallback(
     async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
       const created = await sessionRepository.add(sessionData);
+      if (!isSampleSessionId(created.id)) {
+        pendingAddsRef.current.set(created.id, created);
+      }
+
       setSessions((prev) => {
         if (prev.some((s) => s.id === created.id)) return prev;
         return [
@@ -120,6 +157,7 @@ export function useSessionsData({
             completedAt: created.completedAt,
           })
           .then((serverSession) => {
+            pendingAddsRef.current.delete(created.id);
             if (serverSession && serverSession.id) {
               setSessions((prev) =>
                 prev.map((s) =>
@@ -138,7 +176,10 @@ export function useSessionsData({
               });
             }
           })
-          .catch(console.warn);
+          .catch((err) => {
+            pendingAddsRef.current.delete(created.id);
+            console.warn(err);
+          });
       }
       return created;
     },
@@ -146,6 +187,7 @@ export function useSessionsData({
   );
 
   const clearSessions = useCallback(async (): Promise<void> => {
+    pendingAddsRef.current.clear();
     await sessionRepository.clear();
     setSessions([]);
     if (isConvexConfigured && isEffectiveAuthenticated) {
