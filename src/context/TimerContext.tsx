@@ -1,75 +1,26 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { SessionType, TimerStatus, TimerState, RemoteTimerState, PeerPresence } from '../types/timer';
+import { SessionType, TimerStatus, TimerState, PeerPresence } from '../types/timer';
 import { UserSettings } from '../types/settings';
 import { useApp } from './AppContext';
-import { triggerCompletionConfetti } from '../utils/confetti';
-import { isMobileDevice } from '../utils/environment';
 import { AuthService } from '../services/auth/AuthService';
-import { broadcastTimerState, subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
+import { subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
-import { useConvexTimer } from '../services/convex/useConvexTimer';
-import { formatTime } from '../utils/formatters';
-import { computeNextInterval, getDurationForType as getBaseDurationForType } from '../utils/timerTransitions';
-import { evaluateDeviceAlert } from '../utils/arbitration';
+import {
+  computeNextInterval,
+  getDurationForType as getBaseDurationForType,
+} from '../utils/timerTransitions';
+import {
+  DEVICE_ID,
+  DEVICE_SESSION_ID,
+  SavedTimerState,
+  loadInitialTimerState,
+  saveTimerState,
+} from './timer/timerPersistence';
+import { useTimerAlerts } from './timer/useTimerAlerts';
+import { useTimerCloudSync } from './timer/useTimerCloudSync';
+import { useTimerWorker } from './timer/useTimerWorker';
 
-const WORKER_SCRIPT = `
-  let timerId = null;
-  self.onmessage = function(e) {
-    if (e.data === 'START') {
-      if (!timerId) {
-        timerId = setInterval(function() {
-          self.postMessage('TICK');
-        }, 250);
-      }
-    } else if (e.data === 'STOP') {
-      if (timerId) {
-        clearInterval(timerId);
-        timerId = null;
-      }
-    }
-  };
-`;
-
-const TIMER_STORAGE_KEY = 'timer_state_v1';
-const DEVICE_ID_KEY = 'focus_timer_device_id_v1';
-const SESSION_ALIVE_KEY = 'focus_timer_session_alive_v1';
-
-const getOrCreateDeviceId = (): string => {
-  if (typeof window === 'undefined') return 'server';
-  try {
-    let id = localStorage.getItem(DEVICE_ID_KEY);
-    if (!id) {
-      id = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `dev-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      localStorage.setItem(DEVICE_ID_KEY, id);
-    }
-    return id;
-  } catch {
-    return `dev-${Date.now()}`;
-  }
-};
-
-const DEVICE_ID = getOrCreateDeviceId();
-const IS_MOBILE = isMobileDevice();
-
-export const DEVICE_SESSION_ID = `${DEVICE_ID}_${TAB_ID}`;
-
-interface SavedTimerState {
-  sessionType: SessionType;
-  status: TimerStatus;
-  currentCycle: number;
-  remainingSeconds: number;
-  totalSeconds: number;
-  targetEndTime: number | null;
-  timerRunId: string | null;
-  updatedAtMs: number;
-  activeTagId: string | null;
-  deviceId: string;
-  tabId: string;
-  lastActiveAtMs: number;
-  wasHidden?: boolean;
-}
+export { DEVICE_SESSION_ID };
 
 export interface TimerContextValue {
   state: TimerState;
@@ -104,13 +55,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sound,
     notifications,
     auth,
-    sessions,
   } = useApp();
 
   const authService = AuthService.getInstance();
-  const { isConvexConfigured, remoteTimer, mutations: convexTimerMutations } = useConvexTimer(auth.isAuthenticated);
-  const convexTimerMutationsRef = useRef(convexTimerMutations);
-  convexTimerMutationsRef.current = convexTimerMutations;
 
   // Retrieve initial duration configured in user preferences
   const getDurationForType = useCallback(
@@ -120,67 +67,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [settings]
   );
 
-  // Initialize timer state from storage or default to 25 minutes WORK
-  const [initialState] = useState<SavedTimerState>(() => {
-    const defaultSec = Math.round(settings.workDurationMinutes * 60);
-    const fallback: SavedTimerState = {
-      sessionType: 'WORK',
-      status: 'IDLE',
-      currentCycle: 1,
-      remainingSeconds: defaultSec,
-      totalSeconds: defaultSec,
-      targetEndTime: null,
-      timerRunId: null,
-      updatedAtMs: Date.now(),
-      activeTagId: null,
-      deviceId: DEVICE_ID,
-      tabId: TAB_ID,
-      lastActiveAtMs: Date.now(),
-      wasHidden: false,
-    };
-
-    if (typeof window === 'undefined') return fallback;
-
-    try {
-      const stored = localStorage.getItem(TIMER_STORAGE_KEY);
-      if (!stored) return fallback;
-      const parsed = JSON.parse(stored) as SavedTimerState;
-
-      // Handle running timers across tab restarts or browser crashes
-      if (parsed.status === 'RUNNING' && parsed.targetEndTime) {
-        const now = Date.now();
-        const diffMs = parsed.targetEndTime - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-        if (diffSec <= 0) {
-          // If session expired more than 15 minutes ago while closed, reset to IDLE without recording stale session
-          if (diffMs < -900000) {
-            return {
-              ...parsed,
-              status: 'IDLE',
-              targetEndTime: null,
-              timerRunId: null,
-              remainingSeconds: parsed.totalSeconds,
-            };
-          }
-          // Expired while closed, preserve state so mount effect can record and alert
-          return {
-            ...parsed,
-            remainingSeconds: 0,
-          };
-        }
-
-        return {
-          ...parsed,
-          remainingSeconds: diffSec,
-        };
-      }
-
-      return parsed;
-    } catch {
-      return fallback;
-    }
-  });
+  // Initialize timer state from storage or default to configured work duration
+  const [initialState] = useState<SavedTimerState>(() =>
+    loadInitialTimerState(settings.workDurationMinutes)
+  );
 
   const [sessionType, setSessionType] = useState<SessionType>(initialState.sessionType);
   const [status, setStatus] = useState<TimerStatus>(initialState.status);
@@ -196,10 +86,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const localUpdatedAtRef = useRef<number>(initialState.updatedAtMs || Date.now());
   const lastLocalActionWallMsRef = useRef<number>(0);
   const timerRunIdRef = useRef<string | null>(initialState.timerRunId || null);
-  const isInitialMountDoneRef = useRef<boolean>(false);
-  const passivePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
-
   const lastTickWallMsRef = useRef<number>(Date.now());
 
   const peerPresenceRef = useRef<PeerPresence>({
@@ -234,181 +121,57 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isAuthenticatedRef = useRef<boolean>(auth.isAuthenticated);
   isAuthenticatedRef.current = auth.isAuthenticated;
 
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
 
-  /**
-   * Determines whether THIS device should play the completion chime and show the notification:
-   */
-  const shouldThisDeviceAlert = useCallback((type: SessionType): boolean => {
-    const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-    return evaluateDeviceAlert({
-      isMobile: IS_MOBILE,
-      isVisible,
-      peer: peerPresenceRef.current,
-      type,
-    });
-  }, []);
+  const {
+    syncScheduledNotification,
+    dispatchCompletionAlert,
+    triggerCompletionConfetti,
+  } = useTimerAlerts({
+    statusRef,
+    sessionTypeRef,
+    targetEndTimeRef,
+    timerRunIdRef,
+    settingsRef,
+    peerPresenceRef,
+    sound,
+    notifications,
+  });
 
-  const lastAlertWallMsRef = useRef<number>(0);
-  const lastAlertRunIdRef = useRef<string | null>(null);
-
-  const syncScheduledNotification = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    if (statusRef.current !== 'RUNNING' || !targetEndTimeRef.current) {
-      notifications.cancelScheduledNotification();
-      return;
-    }
-
-    const currentType = sessionTypeRef.current;
-    const shouldAlert = shouldThisDeviceAlert(currentType);
-    const runId = timerRunIdRef.current;
-
-    if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
-      notifications.scheduleTimerNotification(
-        targetEndTimeRef.current,
-        currentType,
-        shouldAlert,
-        runId
-      );
-    } else {
-      notifications.cancelScheduledNotification();
-    }
-  }, [notifications, shouldThisDeviceAlert]);
-
-  const dispatchCompletionAlert = useCallback(
-    (completedSessionType: SessionType, runId?: string | null) => {
-      const now = Date.now();
-      const currentRunId = runId || timerRunIdRef.current;
-
-      if (currentRunId && lastAlertRunIdRef.current === currentRunId) {
-        return;
-      }
-
-      if (now - lastAlertWallMsRef.current < 4000) {
-        return;
-      }
-
-      lastAlertWallMsRef.current = now;
-      lastAlertRunIdRef.current = currentRunId || null;
-
-      const currentSettings = settingsRef.current;
-      const willAlert = shouldThisDeviceAlert(completedSessionType);
-
-      if (!willAlert) {
-        return;
-      }
-
-      if (currentSettings.notificationsEnabled) {
-        const title =
-          completedSessionType === 'WORK'
-            ? 'Pomodor — Focus session complete'
-            : 'Pomodor — Break session complete';
-        const body =
-          completedSessionType === 'WORK'
-            ? 'Your focus timer has finished. Time for a break.'
-            : 'Your break timer has finished. Time for a focus session.';
-
-        notifications.notify(title, body, false, currentRunId);
-      }
-
-      if (currentSettings.soundEnabled) {
-        sound.playChime(currentSettings.soundVolume);
-      }
-    },
-    [notifications, sound, shouldThisDeviceAlert]
-  );
-
-  // Helper to broadcast and push local timer state changes safely without race conditions
-  const publishLocalTimerState = useCallback(
-    (payload: RemoteTimerState, isUserAction = false) => {
-      if (passivePushTimerRef.current) {
-        clearTimeout(passivePushTimerRef.current);
-        passivePushTimerRef.current = null;
-      }
-
-      localUpdatedAtRef.current = payload.updatedAtMs;
-      if (isUserAction) {
-        lastLocalActionWallMsRef.current = Date.now();
-      }
-
-      broadcastTimerState(payload);
-
-      if (isConvexConfigured && isAuthenticatedRef.current) {
-        if (payload.status === 'RUNNING') {
-          convexTimerMutationsRef.current.startTimer({
-            sessionType: payload.sessionType,
-            durationSeconds: payload.totalSeconds,
-            remainingSeconds: payload.remainingSeconds,
-            totalSeconds: payload.totalSeconds,
-            currentCycle: payload.currentCycle,
-            tagId: payload.activeTagId || undefined,
-            timerRunId: payload.timerRunId || `run-${Date.now()}`,
-          }).catch(console.warn);
-        } else if (payload.status === 'PAUSED') {
-          convexTimerMutationsRef.current.pauseTimer({
-            remainingSeconds: payload.remainingSeconds,
-          }).catch(console.warn);
-        } else if (payload.status === 'IDLE') {
-          convexTimerMutationsRef.current.resetTimer({
-            sessionType: payload.sessionType,
-            durationSeconds: payload.totalSeconds,
-            currentCycle: payload.currentCycle,
-            tagId: payload.activeTagId || undefined,
-          }).catch(console.warn);
-        }
-      }
-    },
-    [isConvexConfigured]
-  );
-
-  const lastReportedPresenceRef = useRef<{ isMobile: boolean; isVisible: boolean; time: number } | null>(null);
-
-  const reportPresence = useCallback((isVisible: boolean) => {
-    if (!isConvexConfigured || !isAuthenticatedRef.current) return;
-    const now = Date.now();
-    const last = lastReportedPresenceRef.current;
-    if (
-      last &&
-      last.isMobile === IS_MOBILE &&
-      last.isVisible === isVisible &&
-      now - last.time < 60000
-    ) {
-      return;
-    }
-    lastReportedPresenceRef.current = { isMobile: IS_MOBILE, isVisible, time: now };
-    convexTimerMutationsRef.current.updatePresence({
-      isMobile: IS_MOBILE,
-      isVisible,
-    }).catch(() => {});
-  }, [isConvexConfigured]);
-
-  // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      isInitialMountDoneRef.current = true;
-    }, 600);
-    return () => clearTimeout(timer);
-  }, []);
-
-  // Register device presence eagerly when authenticated so peers detect each other immediately
-  useEffect(() => {
-    if (isConvexConfigured && auth.isAuthenticated) {
-      reportPresence(typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true);
-    }
-  }, [isConvexConfigured, auth.isAuthenticated, reportPresence]);
-
-  // Manage screen wake lock: keep screen awake while timer is actively running
-  useEffect(() => {
-    if (status === 'RUNNING') {
-      wakeLockService.acquire();
-    } else {
-      wakeLockService.release();
-    }
-    return () => {
-      wakeLockService.release();
-    };
-  }, [status]);
+  const {
+    publishLocalTimerState,
+    reportPresence,
+    applyRemoteState,
+  } = useTimerCloudSync({
+    isAuthenticated: auth.isAuthenticated,
+    isAuthenticatedRef,
+    sessionTypeRef,
+    statusRef,
+    currentCycleRef,
+    totalSecondsRef,
+    remainingSecondsRef,
+    targetEndTimeRef,
+    timerRunIdRef,
+    localUpdatedAtRef,
+    lastLocalActionWallMsRef,
+    lastTickWallMsRef,
+    prevActiveTagIdRef,
+    peerPresenceRef,
+    settingsRef,
+    handleCompleteRef,
+    setSessionType,
+    setStatus,
+    setCurrentCycle,
+    setTotalSeconds,
+    setRemainingSeconds,
+    setTargetEndTime,
+    setActiveTagId,
+    getDurationForType,
+    dispatchCompletionAlert,
+    sound,
+    notifications,
+    authService,
+  });
 
   // Persist state to localStorage on updates
   useEffect(() => {
@@ -427,62 +190,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastActiveAtMs: Date.now(),
       wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
     };
-    try {
-      localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
-      sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
-    } catch {
-      // Storage errors ignored
-    }
+    saveTimerState(stateToSave, true);
   }, [sessionType, status, currentCycle, remainingSeconds, totalSeconds, targetEndTime, activeTagId]);
-
-  // Report device unload when the browser tab or app is closed
-  useEffect(() => {
-    const handlePageHide = (e: PageTransitionEvent) => {
-      wakeLockService.release();
-      if (e.persisted) return;
-      reportPresence(false);
-    };
-
-    window.addEventListener('pagehide', handlePageHide);
-    return () => {
-      window.removeEventListener('pagehide', handlePageHide);
-    };
-  }, [reportPresence]);
-
-  // Keep audio silent keep-alive running while timer is active
-  useEffect(() => {
-    if (status === 'RUNNING') {
-      sound.startSilentKeepAlive();
-    } else {
-      sound.stopSilentKeepAlive(false);
-    }
-    return () => {
-      sound.stopSilentKeepAlive(false);
-    };
-  }, [status, sound]);
-
-  // Synchronize document tab title with timer progress, status, and remaining time
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-
-    const mode =
-      sessionType === 'WORK'
-        ? 'Focus'
-        : sessionType === 'SHORT_BREAK'
-        ? 'Short Break'
-        : 'Long Break';
-    const timeFormatted = formatTime(remainingSeconds);
-
-    if (status === 'RUNNING') {
-      document.title = `${timeFormatted} | ${mode}`;
-    } else if (status === 'PAUSED') {
-      document.title = `Paused | ${mode}`;
-    } else if (status === 'COMPLETED') {
-      document.title = `${mode} Completed!`;
-    } else {
-      document.title = 'Pomodor - Focus timer';
-    }
-  }, [status, remainingSeconds, sessionType]);
 
   // Completion handler callback
   const handleComplete = useCallback(
@@ -569,338 +278,39 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     },
     [
-      getDurationForType,
       recordSession,
       sound,
       notifications,
       publishLocalTimerState,
       syncScheduledNotification,
       dispatchCompletionAlert,
+      triggerCompletionConfetti,
     ]
   );
 
-  const handleCompleteRef = useRef(handleComplete);
   handleCompleteRef.current = handleComplete;
 
-  // Method to apply authoritative remote timer state
-  const applyRemoteState = useCallback(
-    (remote: RemoteTimerState) => {
-      const nowMs = Date.now();
-      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 1500;
-      const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
-
-      // Only reject remote state if the user directly clicked a button on THIS device
-      // in the last 1.5s AND the remote snapshot is older than that button click.
-      if (hasRecentLocalAction && !isNewer) {
-        return;
-      }
-
-      const now = authService.getServerNow();
-
-      // Trigger completion alert when remote signals completion or advances to next interval at end time
-      if (
-        statusRef.current === 'RUNNING' &&
-        (remote.status === 'COMPLETED' ||
-          (remote.status === 'IDLE' &&
-            remote.sessionType !== sessionTypeRef.current &&
-            targetEndTimeRef.current !== null &&
-            now >= targetEndTimeRef.current - 5000))
-      ) {
-        const completedType = sessionTypeRef.current;
-        const completedRunId = timerRunIdRef.current || remote.timerRunId || `${completedType.toLowerCase()}-${now}`;
-        dispatchCompletionAlert(completedType, completedRunId);
-      }
-
-      localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
-
-      if (remote.status === 'RUNNING' && remote.targetEndTime) {
-        const diffMs = remote.targetEndTime - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-        if (diffSec > 0) {
-          sound.startSilentKeepAlive();
-          wakeLockService.acquire();
-
-          sessionTypeRef.current = remote.sessionType;
-          currentCycleRef.current = remote.currentCycle || 1;
-          totalSecondsRef.current = remote.totalSeconds;
-          remainingSecondsRef.current = diffSec;
-          statusRef.current = 'RUNNING';
-          setSessionType(remote.sessionType);
-          setCurrentCycle(remote.currentCycle || 1);
-          setTotalSeconds(remote.totalSeconds);
-          timerRunIdRef.current = remote.timerRunId || null;
-          if (remote.activeTagId !== undefined && setActiveTagId) {
-            prevActiveTagIdRef.current = remote.activeTagId;
-            setActiveTagId(remote.activeTagId);
-          }
-
-          targetEndTimeRef.current = remote.targetEndTime;
-          setTargetEndTime(remote.targetEndTime);
-          setRemainingSeconds(diffSec);
-          setStatus('RUNNING');
-          lastTickWallMsRef.current = Date.now();
-
-          if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
-            notifications.scheduleTimerNotification(
-              Date.now() + diffSec * 1000,
-              remote.sessionType,
-              true,
-              remote.timerRunId
-            );
-          } else {
-            notifications.cancelScheduledNotification();
-          }
-        } else {
-          if (diffMs < -900000) {
-            const dur = getDurationForType(remote.sessionType);
-            sessionTypeRef.current = remote.sessionType;
-            totalSecondsRef.current = dur;
-            remainingSecondsRef.current = dur;
-            statusRef.current = 'IDLE';
-            setSessionType(remote.sessionType);
-            setTotalSeconds(dur);
-            setRemainingSeconds(dur);
-            setStatus('IDLE');
-            targetEndTimeRef.current = null;
-            setTargetEndTime(null);
-            timerRunIdRef.current = null;
-            notifications.cancelScheduledNotification();
-            sound.stopSilentKeepAlive(false);
-            wakeLockService.release();
-            return;
-          }
-
-          const expiredLongAgo = diffMs < -60000;
-          handleCompleteRef.current(expiredLongAgo);
-        }
-      } else if (remote.status === 'PAUSED') {
-        sessionTypeRef.current = remote.sessionType;
-        currentCycleRef.current = remote.currentCycle || 1;
-        totalSecondsRef.current = remote.totalSeconds;
-        remainingSecondsRef.current = remote.remainingSeconds;
-        statusRef.current = 'PAUSED';
-        setSessionType(remote.sessionType);
-        setCurrentCycle(remote.currentCycle || 1);
-        setTotalSeconds(remote.totalSeconds);
-        timerRunIdRef.current = remote.timerRunId || null;
-        if (remote.activeTagId !== undefined && setActiveTagId) {
-          prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId);
-        }
-
-        sound.stopSilentKeepAlive(true);
-        wakeLockService.release();
-        notifications.cancelScheduledNotification();
-        targetEndTimeRef.current = null;
-        setTargetEndTime(null);
-        setRemainingSeconds(remote.remainingSeconds);
-        setStatus('PAUSED');
-      } else {
-        const nextStatus: TimerStatus = remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
-        const dur =
-          remote.remainingSeconds && remote.remainingSeconds > 0
-            ? remote.remainingSeconds
-            : remote.status === 'COMPLETED' && remote.totalSeconds && remote.totalSeconds > 0
-            ? remote.totalSeconds
-            : getDurationForType(remote.sessionType);
-        const tot = remote.totalSeconds && remote.totalSeconds > 0
-          ? remote.totalSeconds
-          : dur;
-
-        sessionTypeRef.current = remote.sessionType;
-        currentCycleRef.current = remote.currentCycle || 1;
-        totalSecondsRef.current = tot;
-        remainingSecondsRef.current = dur;
-        statusRef.current = nextStatus;
-        setSessionType(remote.sessionType);
-        setCurrentCycle(remote.currentCycle || 1);
-        setTotalSeconds(tot);
-        timerRunIdRef.current = remote.timerRunId || null;
-        if (remote.activeTagId !== undefined && setActiveTagId) {
-          prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId);
-        }
-
-        sound.stopSilentKeepAlive(false);
-        wakeLockService.release();
-        notifications.cancelScheduledNotification();
-        targetEndTimeRef.current = null;
-        setTargetEndTime(null);
-        setRemainingSeconds(dur);
-        setStatus(nextStatus);
-      }
-    },
-    [
-      authService,
-      setActiveTagId,
-      sound,
-      notifications,
-      getDurationForType,
-      syncScheduledNotification,
-      dispatchCompletionAlert,
-    ]
-  );
-
-  const applyRemoteStateRef = useRef(applyRemoteState);
-  applyRemoteStateRef.current = applyRemoteState;
-
-  // Adopt live Convex WebSocket timer updates instantly
-  useEffect(() => {
-    if (!isConvexConfigured || !remoteTimer) return;
-    if (remoteTimer.peerPresence) {
-      peerPresenceRef.current = remoteTimer.peerPresence;
-    }
-    const now = Date.now();
-    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
-    const isNewer = remoteTimer.updatedAtMs > localUpdatedAtRef.current;
-
-    // Adopt remote state unconditionally if no recent local action on this device,
-    // or if the remote state timestamp is newer than our local state.
-    if (!hasRecentLocalAction || isNewer) {
-      applyRemoteStateRef.current({
-        sessionType: remoteTimer.sessionType,
-        status: remoteTimer.status,
-        remainingSeconds: remoteTimer.remainingSeconds,
-        totalSeconds: remoteTimer.totalSeconds,
-        targetEndTime: remoteTimer.targetEndTime ?? null,
-        currentCycle: remoteTimer.currentCycle,
-        activeTagId: remoteTimer.activeTagId ?? null,
-        timerRunId: remoteTimer.timerRunId ?? null,
-        updatedAtMs: remoteTimer.updatedAtMs,
-      });
-    }
-  }, [remoteTimer, isConvexConfigured]);
-
-  // Main countdown tick execution
-  const executeTick = useCallback(() => {
-    const currentStatus = statusRef.current;
-    const nowWall = Date.now();
-    lastTickWallMsRef.current = nowWall;
-
-
-
-    if (currentStatus !== 'RUNNING' || targetEndTimeRef.current === null) {
-      return;
-    }
-
-    const now = authService.getServerNow();
-    const target = targetEndTimeRef.current;
-    const diffMs = target - now;
-    const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-    if (diffSec <= 0) {
-      handleCompleteRef.current();
-      return;
-    }
-
-    if (diffSec !== remainingSecondsRef.current) {
-      remainingSecondsRef.current = diffSec;
-      setRemainingSeconds(diffSec);
-    }
-  }, [authService, isConvexConfigured]);
-
-  // Persistent Web Worker initialization
-  useEffect(() => {
-    let worker: Worker | null = null;
-    let fallbackInterval: ReturnType<typeof setInterval> | null = null;
-
-    try {
-      const blob = new Blob([WORKER_SCRIPT], { type: 'application/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
-      worker = new Worker(workerUrl);
-
-      worker.onmessage = (e) => {
-        if (e.data === 'TICK') {
-          executeTick();
-        }
-      };
-
-      worker.postMessage('START');
-    } catch {
-      fallbackInterval = setInterval(executeTick, 250);
-    }
-
-    return () => {
-      if (worker) {
-        worker.postMessage('STOP');
-        worker.terminate();
-      }
-      if (fallbackInterval) {
-        clearInterval(fallbackInterval);
-      }
-    };
-  }, [executeTick]);
-
-  // Visibility, pageshow, and focus sync listeners
-  useEffect(() => {
-    const handleVisibilityOrFocus = () => {
-      const isHidden = document.visibilityState === 'hidden';
-
-      if (statusRef.current === 'RUNNING') {
-        sound.prepareForPlayback();
-      }
-
-      reportPresence(!isHidden);
-
-      if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
-        const nowWall = Date.now();
-        lastTickWallMsRef.current = nowWall;
-
-
-        const now = authService.getServerNow();
-        const diffMs = targetEndTimeRef.current - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-        if (diffSec <= 0) {
-          handleCompleteRef.current();
-          return;
-        }
-
-        remainingSecondsRef.current = diffSec;
-        setRemainingSeconds(diffSec);
-
-        syncScheduledNotification();
-
-        const stateToSave: SavedTimerState = {
-          sessionType: sessionTypeRef.current,
-          status: statusRef.current,
-          currentCycle: currentCycleRef.current,
-          remainingSeconds: diffSec,
-          totalSeconds: totalSecondsRef.current,
-          targetEndTime: targetEndTimeRef.current,
-          timerRunId: timerRunIdRef.current,
-          updatedAtMs: localUpdatedAtRef.current,
-          activeTagId: activeTagIdRef.current,
-          deviceId: DEVICE_ID,
-          tabId: TAB_ID,
-          lastActiveAtMs: Date.now(),
-          wasHidden: isHidden,
-        };
-        try {
-          localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
-        } catch {
-          // Storage errors ignored
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
-    window.addEventListener('pageshow', handleVisibilityOrFocus);
-    window.addEventListener('focus', handleVisibilityOrFocus);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-      window.removeEventListener('pageshow', handleVisibilityOrFocus);
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-    };
-  }, [sound, syncScheduledNotification, reportPresence, authService]);
-
-  // Main-thread backup countdown timer
-  useEffect(() => {
-    const backupInterval = setInterval(executeTick, 1000);
-    return () => clearInterval(backupInterval);
-  }, [executeTick]);
+  useTimerWorker({
+    status,
+    sessionType,
+    remainingSeconds,
+    statusRef,
+    sessionTypeRef,
+    currentCycleRef,
+    remainingSecondsRef,
+    totalSecondsRef,
+    targetEndTimeRef,
+    timerRunIdRef,
+    localUpdatedAtRef,
+    activeTagIdRef,
+    lastTickWallMsRef,
+    handleCompleteRef,
+    setRemainingSeconds,
+    sound,
+    syncScheduledNotification,
+    reportPresence,
+    authService,
+  });
 
   // Multi-tab BroadcastChannel listener
   useEffect(() => {
@@ -964,17 +374,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTargetEndTime(calculatedTargetEnd);
     setStatus('RUNNING');
 
-    publishLocalTimerState({
-      sessionType: sessionTypeRef.current,
-      status: 'RUNNING',
-      remainingSeconds: duration,
-      totalSeconds: totalSecondsRef.current,
-      targetEndTime: calculatedTargetEnd,
-      currentCycle: currentCycleRef.current,
-      activeTagId: activeTagIdRef.current,
-      timerRunId: newRunId,
-      updatedAtMs: now,
-    }, true);
+    publishLocalTimerState(
+      {
+        sessionType: sessionTypeRef.current,
+        status: 'RUNNING',
+        remainingSeconds: duration,
+        totalSeconds: totalSecondsRef.current,
+        targetEndTime: calculatedTargetEnd,
+        currentCycle: currentCycleRef.current,
+        activeTagId: activeTagIdRef.current,
+        timerRunId: newRunId,
+        updatedAtMs: now,
+      },
+      true
+    );
 
     syncScheduledNotification();
   }, [sound, publishLocalTimerState, syncScheduledNotification]);
@@ -1002,17 +415,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRemainingSeconds(currentRemaining);
 
     const nowMs = Date.now();
-    publishLocalTimerState({
-      sessionType: sessionTypeRef.current,
-      status: 'PAUSED',
-      remainingSeconds: currentRemaining,
-      totalSeconds: totalSecondsRef.current,
-      targetEndTime: null,
-      currentCycle: currentCycleRef.current,
-      activeTagId: activeTagIdRef.current,
-      timerRunId: timerRunIdRef.current,
-      updatedAtMs: nowMs,
-    }, true);
+    publishLocalTimerState(
+      {
+        sessionType: sessionTypeRef.current,
+        status: 'PAUSED',
+        remainingSeconds: currentRemaining,
+        totalSeconds: totalSecondsRef.current,
+        targetEndTime: null,
+        currentCycle: currentCycleRef.current,
+        activeTagId: activeTagIdRef.current,
+        timerRunId: timerRunIdRef.current,
+        updatedAtMs: nowMs,
+      },
+      true
+    );
   }, [notifications, publishLocalTimerState, authService]);
 
   // Action: Reset timer
@@ -1034,17 +450,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTotalSeconds(defaultDuration);
 
     const nowMs = Date.now();
-    publishLocalTimerState({
-      sessionType: sessionTypeRef.current,
-      status: 'IDLE',
-      remainingSeconds: defaultDuration,
-      totalSeconds: defaultDuration,
-      targetEndTime: null,
-      currentCycle: currentCycleRef.current,
-      activeTagId: activeTagIdRef.current,
-      timerRunId: null,
-      updatedAtMs: nowMs,
-    }, true);
+    publishLocalTimerState(
+      {
+        sessionType: sessionTypeRef.current,
+        status: 'IDLE',
+        remainingSeconds: defaultDuration,
+        totalSeconds: defaultDuration,
+        targetEndTime: null,
+        currentCycle: currentCycleRef.current,
+        activeTagId: activeTagIdRef.current,
+        timerRunId: null,
+        updatedAtMs: nowMs,
+      },
+      true
+    );
   }, [getDurationForType, sound, notifications, publishLocalTimerState]);
 
   // Action: Skip interval
@@ -1090,17 +509,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTargetEndTime(null);
 
     const nowMs = Date.now();
-    publishLocalTimerState({
-      sessionType: nextType,
-      status: 'IDLE',
-      remainingSeconds: nextDuration,
-      totalSeconds: nextDuration,
-      targetEndTime: null,
-      currentCycle: nextCycle,
-      activeTagId: activeTagIdRef.current,
-      timerRunId: null,
-      updatedAtMs: nowMs,
-    }, true);
+    publishLocalTimerState(
+      {
+        sessionType: nextType,
+        status: 'IDLE',
+        remainingSeconds: nextDuration,
+        totalSeconds: nextDuration,
+        targetEndTime: null,
+        currentCycle: nextCycle,
+        activeTagId: activeTagIdRef.current,
+        timerRunId: null,
+        updatedAtMs: nowMs,
+      },
+      true
+    );
   }, [getDurationForType, sound, notifications, publishLocalTimerState]);
 
   // Action: Explicitly switch session type
@@ -1125,17 +547,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setTargetEndTime(null);
 
       const nowMs = Date.now();
-      publishLocalTimerState({
-        sessionType: type,
-        status: 'IDLE',
-        remainingSeconds: duration,
-        totalSeconds: duration,
-        targetEndTime: null,
-        currentCycle: currentCycleRef.current,
-        activeTagId: activeTagIdRef.current,
-        timerRunId: null,
-        updatedAtMs: nowMs,
-      }, true);
+      publishLocalTimerState(
+        {
+          sessionType: type,
+          status: 'IDLE',
+          remainingSeconds: duration,
+          totalSeconds: duration,
+          targetEndTime: null,
+          currentCycle: currentCycleRef.current,
+          activeTagId: activeTagIdRef.current,
+          timerRunId: null,
+          updatedAtMs: nowMs,
+        },
+        true
+      );
     },
     [getDurationForType, pause, publishLocalTimerState]
   );
