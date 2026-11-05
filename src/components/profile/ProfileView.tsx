@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { BackupData } from '../../types/user';
 import { formatDurationHoursMins } from '../../utils/formatters';
+import { toDateKey } from '../../utils/dates';
 
 const AVATAR_EMOJI_OPTIONS = [
   '🍅', '⚡', '☕', '🚀', '🧠', '🔥', '🎯', '📚', '💻', '🧘', '🌱', '⭐',
@@ -38,6 +39,8 @@ export const ProfileView: React.FC = () => {
     exportBackup,
     importBackup,
     resetAllData,
+    reloadSampleData,
+    isDemoEnvironment,
     auth,
     loginWithGoogle,
     logout,
@@ -121,10 +124,10 @@ export const ProfileView: React.FC = () => {
     .filter((s) => s.sessionType === 'WORK')
     .reduce((acc, curr) => acc + curr.durationSeconds, 0);
 
-  // Today's Focus Time in minutes
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // Today's Focus Time in minutes (local calendar date)
+  const todayStr = toDateKey(new Date());
   const todayFocusSeconds = sessions
-    .filter((s) => s.sessionType === 'WORK' && s.completedAt.startsWith(todayStr))
+    .filter((s) => s.sessionType === 'WORK' && toDateKey(s.completedAt) === todayStr)
     .reduce((acc, curr) => acc + curr.durationSeconds, 0);
   const todayFocusMinutes = Math.round(todayFocusSeconds / 60);
   const goalProgressPercent = Math.min(100, Math.round((todayFocusMinutes / (profile.dailyGoalMinutes || 120)) * 100));
@@ -487,6 +490,20 @@ export const ProfileView: React.FC = () => {
             <Upload className="w-4 h-4 mr-2" />
             <span>Restore from Backup</span>
           </Button>
+          {isDemoEnvironment && !auth.isAuthenticated && (
+            <Button
+              variant="outlined"
+              className="flex-1 justify-center"
+              onClick={async () => {
+                await reloadSampleData();
+                setImportSuccessMessage('Sample data loaded for dev/preview mode.');
+                setTimeout(() => setImportSuccessMessage(null), 4000);
+              }}
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              <span>Load Sample Data (Dev)</span>
+            </Button>
+          )}
           <input
             ref={fileInputRef}
             type="file"

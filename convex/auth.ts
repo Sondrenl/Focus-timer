@@ -38,6 +38,9 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         if (!email || !sub) {
           throw new Error("Invalid token payload: missing email or sub");
         }
+        if (payload.email_verified === false) {
+          throw new Error("Invalid token payload: email is not verified");
+        }
 
         // Internal mutation links to existing user by email or creates a new user
         const userId = await ctx.runMutation(internal.users.getOrCreateUserForAuth, {

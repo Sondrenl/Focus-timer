@@ -11,10 +11,13 @@ export const importBackup = mutation({
         name: v.string(),
         color: v.string(),
         isArchived: v.optional(v.boolean()),
+        createdAt: v.optional(v.string()),
+        updatedAt: v.optional(v.string()),
       })
     ),
     sessions: v.array(
       v.object({
+        id: v.optional(v.string()),
         tagId: v.optional(v.union(v.string(), v.null())),
         sessionType: v.union(
           v.literal("WORK"),
@@ -28,6 +31,7 @@ export const importBackup = mutation({
     coffeeCups: v.optional(
       v.array(
         v.object({
+          id: v.optional(v.string()),
           date: v.string(),
           tagId: v.optional(v.union(v.string(), v.null())),
           createdAt: v.optional(v.string()),
@@ -38,6 +42,12 @@ export const importBackup = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const now = new Date().toISOString();
+
+    const isSampleId = (id?: string) =>
+      Boolean(id && (id.startsWith("sample-") || id.startsWith("seed-")));
+
+    const cleanIncomingSessions = args.sessions.filter((s) => !isSampleId(s.id));
+    const cleanIncomingCups = (args.coffeeCups ?? []).filter((c) => !isSampleId(c.id));
 
     if (args.mode === "replace") {
       // 1. Clear existing sessions
@@ -89,7 +99,7 @@ export const importBackup = mutation({
       };
 
       // 4. Ingest sessions
-      for (const session of args.sessions) {
+      for (const session of cleanIncomingSessions) {
         await ctx.db.insert("sessions", {
           userId: user._id,
           tagId: resolveTagId(session.tagId),
@@ -100,15 +110,13 @@ export const importBackup = mutation({
       }
 
       // 5. Ingest coffee cups
-      if (args.coffeeCups) {
-        for (const cup of args.coffeeCups) {
-          await ctx.db.insert("coffee_cups", {
-            userId: user._id,
-            date: cup.date,
-            tagId: resolveTagId(cup.tagId),
-            createdAt: cup.createdAt ?? now,
-          });
-        }
+      for (const cup of cleanIncomingCups) {
+        await ctx.db.insert("coffee_cups", {
+          userId: user._id,
+          date: cup.date,
+          tagId: resolveTagId(cup.tagId),
+          createdAt: cup.createdAt ?? now,
+        });
       }
 
       return { success: true };
@@ -178,7 +186,7 @@ export const importBackup = mutation({
       ms: new Date(s.completedAt).getTime(),
     }));
 
-    for (const session of args.sessions) {
+    for (const session of cleanIncomingSessions) {
       const key = `${session.sessionType}-${session.completedAt}`;
       const incomingMs = new Date(session.completedAt).getTime();
       const isNearDuplicate =
@@ -209,7 +217,7 @@ export const importBackup = mutation({
     }
 
     // 3. Ingest coffee cups with deduplication by (date + createdAt)
-    if (args.coffeeCups) {
+    if (cleanIncomingCups.length > 0) {
       const existingCups = await ctx.db
         .query("coffee_cups")
         .withIndex("by_user_date", (q) => q.eq("userId", user._id))
@@ -218,7 +226,7 @@ export const importBackup = mutation({
         existingCups.map((c) => `${c.date}-${c.createdAt}`)
       );
 
-      for (const cup of args.coffeeCups) {
+      for (const cup of cleanIncomingCups) {
         const cupCreatedAt = cup.createdAt ?? now;
         const key = `${cup.date}-${cupCreatedAt}`;
         if (!existingCupKeys.has(key)) {
@@ -234,199 +242,5 @@ export const importBackup = mutation({
     }
 
     return { success: true };
-  },
-});
-
-
-export const importD1Data = mutation({
-  args: {
-    users: v.array(
-      v.object({
-        email: v.string(),
-        googleId: v.string(),
-        displayName: v.string(),
-        avatarUrl: v.optional(v.string()),
-        avatarEmoji: v.string(),
-        dailyGoalMinutes: v.number(),
-        createdAt: v.string(),
-        settings: v.object({
-          workDurationMinutes: v.number(),
-          shortBreakDurationMinutes: v.number(),
-          longBreakDurationMinutes: v.number(),
-          longBreakInterval: v.number(),
-          autoStartBreaks: v.boolean(),
-          autoStartPomodoros: v.boolean(),
-          soundVolume: v.number(),
-          soundEnabled: v.boolean(),
-          notificationsEnabled: v.boolean(),
-          keepAwake: v.boolean(),
-          updatedAt: v.string(),
-        }),
-        tags: v.array(
-          v.object({
-            id: v.string(),
-            name: v.string(),
-            color: v.string(),
-            isArchived: v.boolean(),
-            createdAt: v.string(),
-            updatedAt: v.optional(v.string()),
-          })
-        ),
-      })
-    ),
-    sessions: v.array(
-      v.object({
-        userEmail: v.string(),
-        tagId: v.optional(v.union(v.string(), v.null())),
-        sessionType: v.union(
-          v.literal("WORK"),
-          v.literal("SHORT_BREAK"),
-          v.literal("LONG_BREAK")
-        ),
-        durationSeconds: v.number(),
-        completedAt: v.string(),
-      })
-    ),
-    coffeeCups: v.array(
-      v.object({
-        userEmail: v.string(),
-        tagId: v.optional(v.union(v.string(), v.null())),
-        date: v.string(),
-        createdAt: v.string(),
-      })
-    ),
-  },
-  handler: async (ctx, args) => {
-    const userMap = new Map<string, any>();
-
-    for (const u of args.users) {
-      const tokenIdentifier = `https://accounts.google.com|${u.googleId}`;
-      let user = await ctx.db
-        .query("users")
-        .withIndex("by_token", (q) => q.eq("tokenIdentifier", tokenIdentifier))
-        .unique();
-
-      if (!user) {
-        user = await ctx.db
-          .query("users")
-          .filter((q) => q.eq(q.field("email"), u.email))
-          .first();
-      }
-
-      if (user) {
-        // Merge tags
-        const existingTags = user.tags || [];
-        const tagMap = new Map<string, typeof existingTags[0]>();
-        existingTags.forEach((t) => tagMap.set(t.name.toLowerCase().trim(), t));
-        const mergedTags = [...existingTags];
-        for (const t of u.tags) {
-          if (!tagMap.has(t.name.toLowerCase().trim())) {
-            tagMap.set(t.name.toLowerCase().trim(), t);
-            mergedTags.push(t);
-          }
-        }
-
-        await ctx.db.patch(user._id, {
-          tokenIdentifier,
-          displayName: user.displayName || u.displayName,
-          avatarUrl: user.avatarUrl || u.avatarUrl,
-          tags: mergedTags,
-        });
-        userMap.set(u.email, user._id);
-      } else {
-        const userId = await ctx.db.insert("users", {
-          tokenIdentifier,
-          email: u.email,
-          displayName: u.displayName,
-          avatarUrl: u.avatarUrl,
-          avatarEmoji: u.avatarEmoji || "",
-          dailyGoalMinutes: u.dailyGoalMinutes || 120,
-          createdAt: u.createdAt,
-          settings: u.settings,
-          tags: u.tags,
-        });
-        userMap.set(u.email, userId);
-      }
-    }
-
-    let sessionsImported = 0;
-    for (const s of args.sessions) {
-      const userId = userMap.get(s.userEmail);
-      if (!userId) continue;
-
-      const existing = await ctx.db
-        .query("sessions")
-        .withIndex("by_user_completed", (q) =>
-          q.eq("userId", userId).eq("completedAt", s.completedAt)
-        )
-        .first();
-
-      if (!existing) {
-        await ctx.db.insert("sessions", {
-          userId,
-          tagId: s.tagId || undefined,
-          sessionType: s.sessionType,
-          durationSeconds: s.durationSeconds,
-          completedAt: s.completedAt,
-        });
-        sessionsImported++;
-      }
-    }
-
-    let cupsImported = 0;
-    for (const c of args.coffeeCups) {
-      const userId = userMap.get(c.userEmail);
-      if (!userId) continue;
-
-      const existing = await ctx.db
-        .query("coffee_cups")
-        .withIndex("by_user_date", (q) =>
-          q.eq("userId", userId).eq("date", c.date)
-        )
-        .filter((q) => q.eq(q.field("createdAt"), c.createdAt))
-        .first();
-
-      if (!existing) {
-        await ctx.db.insert("coffee_cups", {
-          userId,
-          date: c.date,
-          tagId: c.tagId || undefined,
-          createdAt: c.createdAt,
-        });
-        cupsImported++;
-      }
-    }
-
-    return {
-      usersMigrated: args.users.length,
-      sessionsImported,
-      cupsImported,
-    };
-  },
-});
-
-
-export const debugInspectData = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const users = await ctx.db.query('users').collect();
-    const sessions = await ctx.db.query('sessions').take(10);
-    const totalSessions = (await ctx.db.query('sessions').collect()).length;
-    const totalCups = (await ctx.db.query('coffee_cups').collect()).length;
-    return {
-      totalSessions,
-      totalCups,
-      users: users.map(u => ({ id: u._id, email: u.email, tokenIdentifier: u.tokenIdentifier, tagsCount: (u.tags || []).length })),
-      sampleSessionUserIds: sessions.map(s => s.userId),
-    };
-  },
-});
-
-export const debugInspectActiveTimers = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const timers = await ctx.db.query('active_timers').collect();
-    const users = await ctx.db.query('users').collect();
-    return { timers, users };
   },
 });

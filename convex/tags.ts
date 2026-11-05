@@ -139,9 +139,40 @@ export const resetToDefaults = mutation({
   args: {},
   handler: async (ctx) => {
     const user = await requireUser(ctx);
+    const defaultTagIds = new Set(DEFAULT_TAGS.map((t) => t.id));
+
     await ctx.db.patch(user._id, {
       tags: DEFAULT_TAGS,
     });
+
+    const userSessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const s of userSessions) {
+      if (s.tagId && !defaultTagIds.has(s.tagId)) {
+        await ctx.db.patch(s._id, { tagId: undefined });
+      }
+    }
+
+    const userCups = await ctx.db
+      .query("coffee_cups")
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const c of userCups) {
+      if (c.tagId && !defaultTagIds.has(c.tagId)) {
+        await ctx.db.patch(c._id, { tagId: undefined });
+      }
+    }
+
+    const activeTimer = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .unique();
+    if (activeTimer && activeTimer.tagId && !defaultTagIds.has(activeTimer.tagId)) {
+      await ctx.db.patch(activeTimer._id, { tagId: undefined });
+    }
+
     return DEFAULT_TAGS;
   },
 });

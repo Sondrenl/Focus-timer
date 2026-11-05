@@ -597,10 +597,14 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const now = authService.getServerNow();
 
-      // Trigger completion alert only when remote explicitly signals COMPLETED
+      // Trigger completion alert when remote signals completion or advances to next interval at end time
       if (
         statusRef.current === 'RUNNING' &&
-        remote.status === 'COMPLETED'
+        (remote.status === 'COMPLETED' ||
+          (remote.status === 'IDLE' &&
+            remote.sessionType !== sessionTypeRef.current &&
+            targetEndTimeRef.current !== null &&
+            now >= targetEndTimeRef.current - 5000))
       ) {
         const completedType = sessionTypeRef.current;
         const completedRunId = timerRunIdRef.current || remote.timerRunId || `${completedType.toLowerCase()}-${now}`;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AppProvider, useApp } from './context/AppContext';
+import { AppProvider, useNavigation } from './context/AppContext';
 import { TimerProvider } from './context/TimerContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
@@ -11,7 +11,7 @@ import { SettingsView } from './components/settings/SettingsView';
 import { ProfileView } from './components/profile/ProfileView';
 
 const MainContent: React.FC = () => {
-  const { currentView } = useApp();
+  const { currentView } = useNavigation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Scroll to top when switching views on mobile

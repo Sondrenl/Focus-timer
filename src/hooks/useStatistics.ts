@@ -57,7 +57,7 @@ export interface CoffeePeakMetric {
 }
 
 export function useStatistics() {
-  const { sessions, tags, coffeeCups } = useApp();
+  const { sessions, tags, coffeeCups, auth } = useApp();
 
   const [periodType, setPeriodType] = useState<TimePeriodType>('week');
   const [referenceDate, setReferenceDate] = useState<Date>(() => new Date());
@@ -73,8 +73,7 @@ export function useStatistics() {
     };
   });
 
-  const now = new Date();
-  const todayKey = toDateKey(now);
+  const todayKey = toDateKey(new Date());
 
   // Navigation handlers with month-end and leap-year overflow protection
   const goToPrev = () => {
@@ -126,6 +125,7 @@ export function useStatistics() {
 
   // Determine if viewing current period
   const isCurrentPeriod = useMemo(() => {
+    const now = new Date(`${todayKey}T12:00:00`);
     if (periodType === 'day') {
       return toDateKey(referenceDate) === todayKey;
     }
@@ -147,6 +147,7 @@ export function useStatistics() {
 
   // Determine if forward navigation is permitted (cannot navigate past current period)
   const canGoNext = useMemo(() => {
+    const now = new Date(`${todayKey}T12:00:00`);
     if (periodType === 'all' || periodType === 'custom') return false;
     if (periodType === 'day') {
       return toDateKey(referenceDate) < todayKey;
@@ -170,6 +171,7 @@ export function useStatistics() {
 
   // Main statistics derivation
   const stats = useMemo(() => {
+    const now = new Date(`${todayKey}T12:00:00`);
     let startDate: Date;
     let endDate: Date;
     let periodLabel = '';
@@ -220,9 +222,19 @@ export function useStatistics() {
       periodLabel = 'All Time History';
     }
 
-    // Filter work sessions and all sessions within period with robust timestamp validation
+    // Filter work sessions and all sessions within period with robust timestamp validation.
+    // Never include dev sample/seed sessions in production or when authenticated with a real account.
+    const shouldExcludeSample = isProduction() || auth.isAuthenticated;
     const periodAllSessions = sessions.filter((s) => {
-      if (isProduction() && (s.id.startsWith('seed-session-') || s.id.startsWith('sample-session-'))) return false;
+      if (
+        shouldExcludeSample &&
+        (s.id.startsWith('seed-session-') ||
+          s.id.startsWith('sample-session-') ||
+          s.id.startsWith('sample-') ||
+          s.id.startsWith('seed-'))
+      ) {
+        return false;
+      }
       if (!s.completedAt) return false;
       const d = new Date(s.completedAt);
       if (isNaN(d.getTime())) return false;
@@ -912,7 +924,7 @@ export function useStatistics() {
       candidateInsights,
       insightsSignature,
     };
-  }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange, isCurrentPeriod, todayKey]);
+  }, [sessions, tags, coffeeCups, periodType, referenceDate, customRange, isCurrentPeriod, todayKey, auth.isAuthenticated]);
 
   const topInsight = useMemo(() => {
     return selectTieredInsight(stats.candidateInsights);

@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { query, mutation, internalMutation, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { requireUser, getAuthenticatedUser } from "./authHelper";
+import { requireUser, getAuthenticatedUser, DEFAULT_SETTINGS } from "./authHelper";
 
 async function cancelScheduledJob(
   ctx: MutationCtx,
@@ -32,24 +32,10 @@ export const getActive = query({
       return null;
     }
 
-    // Dynamic remaining seconds calculation
-    let computedRemaining = timer.remainingSeconds;
-    let computedStatus = timer.status;
-
-    if (timer.status === "RUNNING" && timer.targetEndTime) {
-      const diffSeconds = Math.round((timer.targetEndTime - Date.now()) / 1000);
-      if (diffSeconds <= 0) {
-        computedRemaining = 0;
-        computedStatus = "COMPLETED" as const;
-      } else {
-        computedRemaining = diffSeconds;
-      }
-    }
-
     return {
       sessionType: timer.sessionType,
-      status: computedStatus,
-      remainingSeconds: computedRemaining,
+      status: timer.status,
+      remainingSeconds: timer.remainingSeconds,
       totalSeconds: timer.totalSeconds,
       targetEndTime: timer.targetEndTime ?? null,
       currentCycle: timer.currentCycle,
@@ -334,13 +320,16 @@ export const onTimerCompleted = internalMutation({
       return;
     }
 
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+
     // 1. Record completed session in sessions table (if not already recorded)
     const recent = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) =>
         q
           .eq("userId", args.userId)
-          .gte("completedAt", new Date(Date.now() - 45000).toISOString())
+          .gte("completedAt", new Date(nowMs - 45000).toISOString())
       )
       .collect();
 
@@ -351,17 +340,52 @@ export const onTimerCompleted = internalMutation({
         tagId: timer.tagId,
         sessionType: timer.sessionType,
         durationSeconds: timer.totalSeconds,
-        completedAt: new Date().toISOString(),
+        completedAt: nowIso,
       });
     }
 
-    // 2. Mark active timer as COMPLETED
+    // 2. Advance active_timers to the next interval in IDLE status
+    const user = await ctx.db.get(args.userId);
+    const settings = user?.settings ?? DEFAULT_SETTINGS;
+    const interval = Math.max(1, settings.longBreakInterval || 4);
+    const curCycle = Math.max(1, timer.currentCycle || 1);
+
+    let nextType: "WORK" | "SHORT_BREAK" | "LONG_BREAK";
+    let nextCycle: number;
+    if (timer.sessionType === "WORK") {
+      if (curCycle >= interval) {
+        nextType = "LONG_BREAK";
+        nextCycle = curCycle;
+      } else {
+        nextType = "SHORT_BREAK";
+        nextCycle = curCycle;
+      }
+    } else if (timer.sessionType === "LONG_BREAK") {
+      nextType = "WORK";
+      nextCycle = 1;
+    } else {
+      nextType = "WORK";
+      nextCycle = curCycle >= interval ? 1 : curCycle + 1;
+    }
+
+    const nextMinutes =
+      nextType === "WORK"
+        ? settings.workDurationMinutes
+        : nextType === "SHORT_BREAK"
+        ? settings.shortBreakDurationMinutes
+        : settings.longBreakDurationMinutes;
+    const nextDurationSec = Math.max(1, Math.round(nextMinutes * 60));
+
     await ctx.db.patch(timer._id, {
-      status: "COMPLETED" as const,
-      remainingSeconds: 0,
+      sessionType: nextType,
+      status: "IDLE" as const,
+      remainingSeconds: nextDurationSec,
+      totalSeconds: nextDurationSec,
+      currentCycle: nextCycle,
       targetEndTime: undefined,
+      timerRunId: undefined,
       scheduledCompletionId: undefined,
-      updatedAtMs: Date.now(),
+      updatedAtMs: nowMs,
     });
   },
 });

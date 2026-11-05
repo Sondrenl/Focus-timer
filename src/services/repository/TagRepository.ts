@@ -24,10 +24,17 @@ export { DEFAULT_TAGS } from "../../types/tag";
  */
 export class TagRepository implements ITagRepository {
   private storage: IStorageService;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(storage: IStorageService) {
     this.storage = storage;
     this.seedDefaultTagsIfEmpty();
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(task, task);
+    this.queue = next.catch(() => {});
+    return next;
   }
 
   private seedDefaultTagsIfEmpty(): void {
@@ -77,36 +84,40 @@ export class TagRepository implements ITagRepository {
   }
 
   async create(input: CreateTagInput): Promise<Tag> {
-    const all = await this.getAll();
-    const nowIso = new Date().toISOString();
-    const newTag: Tag = {
-      id: `tag-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      name: input.name.trim(),
-      color: input.color,
-      isArchived: false,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-    all.push(newTag);
-    this.storage.setItem(TAGS_STORAGE_KEY, all);
-    return newTag;
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      const nowIso = new Date().toISOString();
+      const newTag: Tag = {
+        id: `tag-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: input.name.trim(),
+        color: input.color,
+        isArchived: false,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      all.push(newTag);
+      this.storage.setItem(TAGS_STORAGE_KEY, all);
+      return newTag;
+    });
   }
 
   async update(id: string, updates: UpdateTagInput): Promise<Tag | null> {
-    const all = await this.getAll();
-    const index = all.findIndex((tag) => tag.id === id);
-    if (index === -1) return null;
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      const index = all.findIndex((tag) => tag.id === id);
+      if (index === -1) return null;
 
-    const nowIso = new Date().toISOString();
-    const updated: Tag = {
-      ...all[index],
-      ...updates,
-      name: updates.name !== undefined ? updates.name.trim() : all[index].name,
-      updatedAt: updates.updatedAt || nowIso,
-    };
-    all[index] = updated;
-    this.storage.setItem(TAGS_STORAGE_KEY, all);
-    return updated;
+      const nowIso = new Date().toISOString();
+      const updated: Tag = {
+        ...all[index],
+        ...updates,
+        name: updates.name !== undefined ? updates.name.trim() : all[index].name,
+        updatedAt: updates.updatedAt || nowIso,
+      };
+      all[index] = updated;
+      this.storage.setItem(TAGS_STORAGE_KEY, all);
+      return updated;
+    });
   }
 
   async archive(id: string): Promise<Tag | null> {
@@ -118,21 +129,27 @@ export class TagRepository implements ITagRepository {
   }
 
   async delete(id: string): Promise<boolean> {
-    const all = await this.getAll();
-    const filtered = all.filter((tag) => tag.id !== id);
-    if (filtered.length === all.length) return false;
-    this.storage.setItem(TAGS_STORAGE_KEY, filtered);
-    return true;
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      const filtered = all.filter((tag) => tag.id !== id);
+      if (filtered.length === all.length) return false;
+      this.storage.setItem(TAGS_STORAGE_KEY, filtered);
+      return true;
+    });
   }
 
   async saveAll(tags: Tag[]): Promise<void> {
-    this.storage.setItem(TAGS_STORAGE_KEY, tags);
+    return this.enqueue(async () => {
+      this.storage.setItem(TAGS_STORAGE_KEY, tags);
+    });
   }
 
   async resetToDefaults(): Promise<Tag[]> {
-    const nowIso = new Date().toISOString();
-    const freshDefaults = DEFAULT_TAGS.map((t) => ({ ...t, updatedAt: nowIso }));
-    this.storage.setItem(TAGS_STORAGE_KEY, freshDefaults);
-    return freshDefaults;
+    return this.enqueue(async () => {
+      const nowIso = new Date().toISOString();
+      const freshDefaults = DEFAULT_TAGS.map((t) => ({ ...t, updatedAt: nowIso }));
+      this.storage.setItem(TAGS_STORAGE_KEY, freshDefaults);
+      return freshDefaults;
+    });
   }
 }
