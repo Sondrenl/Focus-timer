@@ -47,7 +47,7 @@ export const StatisticsView: React.FC = () => {
     tagDistribution,
     activityBars,
     productiveMetric,
-    insights,
+    topInsight,
   } = useStatistics();
 
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
@@ -290,7 +290,7 @@ export const StatisticsView: React.FC = () => {
       </div>
 
       {/* Smart Insight Panel */}
-      <SmartInsightPanel insights={insights} />
+      <SmartInsightPanel insight={topInsight} />
 
       {/* 2. Focus Statistics */}
       <div className="flex flex-col gap-3">

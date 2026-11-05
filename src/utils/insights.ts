@@ -28,9 +28,42 @@ export type InsightType =
   | 'daily-summary'
   | 'empty-state';
 
+export type InsightTier = 1 | 2 | 3;
+
+export const INSIGHT_TIERS: Record<InsightType, InsightTier> = {
+  // Tier 1: Deep Correlations & Behavioral Discoveries (Most Interesting)
+  'peak-focus-window': 1,
+  'break-fatigue': 1,
+  'context-switching': 1,
+  'coffee-sweet-spot': 1,
+  'coffee-productivity-boost': 1,
+  'coffee-productivity-dip': 1,
+  'tag-coffee-affinity': 1,
+
+  // Tier 2: Rhythms, Habits & Stamina Patterns (Moderately Interesting)
+  'marathon-streak': 2,
+  'clean-energy': 2,
+  'powerhouse-day': 2,
+  'weekend-focus': 2,
+  'workweek-boundaries': 2,
+  'break-cadence': 2,
+  'focus-streak': 2,
+  'tag-diversity': 2,
+
+  // Tier 3: Descriptive Summaries, Ratios & Fallbacks (Least Interesting)
+  'tag-dominance': 3,
+  'coffee-ritual': 3,
+  'fuel-efficiency': 3,
+  'focus-momentum': 3,
+  'milestone': 3,
+  'daily-summary': 3,
+  'empty-state': 3,
+};
+
 export interface InterestingStat {
   id: string;
   type: InsightType;
+  tier: InsightTier;
   badge: string;
   headline: string;
   description: string;
@@ -46,7 +79,7 @@ export interface InterestingStat {
     | 'calendar'
     | 'award'
     | 'battery-charging';
-  score: number; // Higher score = more relevant/interesting
+  score: number; // Higher score = more relevant/interesting within a tier
 }
 
 export interface GenerateInsightsParams {
@@ -60,11 +93,34 @@ export interface GenerateInsightsParams {
 }
 
 /**
- * Generates an array of ranked, deeply analytical insights by cross-referencing
- * focus sessions, daily caffeine intake, tags, and temporal rhythms for the selected period.
+ * Selects a single insight based on tier priority (Tier 1 -> Tier 2 -> Tier 3).
+ * When multiple insights are available in the highest available tier, picks one at random.
+ */
+export function selectTieredInsight(
+  insights: InterestingStat[],
+  randomFn: () => number = Math.random
+): InterestingStat | null {
+  if (!insights || insights.length === 0) return null;
+
+  for (const tier of [1, 2, 3] as const) {
+    const tierInsights = insights.filter((i) => i.tier === tier);
+    if (tierInsights.length > 0) {
+      const randomIndex = Math.min(
+        tierInsights.length - 1,
+        Math.max(0, Math.floor(randomFn() * tierInsights.length))
+      );
+      return tierInsights[randomIndex];
+    }
+  }
+
+  return insights[0];
+}
+
+/**
+ * Generates all matching candidate insights for the selected period, annotated with their tier.
  * NOTE: Coffee intake is strictly tracked by day and tag (no intraday timestamp data is used).
  */
-export function generatePeriodInsights({
+export function generateAllPeriodInsights({
   sessions,
   coffeeCups,
   tags,
@@ -73,7 +129,15 @@ export function generatePeriodInsights({
   totalCoffeeCups: _totalCoffeeCups,
   allSessions,
 }: GenerateInsightsParams): InterestingStat[] {
-  const insights: InterestingStat[] = [];
+  const rawInsights: Omit<InterestingStat, 'tier'>[] = [];
+  const insights = {
+    push: (stat: Omit<InterestingStat, 'tier'>) => {
+      rawInsights.push(stat);
+    },
+    get length() {
+      return rawInsights.length;
+    },
+  };
   const tagMap = new Map<string, Tag>();
   tags.forEach((t) => tagMap.set(t.id, t));
 
@@ -856,6 +920,26 @@ export function generatePeriodInsights({
     }
   }
 
-  // Sort insights by score descending
-  return insights.sort((a, b) => b.score - a.score);
+  const tieredInsights: InterestingStat[] = rawInsights.map((stat) => ({
+    ...stat,
+    tier: INSIGHT_TIERS[stat.type],
+  }));
+
+  // Sort by tier ascending (1 -> 2 -> 3), then score descending
+  return tieredInsights.sort((a, b) => a.tier - b.tier || b.score - a.score);
 }
+
+/**
+ * Generates and selects a single insight for the period based on tier priority:
+ * Tier 1 if available, otherwise Tier 2 if available, otherwise Tier 3.
+ * Picks a random insight when multiple insights exist in the winning tier.
+ */
+export function generatePeriodInsights(
+  params: GenerateInsightsParams,
+  randomFn: () => number = Math.random
+): InterestingStat[] {
+  const allInsights = generateAllPeriodInsights(params);
+  const selected = selectTieredInsight(allInsights, randomFn);
+  return selected ? [selected] : [];
+}
+
