@@ -80,18 +80,6 @@ export const useTimerWorker = ({
     };
   }, [status]);
 
-  // Keep audio silent keep-alive running while timer is active
-  useEffect(() => {
-    if (status === 'RUNNING') {
-      sound.startSilentKeepAlive();
-    } else {
-      sound.stopSilentKeepAlive(false);
-    }
-    return () => {
-      sound.stopSilentKeepAlive(false);
-    };
-  }, [status, sound]);
-
   // Synchronize document tab title with timer progress, status, and remaining time
   useEffect(() => {
     if (typeof document === 'undefined') return;

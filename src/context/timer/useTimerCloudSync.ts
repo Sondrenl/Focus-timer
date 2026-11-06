@@ -229,7 +229,6 @@ export const useTimerCloudSync = ({
         const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
         if (diffSec > 0) {
-          sound.startSilentKeepAlive();
           wakeLockService.acquire();
 
           sessionTypeRef.current = remote.sessionType;
@@ -277,7 +276,6 @@ export const useTimerCloudSync = ({
             setTargetEndTime(null);
             timerRunIdRef.current = null;
             notifications.cancelScheduledNotification();
-            sound.stopSilentKeepAlive(false);
             wakeLockService.release();
 
             // Self-heal: authoritatively reset Convex state so other devices do not stay stuck in RUNNING
@@ -308,7 +306,6 @@ export const useTimerCloudSync = ({
           targetEndTimeRef.current = null;
           setTargetEndTime(null);
           timerRunIdRef.current = null;
-          sound.stopSilentKeepAlive(false);
           wakeLockService.release();
 
           convexTimerMutationsRef.current.resetTimer({
@@ -334,7 +331,6 @@ export const useTimerCloudSync = ({
           setActiveTagId(remote.activeTagId);
         }
 
-        sound.stopSilentKeepAlive(true);
         wakeLockService.release();
         notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;
@@ -366,7 +362,6 @@ export const useTimerCloudSync = ({
           setActiveTagId(remote.activeTagId);
         }
 
-        sound.stopSilentKeepAlive(false);
         wakeLockService.release();
         notifications.cancelScheduledNotification();
         targetEndTimeRef.current = null;

@@ -273,7 +273,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, currentRemaining));
 
-      sound.stopSilentKeepAlive(true);
       wakeLockService.release();
       notifications.cancelScheduledNotification();
 
@@ -414,7 +413,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setRemainingSeconds(defaultDuration);
       setTargetEndTime(null);
 
-      sound.stopSilentKeepAlive(false);
       wakeLockService.release();
       notifications.cancelScheduledNotification();
 
@@ -524,7 +522,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const reset = useCallback(() => {
     wakeLockService.release();
     notifications.cancelScheduledNotification();
-    sound.stopSilentKeepAlive(false);
 
     const defaultDuration = getDurationForType(sessionTypeRef.current);
     targetEndTimeRef.current = null;
@@ -553,13 +550,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       },
       true
     );
-  }, [getDurationForType, sound, notifications, publishLocalTimerState]);
+  }, [getDurationForType, notifications, publishLocalTimerState]);
 
   // Action: Skip interval
   const skip = useCallback(() => {
     wakeLockService.release();
     notifications.cancelScheduledNotification();
-    sound.stopSilentKeepAlive(false);
 
     let nextType: SessionType;
     let nextCycle = currentCycleRef.current;

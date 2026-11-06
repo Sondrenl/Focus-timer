@@ -177,47 +177,12 @@ export class SoundService {
   }
 
   /**
-   * Safe no-op retained for API compatibility.
-   * Background audio loops are intentionally disabled to prevent mobile media notification widgets.
-   */
-  startSilentKeepAlive(): void {
-    this.prepareForPlayback();
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.playbackState = 'none';
-      } catch {
-        // Ignore
-      }
-    }
-  }
-
-  /**
-   * Safe no-op retained for API compatibility.
-   */
-  stopSilentKeepAlive(_forceImmediate: boolean = false): void {
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.playbackState = 'none';
-      } catch {
-        // Ignore
-      }
-    }
-  }
-
-  /**
    * Explicitly suspends audio context when the app or tab is being unloaded.
    */
-  stopKeepAliveForUnload(): void {
+  stopAudio(): void {
     if (this.chimeAudio) {
       try {
         this.chimeAudio.pause();
-      } catch {
-        // Ignore
-      }
-    }
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.playbackState = 'none';
       } catch {
         // Ignore
       }
