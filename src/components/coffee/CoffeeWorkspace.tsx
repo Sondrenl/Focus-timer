@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Coffee, Plus, Minus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
@@ -6,8 +6,20 @@ import { toDateKey } from '../../utils/dates';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
 export const CoffeeWorkspace: React.FC = () => {
-  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags } = useApp();
-  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags, activeTagId } = useApp();
+  const [selectedTagId, setSelectedTagId] = useState<string | null>(activeTagId);
+
+  // Mimic the timer's tag selector: coffee tag observes the timer tag, but not vice versa
+  useEffect(() => {
+    setSelectedTagId(activeTagId);
+  }, [activeTagId]);
+
+  // If the currently selected coffee tag is archived or deleted, fallback to the timer's active tag
+  useEffect(() => {
+    if (selectedTagId && activeTags.length > 0 && !activeTags.some((t) => t.id === selectedTagId)) {
+      setSelectedTagId(activeTagId);
+    }
+  }, [activeTags, selectedTagId, activeTagId]);
 
   const todayKey = toDateKey(new Date());
 
