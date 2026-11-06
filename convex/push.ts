@@ -4,6 +4,14 @@ import { requireUser, getAuthenticatedUser } from "./authHelper";
 
 export const MAX_PUSH_DEVICES_PER_USER = 10;
 
+export const ALLOWED_PUSH_DOMAINS = [
+  "fcm.googleapis.com",
+  "push.apple.com",
+  "updates.push.services.mozilla.com",
+  "notify.windows.com",
+  "web.push.apple.com",
+];
+
 function validateEndpoint(endpoint: string): void {
   if (!endpoint || endpoint.length > 2048) {
     throw new Error("Invalid push subscription endpoint length.");
@@ -13,8 +21,27 @@ function validateEndpoint(endpoint: string): void {
     if (url.protocol !== "https:") {
       throw new Error();
     }
+    const hostname = url.hostname.toLowerCase();
+    // Block private/loopback/cloud metadata hostnames and IPs
+    if (
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname === "127.0.0.1" ||
+      hostname === "169.254.169.254" ||
+      hostname.startsWith("10.") ||
+      hostname.startsWith("192.168.") ||
+      hostname.startsWith("172.16.")
+    ) {
+      throw new Error();
+    }
+    const isAllowed = ALLOWED_PUSH_DOMAINS.some(
+      (domain) => hostname === domain || hostname.endsWith("." + domain)
+    );
+    if (!isAllowed) {
+      throw new Error();
+    }
   } catch {
-    throw new Error("Invalid push subscription endpoint: must be a valid HTTPS URL.");
+    throw new Error("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
   }
 }
 

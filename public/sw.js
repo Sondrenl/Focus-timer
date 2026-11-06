@@ -1,11 +1,10 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 1.0.2
+// Version: 1.0.3
 // Handles background, Home Screen, and lock-screen notifications with multi-device arbitration
 
 let scheduledTimerId = null;
 let scheduledResolve = null;
 let lastNotifiedSessionId = null;
-let cachedAuthToken = null;
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -91,10 +90,6 @@ self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || !data.type) return;
 
-  if (data.token) {
-    cachedAuthToken = data.token;
-  }
-
   if (data.type === 'SHOW_NOTIFICATION') {
     clearExistingSchedule();
     event.waitUntil(
@@ -146,10 +141,6 @@ self.addEventListener('message', (event) => {
     if (data.sessionId) {
       lastNotifiedSessionId = data.sessionId;
     }
-  } else if (data.type === 'SET_AUTH_TOKEN') {
-    if (data.token) {
-      cachedAuthToken = data.token;
-    }
   } else if (data.type === 'CANCEL_TIMER_NOTIFICATION') {
     clearExistingSchedule();
   } else if (data.type === 'CLEAR_NOTIFICATIONS') {
@@ -157,18 +148,48 @@ self.addEventListener('message', (event) => {
   }
 });
 
+self.addEventListener('push', (event) => {
+  let title = 'Pomodor Focus Timer';
+  let body = 'Your timer session has ended.';
+  let sessionId = null;
+
+  if (event.data) {
+    try {
+      const json = event.data.json();
+      if (typeof json.title === 'string' && json.title.trim()) {
+        title = json.title.trim().slice(0, 100);
+      }
+      if (typeof json.body === 'string' && json.body.trim()) {
+        body = json.body.trim().slice(0, 250);
+      }
+      if (typeof json.sessionId === 'string') {
+        sessionId = json.sessionId.slice(0, 64);
+      }
+    } catch {
+      const text = event.data.text();
+      if (text) {
+        body = text.trim().slice(0, 250);
+      }
+    }
+  }
+
+  event.waitUntil(
+    showTimerNotification(title, body, sessionId, false)
+  );
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
     closeAllExistingNotifications().then(() =>
-      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      self.clients.matchAll({ type: 'window', includeUncontrolled: false }).then((clientList) => {
         for (const client of clientList) {
-          if ('focus' in client) {
+          if (client.url.startsWith(self.location.origin) && 'focus' in client) {
             return client.focus();
           }
         }
         if (self.clients.openWindow) {
-          return self.clients.openWindow('/');
+          return self.clients.openWindow(new URL('/', self.location.origin).href);
         }
       })
     )

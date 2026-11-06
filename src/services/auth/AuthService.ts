@@ -153,7 +153,29 @@ export class AuthService {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem('auth_token_v1');
       localStorage.removeItem(USER_KEY);
+      localStorage.removeItem('auth_user_v1');
       localStorage.removeItem(LAST_SYNC_KEY);
+
+      // Disable Google One Tap auto-selection to prevent automatic immediate re-login
+      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id?.disableAutoSelect) {
+        try {
+          (window as any).google.accounts.id.disableAutoSelect();
+        } catch {
+          // Ignore
+        }
+      }
+
+      // Purge Convex auth refresh tokens from localStorage
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('__convexAuth') || k.startsWith('convex_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      for (const k of keysToRemove) {
+        localStorage.removeItem(k);
+      }
     } catch (e) {
       console.warn('Error clearing auth from localStorage', e);
     }

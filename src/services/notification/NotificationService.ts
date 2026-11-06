@@ -1,6 +1,5 @@
 import { SessionType } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
-import { AuthService } from '../auth/AuthService';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
 
@@ -92,8 +91,8 @@ export class NotificationService {
     });
   }
 
-  setAuthToken(token: string | null): void {
-    this.sendWorkerMessage({ type: 'SET_AUTH_TOKEN', token });
+  setAuthToken(_token: string | null): void {
+    // No-op: Auth tokens are no longer exposed to Service Worker memory
   }
 
   private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
@@ -262,7 +261,6 @@ export class NotificationService {
       body,
       sessionId: sessionRunId || null,
       isManualTest,
-      token: AuthService.getInstance().getStoredToken(),
     });
     return true;
   }
@@ -299,7 +297,6 @@ export class NotificationService {
       sessionId: sessionRunId || null,
       sessionType,
       isMobile: isMobileDevice(),
-      token: AuthService.getInstance().getStoredToken(),
     });
   }
 

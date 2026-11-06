@@ -214,7 +214,16 @@ describe("Security Hardening & Input Validation", () => {
         p256dh: "BM6hZ/VALID=",
         auth: "AUTHKEY==",
       })
-    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL.");
+    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
+
+    await expect(
+      asUser.mutation(api.push.register, {
+        deviceId: "device-1",
+        endpoint: "https://169.254.169.254/latest/meta-data/",
+        p256dh: "BM6hZ/VALID=",
+        auth: "AUTHKEY==",
+      })
+    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
     await expect(
       asUser.mutation(api.push.register, {
@@ -223,9 +232,9 @@ describe("Security Hardening & Input Validation", () => {
         p256dh: "BM6hZ/VALID=",
         auth: "AUTHKEY==",
       })
-    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL.");
+    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
-    // Valid HTTPS endpoint succeeds
+    // Valid HTTPS endpoint from allowed provider succeeds
     const regId = await asUser.mutation(api.push.register, {
       deviceId: "device-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/sample-token",

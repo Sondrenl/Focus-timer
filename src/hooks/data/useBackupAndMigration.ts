@@ -492,8 +492,31 @@ export function useBackupAndMigration({
         broadcastCoffeeCups(finalCoffee);
       }
 
-      if (data.settings) {
-        await updateSettings(data.settings);
+      if (data.settings && typeof data.settings === 'object') {
+        const raw = data.settings as any;
+        const safeSettings: any = {};
+        if (typeof raw.workDurationMinutes === 'number' && Number.isFinite(raw.workDurationMinutes)) {
+          safeSettings.workDurationMinutes = Math.max(1, Math.min(360, Math.floor(raw.workDurationMinutes)));
+        }
+        if (typeof raw.shortBreakDurationMinutes === 'number' && Number.isFinite(raw.shortBreakDurationMinutes)) {
+          safeSettings.shortBreakDurationMinutes = Math.max(1, Math.min(120, Math.floor(raw.shortBreakDurationMinutes)));
+        }
+        if (typeof raw.longBreakDurationMinutes === 'number' && Number.isFinite(raw.longBreakDurationMinutes)) {
+          safeSettings.longBreakDurationMinutes = Math.max(1, Math.min(180, Math.floor(raw.longBreakDurationMinutes)));
+        }
+        if (typeof raw.longBreakInterval === 'number' && Number.isFinite(raw.longBreakInterval)) {
+          safeSettings.longBreakInterval = Math.max(1, Math.min(20, Math.floor(raw.longBreakInterval)));
+        }
+        if (typeof raw.soundVolume === 'number' && Number.isFinite(raw.soundVolume)) {
+          safeSettings.soundVolume = Math.max(0, Math.min(1, raw.soundVolume));
+        }
+        if (typeof raw.soundEnabled === 'boolean') safeSettings.soundEnabled = raw.soundEnabled;
+        if (typeof raw.notificationsEnabled === 'boolean') safeSettings.notificationsEnabled = raw.notificationsEnabled;
+        if (typeof raw.autoStartBreaks === 'boolean') safeSettings.autoStartBreaks = raw.autoStartBreaks;
+        if (typeof raw.autoStartPomodoros === 'boolean') safeSettings.autoStartPomodoros = raw.autoStartPomodoros;
+        if (typeof raw.keepAwake === 'boolean') safeSettings.keepAwake = raw.keepAwake;
+
+        await updateSettings(safeSettings);
       }
       if (data.profile) {
         const safeDisplayName =
@@ -504,9 +527,14 @@ export function useBackupAndMigration({
           typeof data.profile.dailyGoalMinutes === 'number' && !isNaN(data.profile.dailyGoalMinutes)
             ? Math.max(1, Math.min(1440, Math.floor(data.profile.dailyGoalMinutes)))
             : undefined;
+        const safeAvatarEmoji =
+          typeof data.profile.avatarEmoji === 'string'
+            ? data.profile.avatarEmoji.trim().slice(0, 10)
+            : undefined;
+
         const safeProfileUpdate: Partial<UserProfile> = {
           displayName: safeDisplayName,
-          avatarEmoji: data.profile.avatarEmoji,
+          avatarEmoji: safeAvatarEmoji,
           dailyGoalMinutes: safeDailyGoal,
         };
         if (
@@ -520,9 +548,9 @@ export function useBackupAndMigration({
       }
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
-        const tagsForConvex = mode === 'replace' ? finalTags : validTags;
-        const sessionsForConvex = mode === 'replace' ? finalSessions : validSessions;
-        const coffeeForConvex = mode === 'replace' ? finalCoffee : validCoffee;
+        const tagsForConvex = finalTags;
+        const sessionsForConvex = finalSessions;
+        const coffeeForConvex = finalCoffee;
         syncBackupToConvexChunked(
           mode,
           tagsForConvex.map((t) => ({

@@ -39,13 +39,13 @@ export function sanitizeProfile(raw: Partial<UserProfile> | null | undefined): U
     : DEFAULT_PROFILE.createdAt;
 
   return {
-    ...DEFAULT_PROFILE,
-    ...raw,
     displayName,
     avatarUrl,
     dailyGoalMinutes,
     avatarEmoji,
     createdAt,
+    id: typeof raw.id === 'string' ? raw.id : undefined,
+    email: typeof raw.email === 'string' ? raw.email : undefined,
   };
 }
 

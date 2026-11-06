@@ -183,6 +183,19 @@ export const useTimerCloudSync = ({
   const applyRemoteState = useCallback(
     (remote: RemoteTimerState) => {
       const nowMs = Date.now();
+      const MAX_FUTURE_DRIFT_MS = 60_000; // Allow max 60s future clock skew
+      const MAX_PAST_AGE_MS = 7 * 24 * 60 * 60 * 1000; // Max 7 days
+
+      if (
+        typeof remote.updatedAtMs !== 'number' ||
+        !Number.isFinite(remote.updatedAtMs) ||
+        remote.updatedAtMs > nowMs + MAX_FUTURE_DRIFT_MS ||
+        remote.updatedAtMs < nowMs - MAX_PAST_AGE_MS
+      ) {
+        console.warn('[Sync] Rejected remote timer state with abnormal timestamp:', remote.updatedAtMs);
+        return;
+      }
+
       const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 1500;
       const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
 
@@ -266,6 +279,14 @@ export const useTimerCloudSync = ({
             notifications.cancelScheduledNotification();
             sound.stopSilentKeepAlive(false);
             wakeLockService.release();
+
+            // Self-heal: authoritatively reset Convex state so other devices do not stay stuck in RUNNING
+            convexTimerMutationsRef.current.resetTimer({
+              sessionType: remote.sessionType,
+              durationSeconds: dur,
+              currentCycle: remote.currentCycle || 1,
+              tagId: remote.activeTagId || undefined,
+            }).catch(() => {});
             return;
           }
 
@@ -273,6 +294,32 @@ export const useTimerCloudSync = ({
           handleCompleteRef.current(expiredLongAgo);
         }
       } else if (remote.status === 'PAUSED') {
+        const PAUSED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+        if (nowMs - remote.updatedAtMs > PAUSED_TTL_MS) {
+          const dur = getDurationForType(remote.sessionType);
+          sessionTypeRef.current = remote.sessionType;
+          totalSecondsRef.current = dur;
+          remainingSecondsRef.current = dur;
+          statusRef.current = 'IDLE';
+          setSessionType(remote.sessionType);
+          setTotalSeconds(dur);
+          setRemainingSeconds(dur);
+          setStatus('IDLE');
+          targetEndTimeRef.current = null;
+          setTargetEndTime(null);
+          timerRunIdRef.current = null;
+          sound.stopSilentKeepAlive(false);
+          wakeLockService.release();
+
+          convexTimerMutationsRef.current.resetTimer({
+            sessionType: remote.sessionType,
+            durationSeconds: dur,
+            currentCycle: remote.currentCycle || 1,
+            tagId: remote.activeTagId || undefined,
+          }).catch(() => {});
+          return;
+        }
+
         sessionTypeRef.current = remote.sessionType;
         currentCycleRef.current = remote.currentCycle || 1;
         totalSecondsRef.current = remote.totalSeconds;
