@@ -282,4 +282,44 @@ describe("Security Hardening & Input Validation", () => {
       })
     ).rejects.toThrow("Cannot import more than 100 tags.");
   });
+
+  it("cleans up abandoned RUNNING timers and stale presence via cleanupStaleTimers", async () => {
+    const t = convexTest(schema, modules);
+    const { userId } = await createAuthenticatedTestUser(t);
+
+    const now = Date.now();
+    // Insert an abandoned RUNNING timer whose targetEndTime was 2 hours ago
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 0,
+        totalSeconds: 1500,
+        targetEndTime: now - 2 * 3600 * 1000,
+        currentCycle: 1,
+        updatedAtMs: now - 2 * 3600 * 1000,
+        peerPresence: {
+          desktopActive: true,
+          desktopVisible: true,
+          mobileActive: false,
+          mobileVisible: false,
+          lastSeenMs: now - 48 * 3600 * 1000, // 48 hours ago
+        },
+      });
+    });
+
+    const res = await t.mutation(internal.timer.cleanupStaleTimers, {});
+    expect(res.cleanedCount).toBeGreaterThanOrEqual(1);
+
+    const timer = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+    });
+
+    expect(timer?.status).toBe("IDLE");
+    expect(timer?.targetEndTime).toBeUndefined();
+  });
 });

@@ -433,3 +433,75 @@ export const onTimerCompleted = internalMutation({
     });
   },
 });
+
+/**
+ * Scheduled background maintenance task:
+ * 1. Resets abandoned RUNNING timers (targetEndTime passed by > 1 hour) to IDLE.
+ * 2. Resets ancient PAUSED timers (> 7 days stale) to IDLE.
+ * 3. Clears stale peerPresence records (> 24 hours old).
+ */
+export const cleanupStaleTimers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const nowMs = Date.now();
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+    // Bounded scan to prevent exceeding transaction limits
+    const allTimers = await ctx.db.query("active_timers").take(1024);
+    let cleanedCount = 0;
+
+    for (const timer of allTimers) {
+      let needsReset = false;
+
+      // Abandoned RUNNING timer whose completion never executed
+      if (
+        timer.status === "RUNNING" &&
+        timer.targetEndTime &&
+        nowMs > timer.targetEndTime + ONE_HOUR_MS
+      ) {
+        needsReset = true;
+      }
+
+      // Abandoned PAUSED timer stale for more than 7 days
+      if (
+        timer.status === "PAUSED" &&
+        nowMs - timer.updatedAtMs > SEVEN_DAYS_MS
+      ) {
+        needsReset = true;
+      }
+
+      if (needsReset) {
+        const user = await ctx.db.get(timer.userId);
+        const settings = user?.settings ?? DEFAULT_SETTINGS;
+        const dur = Math.max(1, Math.round(settings.workDurationMinutes * 60));
+
+        await ctx.db.patch(timer._id, {
+          sessionType: "WORK",
+          status: "IDLE",
+          remainingSeconds: dur,
+          totalSeconds: dur,
+          currentCycle: 1,
+          targetEndTime: undefined,
+          timerRunId: undefined,
+          scheduledCompletionId: undefined,
+          updatedAtMs: nowMs,
+        });
+        cleanedCount++;
+      } else if (
+        timer.peerPresence &&
+        nowMs - (timer.peerPresence.lastSeenMs || 0) > ONE_DAY_MS
+      ) {
+        // Clear ancient presence heartbeat to reduce payload size
+        await ctx.db.patch(timer._id, {
+          peerPresence: undefined,
+        });
+        cleanedCount++;
+      }
+    }
+
+    return { cleanedCount };
+  },
+});
+
