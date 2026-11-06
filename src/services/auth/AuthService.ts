@@ -33,12 +33,19 @@ export function buildProfileFromJwt(
   payload: GoogleJwtPayload,
   currentProfile: UserProfile
 ): UserProfile {
+  const safeName = typeof payload.name === 'string' && payload.name.trim()
+    ? payload.name.trim().slice(0, 50)
+    : currentProfile.displayName;
+  const safeAvatarUrl = typeof payload.picture === 'string' && payload.picture.startsWith('https://')
+    ? payload.picture
+    : currentProfile.avatarUrl;
+
   return {
     ...currentProfile,
     id: payload.sub || currentProfile.id,
     email: payload.email || currentProfile.email,
-    displayName: payload.name || currentProfile.displayName,
-    avatarUrl: payload.picture || currentProfile.avatarUrl,
+    displayName: safeName,
+    avatarUrl: safeAvatarUrl,
     avatarEmoji: '', // Clear emoji when Google picture exists
   };
 }

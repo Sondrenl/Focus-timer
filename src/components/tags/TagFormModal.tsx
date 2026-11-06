@@ -4,6 +4,7 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Tag } from '../../types/tag';
 import { useApp } from '../../context/AppContext';
+import { sanitizeHexColor } from '../../utils/colors';
 
 // Curated pastel Material Design 3 palette
 const PASTEL_PALETTE = [
@@ -50,17 +51,23 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
+    const trimmed = name.trim();
+    if (!trimmed) {
       setError('Tag name is required');
+      return;
+    }
+    if (trimmed.length > 50) {
+      setError('Tag name must be 50 characters or less');
       return;
     }
 
     try {
+      const safeColor = sanitizeHexColor(color, PASTEL_PALETTE[0]);
       let savedTag: Tag | null;
       if (tagToEdit) {
-        savedTag = await updateTag(tagToEdit.id, { name: name.trim(), color });
+        savedTag = await updateTag(tagToEdit.id, { name: trimmed, color: safeColor });
       } else {
-        savedTag = await createTag({ name: name.trim(), color });
+        savedTag = await createTag({ name: trimmed, color: safeColor });
       }
       if (savedTag) {
         onTagSaved?.(savedTag);
@@ -68,7 +75,7 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
       onClose();
     } catch (err) {
       console.error('Error saving tag:', err);
-      setError('Failed to save tag');
+      setError(err instanceof Error ? err.message : 'Failed to save tag');
     }
   };
 
@@ -83,6 +90,7 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
           label="Tag Name"
           placeholder="e.g. Deep Work, Study, Writing"
           value={name}
+          maxLength={50}
           onChange={(e) => {
             setName(e.target.value);
             if (error) setError('');

@@ -1,5 +1,6 @@
 import { Tag, CreateTagInput, UpdateTagInput, DEFAULT_TAGS } from '../../types/tag';
 import { IStorageService } from '../storage/IStorageService';
+import { sanitizeHexColor } from '../../utils/colors';
 
 export interface ITagRepository {
   getAll(): Promise<Tag[]>;
@@ -16,6 +17,8 @@ export interface ITagRepository {
 
 const TAGS_STORAGE_KEY = 'tags_v1';
 const EPOCH_ISO = '1970-01-01T00:00:00.000Z';
+const MAX_TAG_NAME_LENGTH = 50;
+const MAX_TAGS_LIMIT = 100;
 
 export { DEFAULT_TAGS } from "../../types/tag";
 
@@ -47,7 +50,7 @@ export class TagRepository implements ITagRepository {
   async getAll(): Promise<Tag[]> {
     const raw = this.storage.getItem<Tag[]>(TAGS_STORAGE_KEY, []);
     let needsMigration = false;
-    const tags = raw.map((t) => {
+    const tags = (Array.isArray(raw) ? raw : []).map((t) => {
       let updated = false;
       const isArchived = Boolean(t.isArchived);
       let updatedAt = t.updatedAt;
@@ -58,11 +61,21 @@ export class TagRepository implements ITagRepository {
       if (t.isArchived !== isArchived) {
         updated = true;
       }
+      const safeColor = sanitizeHexColor(t.color);
+      if (t.color !== safeColor) {
+        updated = true;
+      }
+      const safeName = typeof t.name === 'string' ? t.name.trim().slice(0, MAX_TAG_NAME_LENGTH) : 'Tag';
+      if (t.name !== safeName) {
+        updated = true;
+      }
       if (updated) {
         needsMigration = true;
       }
       return {
         ...t,
+        name: safeName,
+        color: safeColor,
         isArchived,
         updatedAt,
       };
@@ -86,11 +99,19 @@ export class TagRepository implements ITagRepository {
   async create(input: CreateTagInput): Promise<Tag> {
     return this.enqueue(async () => {
       const all = await this.getAll();
+      if (all.length >= MAX_TAGS_LIMIT) {
+        throw new Error(`Maximum limit of ${MAX_TAGS_LIMIT} tags reached.`);
+      }
+      const trimmedName = input.name.trim().slice(0, MAX_TAG_NAME_LENGTH);
+      if (!trimmedName) {
+        throw new Error('Tag name cannot be empty.');
+      }
+      const safeColor = sanitizeHexColor(input.color, '#7E57C2');
       const nowIso = new Date().toISOString();
       const newTag: Tag = {
         id: `tag-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        name: input.name.trim(),
-        color: input.color,
+        name: trimmedName,
+        color: safeColor,
         isArchived: false,
         createdAt: nowIso,
         updatedAt: nowIso,
@@ -108,10 +129,16 @@ export class TagRepository implements ITagRepository {
       if (index === -1) return null;
 
       const nowIso = new Date().toISOString();
+      const updatedName = updates.name !== undefined ? updates.name.trim().slice(0, MAX_TAG_NAME_LENGTH) : all[index].name;
+      if (updates.name !== undefined && !updatedName) {
+        throw new Error('Tag name cannot be empty.');
+      }
+      const updatedColor = updates.color !== undefined ? sanitizeHexColor(updates.color, all[index].color) : all[index].color;
       const updated: Tag = {
         ...all[index],
         ...updates,
-        name: updates.name !== undefined ? updates.name.trim() : all[index].name,
+        name: updatedName,
+        color: updatedColor,
         updatedAt: updates.updatedAt || nowIso,
       };
       all[index] = updated;

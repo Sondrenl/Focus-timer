@@ -3,6 +3,7 @@ import { Coffee, Plus, Minus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
 import { toDateKey } from '../../utils/dates';
+import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
 export const CoffeeWorkspace: React.FC = () => {
   const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags } = useApp();
@@ -162,11 +163,11 @@ export const CoffeeWorkspace: React.FC = () => {
                 type="button"
                 onClick={() => setSelectedTagId(cup.tagId ?? null)}
                 className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-all duration-150 hover:scale-110 active:scale-95 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary hover:ring-1 hover:ring-md-outline/30"
-                style={{ backgroundColor: `${cupColor}25` }}
+                style={{ backgroundColor: getAlphaColor(cupColor, '25') }}
                 title={`Cup #${idx + 1}: ${cupName} (Click to select this tag)`}
                 aria-label={`Select tag ${cupName} from Cup #${idx + 1}`}
               >
-                <Coffee className="w-4 h-4" style={{ color: cupColor }} />
+                <Coffee className="w-4 h-4" style={{ color: sanitizeHexColor(cupColor) }} />
               </button>
             );
           })}
@@ -192,7 +193,7 @@ export const CoffeeWorkspace: React.FC = () => {
                 >
                   <span
                     className="w-2.5 h-2.5 md:w-2 md:h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: item.color }}
+                    style={{ backgroundColor: sanitizeHexColor(item.color) }}
                   />
                   <span className="text-md-on-surface">{item.name}:</span>
                   <span className="font-bold text-md-on-surface">{item.count}</span>

@@ -5,6 +5,7 @@ import { Tag } from '../../types/tag';
 import { Button } from '../ui/Button';
 import { TagFormModal } from './TagFormModal';
 import { clsx } from 'clsx';
+import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
 export const TagManager: React.FC = () => {
   const { tags, sessions, archiveTag, unarchiveTag, deleteTag } = useApp();
@@ -114,11 +115,11 @@ export const TagManager: React.FC = () => {
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div
                     className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
-                    style={{ backgroundColor: `${tag.color}25`, border: `1.5px solid ${tag.color}` }}
+                    style={{ backgroundColor: getAlphaColor(tag.color, '25'), border: `1.5px solid ${sanitizeHexColor(tag.color)}` }}
                   >
                     <span
                       className="w-3.5 h-3.5 rounded-full"
-                      style={{ backgroundColor: tag.color }}
+                      style={{ backgroundColor: sanitizeHexColor(tag.color) }}
                     />
                   </div>
 

@@ -11,6 +11,7 @@ import {
   broadcastReset,
 } from '../../services/timer/TimerBroadcast';
 import { isProduction } from '../../utils/environment';
+import { sanitizeHexColor } from '../../utils/colors';
 import {
   tagRepository,
   sessionRepository,
@@ -269,8 +270,8 @@ export function useBackupAndMigration({
             typeof t.id === 'string' && t.id.trim().length > 0
               ? t.id
               : `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          name: t.name.trim(),
-          color: typeof t.color === 'string' && t.color.trim().length > 0 ? t.color : '#3B82F6',
+          name: t.name.trim().slice(0, 50),
+          color: sanitizeHexColor(t.color, '#3B82F6'),
           isArchived: typeof t.isArchived === 'boolean' ? t.isArchived : Boolean(t.is_archived),
           createdAt:
             typeof t.createdAt === 'string'
@@ -495,12 +496,24 @@ export function useBackupAndMigration({
         await updateSettings(data.settings);
       }
       if (data.profile) {
+        const safeDisplayName =
+          typeof data.profile.displayName === 'string'
+            ? data.profile.displayName.trim().slice(0, 50)
+            : undefined;
+        const safeDailyGoal =
+          typeof data.profile.dailyGoalMinutes === 'number' && !isNaN(data.profile.dailyGoalMinutes)
+            ? Math.max(1, Math.min(1440, Math.floor(data.profile.dailyGoalMinutes)))
+            : undefined;
         const safeProfileUpdate: Partial<UserProfile> = {
-          displayName: data.profile.displayName,
+          displayName: safeDisplayName,
           avatarEmoji: data.profile.avatarEmoji,
-          dailyGoalMinutes: data.profile.dailyGoalMinutes,
+          dailyGoalMinutes: safeDailyGoal,
         };
-        if (!isEffectiveAuthenticated && data.profile.avatarUrl) {
+        if (
+          !isEffectiveAuthenticated &&
+          typeof data.profile.avatarUrl === 'string' &&
+          data.profile.avatarUrl.startsWith('https://')
+        ) {
           safeProfileUpdate.avatarUrl = data.profile.avatarUrl;
         }
         await updateProfile(safeProfileUpdate);

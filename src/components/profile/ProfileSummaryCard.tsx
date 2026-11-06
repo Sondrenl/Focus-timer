@@ -46,10 +46,13 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    const safeDisplayName = editName.trim().slice(0, 50) || 'Focus Practitioner';
+    const parsedMinutes = Number(editGoalMinutes);
+    const safeGoal = !isNaN(parsedMinutes) ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes))) : 120;
     await updateProfile({
-      displayName: editName.trim() || 'Focus Practitioner',
-      avatarEmoji: editEmoji,
-      dailyGoalMinutes: Number(editGoalMinutes) || 120,
+      displayName: safeDisplayName,
+      avatarEmoji: editEmoji.trim().slice(0, 10),
+      dailyGoalMinutes: safeGoal,
     });
     setIsEditingProfile(false);
   };
@@ -76,7 +79,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
             <div className="w-20 h-20 rounded-3xl bg-md-primary/10 border-2 border-md-primary/30 flex items-center justify-center text-3xl shadow-xs select-none overflow-hidden">
               {profile.avatarEmoji ? (
                 profile.avatarEmoji
-              ) : isAuthenticated && profile.avatarUrl ? (
+              ) : isAuthenticated && profile.avatarUrl && profile.avatarUrl.startsWith('https://') ? (
                 <img
                   src={profile.avatarUrl}
                   alt={isAuthenticated ? profile.displayName : 'Focus Practitioner'}

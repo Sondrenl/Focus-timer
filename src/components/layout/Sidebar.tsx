@@ -123,7 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="w-8 h-8 shrink-0 flex items-center justify-center rounded-full relative">
               {profile?.avatarEmoji ? (
                 <span className="text-xl leading-none select-none">{profile.avatarEmoji}</span>
-              ) : (isEffectiveAuthenticated && profile?.avatarUrl) ? (
+              ) : (isEffectiveAuthenticated && profile?.avatarUrl && profile.avatarUrl.startsWith('https://')) ? (
                 <img
                   src={profile.avatarUrl}
                   alt={profile?.displayName || 'Focus Practitioner'}
