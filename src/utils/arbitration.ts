@@ -34,7 +34,6 @@ export function evaluateDeviceAlert({
 
   const peerDesktopActive = isPeerFresh && peer.desktopActive;
   const peerDesktopVisible = isPeerFresh && peer.desktopVisible;
-  const peerMobileActive = isPeerFresh && peer.mobileActive;
 
   if (isMobile) {
     if (isVisible) return true;
@@ -50,11 +49,9 @@ export function evaluateDeviceAlert({
       return true;
     }
   } else {
-    if (type === 'WORK') {
-      return true;
-    } else {
-      if (isVisible) return true;
-      return !peerMobileActive;
-    }
+    // Desktop devices must always alert upon completion (both focus and break sessions)
+    // regardless of whether the browser tab is hidden or backgrounded, ensuring break completions
+    // are never missed while the user is working or browsing elsewhere.
+    return true;
   }
 }

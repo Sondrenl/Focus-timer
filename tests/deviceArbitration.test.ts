@@ -66,14 +66,14 @@ describe('Multi-Device Alert Arbitration', () => {
       expect(desktopAlerts).toBe(true);
     });
 
-    it('suppresses desktop break alert if desktop is hidden and mobile is active', () => {
+    it('always alerts desktop on break completion even if hidden or mobile peer is active', () => {
       const desktopAlerts = evaluateDeviceAlert({
         isMobile: false,
         isVisible: false,
         peer: { ...allInactive, mobileActive: true },
         type: 'SHORT_BREAK',
       });
-      expect(desktopAlerts).toBe(false);
+      expect(desktopAlerts).toBe(true);
     });
 
     it('alerts mobile on break completion if desktop is sleeping/closed', () => {
