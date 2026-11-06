@@ -61,6 +61,13 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
     onErrorMessage(null);
     onStatusMessage(null);
 
+    // Limit maximum backup file size to 10MB to prevent client-side memory exhaustion
+    if (file.size > 10 * 1024 * 1024) {
+      onErrorMessage('File is too large (maximum 10MB allowed).');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -79,6 +86,16 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
 
         if (rawTags.length === 0 && rawSessions.length === 0 && rawCoffee.length === 0) {
           throw new Error('File does not appear to be a valid Focus Timer backup.');
+        }
+
+        if (rawTags.length > 100) {
+          throw new Error('Backup contains too many tags (maximum 100 allowed).');
+        }
+        if (rawSessions.length > 10000) {
+          throw new Error('Backup contains too many sessions (maximum 10,000 allowed).');
+        }
+        if (rawCoffee.length > 10000) {
+          throw new Error('Backup contains too many coffee cups (maximum 10,000 allowed).');
         }
 
         setPendingBackup({

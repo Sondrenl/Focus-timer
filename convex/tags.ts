@@ -2,6 +2,26 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUser, getAuthenticatedUser, DEFAULT_TAGS } from "./authHelper";
 
+const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+export const MAX_TAGS_PER_USER = 100;
+export const MAX_TAG_NAME_LENGTH = 50;
+
+export function sanitizeTagColor(color: string): string {
+  const trimmed = color.trim();
+  return HEX_COLOR_REGEX.test(trimmed) ? trimmed : "#6B7280";
+}
+
+export function validateTagName(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    throw new Error("Tag name cannot be empty.");
+  }
+  if (trimmed.length > MAX_TAG_NAME_LENGTH) {
+    throw new Error(`Tag name cannot exceed ${MAX_TAG_NAME_LENGTH} characters.`);
+  }
+  return trimmed;
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -20,17 +40,24 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const now = new Date().toISOString();
+    const sanitizedName = validateTagName(args.name);
+    const sanitizedColor = sanitizeTagColor(args.color);
+    const currentTags = user.tags ?? DEFAULT_TAGS;
+
+    const existingIndex = args.id ? currentTags.findIndex((t) => t.id === args.id) : -1;
+    if (existingIndex === -1 && currentTags.length >= MAX_TAGS_PER_USER) {
+      throw new Error(`Maximum limit of ${MAX_TAGS_PER_USER} custom tags reached.`);
+    }
 
     const newTag = {
       id: args.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      name: args.name.trim(),
-      color: args.color.trim(),
+      name: sanitizedName,
+      color: sanitizedColor,
       isArchived: false,
       createdAt: now,
       updatedAt: now,
     };
 
-    const currentTags = user.tags ?? DEFAULT_TAGS;
     const filtered = currentTags.filter((t) => t.id !== newTag.id);
     await ctx.db.patch(user._id, {
       tags: [...filtered, newTag],
@@ -57,8 +84,8 @@ export const update = mutation({
     const updatedTags = currentTags.map((tag) => {
       if (tag.id === args.id) {
         found = true;
-        const newName = args.name !== undefined ? args.name.trim() : tag.name;
-        const newColor = args.color !== undefined ? args.color.trim() : tag.color;
+        const newName = args.name !== undefined ? validateTagName(args.name) : tag.name;
+        const newColor = args.color !== undefined ? sanitizeTagColor(args.color) : tag.color;
         const newArchived = args.isArchived !== undefined ? args.isArchived : tag.isArchived;
 
         if (newName !== tag.name || newColor !== tag.color || newArchived !== tag.isArchived) {

@@ -38,7 +38,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         if (!email || !sub) {
           throw new Error("Invalid token payload: missing email or sub");
         }
-        if (payload.email_verified === false) {
+        if (!payload.email_verified) {
           throw new Error("Invalid token payload: email is not verified");
         }
 

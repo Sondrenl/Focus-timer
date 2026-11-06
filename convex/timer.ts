@@ -63,6 +63,19 @@ export const start = mutation({
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
+    if (!Number.isFinite(args.durationSeconds) || args.durationSeconds < 1 || args.durationSeconds > 86400) {
+      throw new Error("durationSeconds must be between 1 and 86400.");
+    }
+    if (args.remainingSeconds !== undefined && (!Number.isFinite(args.remainingSeconds) || args.remainingSeconds < 0 || args.remainingSeconds > 86400)) {
+      throw new Error("remainingSeconds must be between 0 and 86400.");
+    }
+    if (args.totalSeconds !== undefined && (!Number.isFinite(args.totalSeconds) || args.totalSeconds < 1 || args.totalSeconds > 86400)) {
+      throw new Error("totalSeconds must be between 1 and 86400.");
+    }
+    if (!Number.isFinite(args.currentCycle) || args.currentCycle < 1 || args.currentCycle > 100) {
+      throw new Error("currentCycle must be between 1 and 100.");
+    }
+
     const now = Date.now();
     const remaining = Math.max(1, args.remainingSeconds ?? args.durationSeconds);
     const total = Math.max(remaining, args.totalSeconds ?? args.durationSeconds);
@@ -117,6 +130,9 @@ export const pause = mutation({
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx);
+    if (!Number.isFinite(args.remainingSeconds) || args.remainingSeconds < 0 || args.remainingSeconds > 86400) {
+      throw new Error("remainingSeconds must be between 0 and 86400.");
+    }
     const existing = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
@@ -157,6 +173,9 @@ export const resume = mutation({
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx);
+    if (!Number.isFinite(args.remainingSeconds) || args.remainingSeconds < 1 || args.remainingSeconds > 86400) {
+      throw new Error("remainingSeconds must be between 1 and 86400.");
+    }
     const existing = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
@@ -207,6 +226,12 @@ export const reset = mutation({
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
+    if (!Number.isFinite(args.durationSeconds) || args.durationSeconds < 1 || args.durationSeconds > 86400) {
+      throw new Error("durationSeconds must be between 1 and 86400.");
+    }
+    if (!Number.isFinite(args.currentCycle) || args.currentCycle < 1 || args.currentCycle > 100) {
+      throw new Error("currentCycle must be between 1 and 100.");
+    }
     const sanitizedTagId = args.tagId || undefined;
 
     const existing = await ctx.db

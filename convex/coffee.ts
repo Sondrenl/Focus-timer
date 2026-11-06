@@ -53,6 +53,19 @@ export const addCup = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
+    const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+    if (!DATE_REGEX.test(args.date)) {
+      throw new Error("Invalid date format: must be YYYY-MM-DD.");
+    }
+
+    const cupsToday = await ctx.db
+      .query("coffee_cups")
+      .withIndex("by_user_date", (q) => q.eq("userId", user._id).eq("date", args.date))
+      .collect();
+    if (cupsToday.length >= 50) {
+      throw new Error("Maximum limit of 50 coffee cups per day reached.");
+    }
+
     const now = args.createdAt ?? new Date().toISOString();
     const sanitizedTagId = args.tagId || undefined;
 

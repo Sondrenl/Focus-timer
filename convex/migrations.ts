@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { requireUser } from "./authHelper";
+import { sanitizeTagColor, MAX_TAG_NAME_LENGTH } from "./tags";
 
 export const importBackup = mutation({
   args: {
@@ -41,13 +42,34 @@ export const importBackup = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
+    if (args.tags.length > 100) {
+      throw new Error("Cannot import more than 100 tags.");
+    }
+    if (args.sessions.length > 10000) {
+      throw new Error("Cannot import more than 10,000 sessions in a single backup.");
+    }
+    if ((args.coffeeCups ?? []).length > 10000) {
+      throw new Error("Cannot import more than 10,000 coffee cups in a single backup.");
+    }
+
     const now = new Date().toISOString();
 
     const isSampleId = (id?: string) =>
       Boolean(id && (id.startsWith("sample-") || id.startsWith("seed-")));
 
-    const cleanIncomingSessions = args.sessions.filter((s) => !isSampleId(s.id));
-    const cleanIncomingCups = (args.coffeeCups ?? []).filter((c) => !isSampleId(c.id));
+    const cleanIncomingSessions = args.sessions.filter(
+      (s) =>
+        !isSampleId(s.id) &&
+        Number.isFinite(s.durationSeconds) &&
+        s.durationSeconds > 0 &&
+        s.durationSeconds <= 86400 * 7 &&
+        !isNaN(new Date(s.completedAt).getTime())
+    );
+    const cleanIncomingCups = (args.coffeeCups ?? []).filter(
+      (c) =>
+        !isSampleId(c.id) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(c.date)
+    );
 
     if (args.mode === "replace") {
       // 1. Clear existing sessions
@@ -78,10 +100,12 @@ export const importBackup = mutation({
           tagIdRemap.set(t.id, canonicalId);
         }
         validTagIds.add(canonicalId);
+        const cleanName = t.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
+        const cleanColor = sanitizeTagColor(t.color);
         return {
           id: canonicalId,
-          name: t.name.trim(),
-          color: t.color,
+          name: cleanName,
+          color: cleanColor,
           isArchived: t.isArchived ?? false,
           createdAt: now,
           updatedAt: now,
@@ -146,10 +170,12 @@ export const importBackup = mutation({
       } else {
         const canonicalId =
           incoming.id ?? `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const cleanName = incoming.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
+        const cleanColor = sanitizeTagColor(incoming.color);
         const newTag = {
           id: canonicalId,
-          name: incoming.name.trim(),
-          color: incoming.color,
+          name: cleanName,
+          color: cleanColor,
           isArchived: incoming.isArchived ?? false,
           createdAt: now,
           updatedAt: now,

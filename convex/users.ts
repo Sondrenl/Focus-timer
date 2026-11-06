@@ -35,15 +35,32 @@ export const updateProfile = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     const updates: Record<string, any> = {};
-    if (args.displayName !== undefined && args.displayName.trim() !== user.displayName) {
-      updates.displayName = args.displayName.trim();
-      updates.name = args.displayName.trim();
+    if (args.displayName !== undefined) {
+      const trimmed = args.displayName.trim();
+      if (trimmed.length > 100) {
+        throw new Error("Display name cannot exceed 100 characters.");
+      }
+      if (trimmed !== user.displayName) {
+        updates.displayName = trimmed;
+        updates.name = trimmed;
+      }
     }
-    if (args.avatarEmoji !== undefined && args.avatarEmoji !== user.avatarEmoji) {
-      updates.avatarEmoji = args.avatarEmoji;
+    if (args.avatarEmoji !== undefined) {
+      const trimmedEmoji = args.avatarEmoji.trim();
+      if (trimmedEmoji.length > 10) {
+        throw new Error("Avatar emoji cannot exceed 10 characters.");
+      }
+      if (trimmedEmoji !== user.avatarEmoji) {
+        updates.avatarEmoji = trimmedEmoji;
+      }
     }
-    if (args.dailyGoalMinutes !== undefined && args.dailyGoalMinutes !== user.dailyGoalMinutes) {
-      updates.dailyGoalMinutes = args.dailyGoalMinutes;
+    if (args.dailyGoalMinutes !== undefined) {
+      if (!Number.isFinite(args.dailyGoalMinutes) || args.dailyGoalMinutes < 1 || args.dailyGoalMinutes > 1440) {
+        throw new Error("Daily goal minutes must be between 1 and 1440.");
+      }
+      if (args.dailyGoalMinutes !== user.dailyGoalMinutes) {
+        updates.dailyGoalMinutes = args.dailyGoalMinutes;
+      }
     }
 
     if (Object.keys(updates).length > 0) {
@@ -69,6 +86,23 @@ export const updateSettings = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
+
+    if (args.workDurationMinutes !== undefined && (!Number.isFinite(args.workDurationMinutes) || args.workDurationMinutes < 1 || args.workDurationMinutes > 360)) {
+      throw new Error("workDurationMinutes must be between 1 and 360.");
+    }
+    if (args.shortBreakDurationMinutes !== undefined && (!Number.isFinite(args.shortBreakDurationMinutes) || args.shortBreakDurationMinutes < 1 || args.shortBreakDurationMinutes > 120)) {
+      throw new Error("shortBreakDurationMinutes must be between 1 and 120.");
+    }
+    if (args.longBreakDurationMinutes !== undefined && (!Number.isFinite(args.longBreakDurationMinutes) || args.longBreakDurationMinutes < 1 || args.longBreakDurationMinutes > 180)) {
+      throw new Error("longBreakDurationMinutes must be between 1 and 180.");
+    }
+    if (args.longBreakInterval !== undefined && (!Number.isFinite(args.longBreakInterval) || args.longBreakInterval < 1 || args.longBreakInterval > 20)) {
+      throw new Error("longBreakInterval must be between 1 and 20.");
+    }
+    if (args.soundVolume !== undefined && (!Number.isFinite(args.soundVolume) || args.soundVolume < 0 || args.soundVolume > 1)) {
+      throw new Error("soundVolume must be between 0 and 1.");
+    }
+
     const now = new Date().toISOString();
 
     const cleanUpdates = Object.fromEntries(

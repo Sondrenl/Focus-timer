@@ -41,8 +41,8 @@ export async function getAuthenticatedUser(
     return user;
   }
 
-  // Fallback: match by email (for users migrated from Cloudflare D1 or pre-seeded)
-  if (identity.email) {
+  // Fallback: match by email (only if verified) for users migrated from Cloudflare D1 or pre-seeded
+  if (identity.email && identity.emailVerified !== false) {
     const existingByEmail = await ctx.db
       .query("users")
       .withIndex("email", (q) => q.eq("email", identity.email))

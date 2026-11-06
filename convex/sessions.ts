@@ -83,7 +83,14 @@ export const record = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
+    if (!Number.isFinite(args.durationSeconds) || args.durationSeconds <= 0 || args.durationSeconds > 86400 * 7) {
+      throw new Error("Invalid durationSeconds: must be a positive finite number up to 7 days.");
+    }
+
     const parsedMs = args.completedAt ? new Date(args.completedAt).getTime() : NaN;
+    if (!isNaN(parsedMs) && parsedMs > Date.now() + 86400_000) {
+      throw new Error("completedAt timestamp cannot be in the future.");
+    }
     const completedAtMs = !isNaN(parsedMs) ? parsedMs : Date.now();
     const completedAt = !isNaN(parsedMs)
       ? args.completedAt!
