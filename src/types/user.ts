@@ -49,12 +49,19 @@ export interface AuthState {
 }
 
 /**
+ * Portable user customization data exported in backups.
+ * Private identifiers and PII (id, email, non-custom avatarUrl) are omitted.
+ */
+export type ExportedProfile = Pick<UserProfile, 'displayName' | 'avatarEmoji' | 'dailyGoalMinutes'>;
+
+/**
  * Schema for exported JSON backup
  */
 export interface BackupData {
   version: string;
   exportedAt: string;
-  profile?: Partial<UserProfile>;
+  /** Portable customization data (legacy backups may also contain legacy UserProfile fields) */
+  profile?: ExportedProfile | Partial<UserProfile>;
   settings?: Partial<UserSettings>;
   tags: Tag[];
   sessions: CompletedSession[];

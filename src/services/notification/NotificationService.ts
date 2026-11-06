@@ -11,7 +11,7 @@ export class NotificationService {
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       this.swRegistrationPromise = navigator.serviceWorker
-        .register('/sw.js')
+        .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
           this.cachedRegistration = reg;
           return reg;
@@ -23,6 +23,22 @@ export class NotificationService {
           this.cachedRegistration = reg;
         })
         .catch(() => {});
+
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        navigator.serviceWorker.getRegistration().then((reg) => {
+          if (reg) {
+            this.cachedRegistration = reg;
+          }
+        }).catch(() => {});
+      });
+
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible' && this.cachedRegistration) {
+            this.cachedRegistration.update().catch(() => {});
+          }
+        });
+      }
     }
   }
 
@@ -116,7 +132,7 @@ export class NotificationService {
           return reg;
         }
       } else {
-        const reg = await navigator.serviceWorker.register('/sw.js');
+        const reg = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
         if (reg?.active) {
           this.cachedRegistration = reg;
           return reg;

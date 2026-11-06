@@ -39,6 +39,67 @@ if (typeof window !== "undefined") {
   );
 }
 
+/**
+ * Validates and retrieves an auth token for Convex WebSocket connections.
+ * If candidate or stored token is expired (payload.exp * 1000 <= Date.now()),
+ * it returns undefined rather than passing an expired token to Convex,
+ * which prevents connection authentication rejection loops.
+ */
+export function getValidAuthToken(
+  token?: string | null,
+  options?: { forceRefreshToken?: boolean }
+): string | undefined {
+  try {
+    let candidate = token;
+
+    // Check localStorage if forceRefreshToken is requested or if candidate token is not provided
+    if ((options?.forceRefreshToken || !candidate) && typeof window !== "undefined") {
+      try {
+        const stored =
+          localStorage.getItem(AUTH_TOKEN_KEY) ||
+          localStorage.getItem("auth_token_v1");
+        if (stored) {
+          candidate = stored;
+        }
+      } catch {
+        // Ignore storage access errors
+      }
+    }
+
+    if (!candidate) {
+      return undefined;
+    }
+
+    const payload = parseGoogleJwt(candidate);
+    if (payload?.exp && payload.exp * 1000 <= Date.now()) {
+      // Candidate token is expired. Attempt to find a renewed token in localStorage
+      if (typeof window !== "undefined") {
+        try {
+          const freshStored =
+            localStorage.getItem(AUTH_TOKEN_KEY) ||
+            localStorage.getItem("auth_token_v1");
+          if (freshStored && freshStored !== candidate) {
+            const freshPayload = parseGoogleJwt(freshStored);
+            if (!freshPayload?.exp || freshPayload.exp * 1000 > Date.now()) {
+              return freshStored;
+            }
+          }
+        } catch {
+          // Ignore storage access errors
+        }
+      }
+
+      // Token is expired and no valid replacement exists; signal unauthenticated state
+      return undefined;
+    }
+
+    return candidate;
+  } catch (err) {
+    console.warn("Error evaluating Convex auth token validity:", err);
+    return undefined;
+  }
+}
+
 // Eagerly restore auth token from localStorage if valid, avoiding delayed sync on startup
 if (isConvexConfigured && typeof window !== "undefined") {
   try {
@@ -48,10 +109,23 @@ if (isConvexConfigured && typeof window !== "undefined") {
     if (storedToken) {
       const payload = parseGoogleJwt(storedToken);
       if (payload && (!payload.exp || payload.exp * 1000 > Date.now())) {
-        convexClient.setAuth(async () => storedToken);
+        convexClient.setAuth(
+          async (args) => getValidAuthToken(storedToken, args),
+          (isAuthenticated) => {
+            if (!isAuthenticated) {
+              console.warn("Convex eager auth expired or unauthenticated");
+            }
+          },
+          (isRefreshing) => {
+            if (isRefreshing) {
+              console.info("Convex eager auth token refresh in progress...");
+            }
+          }
+        );
       }
     }
   } catch {
     // Ignore storage errors
   }
 }
+

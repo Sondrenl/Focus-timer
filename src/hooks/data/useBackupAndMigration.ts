@@ -2,7 +2,7 @@ import React, { useEffect, useCallback, useRef } from 'react';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
 import { SessionType } from '../../types/timer';
-import { BackupData, UserProfile } from '../../types/user';
+import { BackupData, UserProfile, ExportedProfile } from '../../types/user';
 import { CoffeeCup } from '../../types/coffee';
 import { isSampleSessionId } from '../../services/repository/SessionRepository';
 import {
@@ -38,6 +38,22 @@ interface UseBackupAndMigrationParams {
   setSessions: React.Dispatch<React.SetStateAction<CompletedSession[]>>;
   coffeeCups: CoffeeCup[];
   setCoffeeCups: React.Dispatch<React.SetStateAction<CoffeeCup[]>>;
+}
+
+/**
+ * Sanitizes user profile for backup export, removing private identifiers and PII
+ * (cloud user id, email, and non-custom account photo avatarUrl).
+ * Only portable customization settings (displayName, avatarEmoji, dailyGoalMinutes) are exported.
+ */
+export function sanitizeProfileForExport(
+  profile?: UserProfile | null
+): ExportedProfile | undefined {
+  if (!profile) return undefined;
+  return {
+    displayName: profile.displayName,
+    avatarEmoji: profile.avatarEmoji,
+    dailyGoalMinutes: profile.dailyGoalMinutes,
+  };
 }
 
 export function useBackupAndMigration({
@@ -249,7 +265,7 @@ export function useBackupAndMigration({
     return {
       version: '3.0.1',
       exportedAt: new Date().toISOString(),
-      profile,
+      profile: sanitizeProfileForExport(profile),
       tags,
       sessions: sortedSessions,
       coffeeCups: sortedCoffee,
@@ -539,6 +555,7 @@ export function useBackupAndMigration({
         };
         if (
           !isEffectiveAuthenticated &&
+          'avatarUrl' in data.profile &&
           typeof data.profile.avatarUrl === 'string' &&
           data.profile.avatarUrl.startsWith('https://')
         ) {

@@ -1,4 +1,6 @@
 // @vitest-environment node
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SessionRepository, isSampleSessionId } from "../src/services/repository/SessionRepository";
 import { CoffeeRepository } from "../src/services/repository/CoffeeRepository";
@@ -7,6 +9,8 @@ import { ProfileRepository, sanitizeProfile } from "../src/services/repository/P
 import { sanitizeHexColor, getAlphaColor } from "../src/utils/colors";
 import { LocalStorageService } from "../src/services/storage/LocalStorageService";
 import * as envModule from "../src/utils/environment";
+import { useBackupAndMigration, sanitizeProfileForExport } from "../src/hooks/data/useBackupAndMigration";
+import { BackupData, UserProfile } from "../src/types/user";
 
 describe("Repository Serialization & Sample Data Isolation", () => {
   const store = new Map<string, string>();
@@ -27,7 +31,7 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       writable: true,
     });
     Object.defineProperty(globalThis, "window", {
-      value: { localStorage: mockStorage },
+      value: { localStorage: mockStorage, location: { hostname: "localhost" } },
       configurable: true,
       writable: true,
     });
@@ -255,4 +259,233 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       expect(getAlphaColor("invalid", "25")).toBe("#3B82F625");
     });
   });
+
+  describe("Exported Backup Privacy & PII Sanitization", () => {
+    it("sanitizeProfileForExport strips id, email, and avatarUrl while preserving displayName, avatarEmoji, and dailyGoalMinutes", () => {
+      const fullProfile: UserProfile = {
+        id: "convex-user-private-id",
+        email: "private.user@gmail.com",
+        avatarUrl: "https://lh3.googleusercontent.com/sensitive-photo.jpg",
+        displayName: "Focus Fanatic",
+        avatarEmoji: "🧠",
+        dailyGoalMinutes: 180,
+        createdAt: "2026-01-01T12:00:00.000Z",
+      };
+
+      const exported = sanitizeProfileForExport(fullProfile);
+      expect(exported).toEqual({
+        displayName: "Focus Fanatic",
+        avatarEmoji: "🧠",
+        dailyGoalMinutes: 180,
+      });
+      expect((exported as any).id).toBeUndefined();
+      expect((exported as any).email).toBeUndefined();
+      expect((exported as any).avatarUrl).toBeUndefined();
+      expect((exported as any).createdAt).toBeUndefined();
+    });
+
+    it("sanitizeProfileForExport returns undefined when profile is undefined or null", () => {
+      expect(sanitizeProfileForExport(undefined)).toBeUndefined();
+      expect(sanitizeProfileForExport(null)).toBeUndefined();
+    });
+
+    it("exportBackup() does not leak email, account id, or avatarUrl in exported backup data", () => {
+      let exportedBackupData: BackupData | null = null;
+
+      const profileWithPII: UserProfile = {
+        id: "usr_secret_account_id_99999",
+        email: "confidential_person@domain.com",
+        avatarUrl: "https://lh3.googleusercontent.com/a/ACg8ocPrivateProfilePhoto",
+        displayName: "Private Practitioner",
+        avatarEmoji: "🎯",
+        dailyGoalMinutes: 90,
+        createdAt: "2026-03-01T08:00:00.000Z",
+      };
+
+      function HookHarness() {
+        const { exportBackup } = useBackupAndMigration({
+          isEffectiveAuthenticated: true,
+          profile: profileWithPII,
+          settings: {
+            workDurationMinutes: 25,
+            shortBreakDurationMinutes: 5,
+            longBreakDurationMinutes: 15,
+            longBreakInterval: 4,
+            soundVolume: 0.7,
+            soundEnabled: true,
+            notificationsEnabled: true,
+            autoStartBreaks: false,
+            autoStartPomodoros: false,
+            keepAwake: false,
+          },
+          updateProfile: vi.fn(),
+          updateSettings: vi.fn(),
+          resetProfileToDefaults: vi.fn(),
+          resetSettingsToDefaults: vi.fn(),
+          convexSync: {
+            isConvexConfigured: false,
+            convexUser: null,
+            convexCoffee: [],
+            convexSessions: [],
+            mutations: {
+              importBackup: vi.fn(),
+            } as any,
+          },
+          tags: [
+            {
+              id: "tag-1",
+              name: "Focus",
+              color: "#3B82F6",
+              isArchived: false,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          setTags: vi.fn(),
+          activeTagId: null,
+          setActiveTagId: vi.fn(),
+          sessions: [],
+          setSessions: vi.fn(),
+          coffeeCups: [],
+          setCoffeeCups: vi.fn(),
+        });
+
+        exportedBackupData = exportBackup();
+        return null;
+      }
+
+      renderToStaticMarkup(React.createElement(HookHarness));
+
+      expect(exportedBackupData).not.toBeNull();
+      expect(exportedBackupData!.version).toBe("3.0.1");
+
+      // Verify profile is present but sanitized
+      expect(exportedBackupData!.profile).toBeDefined();
+      expect(exportedBackupData!.profile).toEqual({
+        displayName: "Private Practitioner",
+        avatarEmoji: "🎯",
+        dailyGoalMinutes: 90,
+      });
+
+      // Explicitly verify sensitive PII fields are omitted
+      const exportedProfile = exportedBackupData!.profile as any;
+      expect(exportedProfile.id).toBeUndefined();
+      expect(exportedProfile.email).toBeUndefined();
+      expect(exportedProfile.avatarUrl).toBeUndefined();
+      expect(exportedProfile.createdAt).toBeUndefined();
+
+      // Verify serialized JSON export does not contain any leaked PII strings
+      const jsonBackup = JSON.stringify(exportedBackupData);
+      expect(jsonBackup).not.toContain("confidential_person@domain.com");
+      expect(jsonBackup).not.toContain("usr_secret_account_id_99999");
+      expect(jsonBackup).not.toContain("ACg8ocPrivateProfilePhoto");
+    });
+
+    it("importBackup() correctly handles both sanitized exports and legacy exports with id/email", async () => {
+      let importBackupFn: any = null;
+      const mockUpdateProfile = vi.fn();
+
+      function HookHarness() {
+        const { importBackup } = useBackupAndMigration({
+          isEffectiveAuthenticated: true,
+          profile: {
+            id: "current-user-id",
+            email: "current-user@example.com",
+            displayName: "Current User",
+            avatarEmoji: "🦉",
+            dailyGoalMinutes: 120,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          settings: {
+            workDurationMinutes: 25,
+            shortBreakDurationMinutes: 5,
+            longBreakDurationMinutes: 15,
+            longBreakInterval: 4,
+            soundVolume: 0.7,
+            soundEnabled: true,
+            notificationsEnabled: true,
+            autoStartBreaks: false,
+            autoStartPomodoros: false,
+            keepAwake: false,
+          },
+          updateProfile: mockUpdateProfile,
+          updateSettings: vi.fn(),
+          resetProfileToDefaults: vi.fn(),
+          resetSettingsToDefaults: vi.fn(),
+          convexSync: {
+            isConvexConfigured: false,
+            convexUser: null,
+            convexCoffee: [],
+            convexSessions: [],
+            mutations: {
+              importBackup: vi.fn(),
+            } as any,
+          },
+          tags: [],
+          setTags: vi.fn(),
+          activeTagId: null,
+          setActiveTagId: vi.fn(),
+          sessions: [],
+          setSessions: vi.fn(),
+          coffeeCups: [],
+          setCoffeeCups: vi.fn(),
+        });
+
+        importBackupFn = importBackup;
+        return null;
+      }
+
+      renderToStaticMarkup(React.createElement(HookHarness));
+
+      // 1. Test importing a sanitized export (without id, email, or avatarUrl)
+      const sanitizedBackup: BackupData = {
+        version: "3.0.1",
+        exportedAt: new Date().toISOString(),
+        profile: {
+          displayName: "Imported Practitioner",
+          avatarEmoji: "🚀",
+          dailyGoalMinutes: 150,
+        },
+        tags: [],
+        sessions: [],
+      };
+
+      await importBackupFn(sanitizedBackup, "merge");
+      expect(mockUpdateProfile).toHaveBeenCalledWith({
+        displayName: "Imported Practitioner",
+        avatarEmoji: "🚀",
+        dailyGoalMinutes: 150,
+      });
+
+      // 2. Test importing a legacy backup containing legacy id, email, and avatarUrl
+      mockUpdateProfile.mockClear();
+      const legacyBackup: BackupData = {
+        version: "2.0.0",
+        exportedAt: new Date().toISOString(),
+        profile: {
+          id: "attacker-or-legacy-id-888",
+          email: "attacker-or-legacy@example.com",
+          displayName: "Legacy Practitioner",
+          avatarEmoji: "⚡",
+          dailyGoalMinutes: 60,
+          avatarUrl: "https://lh3.googleusercontent.com/legacy-photo.jpg",
+          createdAt: "2025-01-01T00:00:00.000Z",
+        } as any,
+        tags: [],
+        sessions: [],
+      };
+
+      await importBackupFn(legacyBackup, "merge");
+      // Must NOT include id or email in the profile update
+      expect(mockUpdateProfile).toHaveBeenCalledWith({
+        displayName: "Legacy Practitioner",
+        avatarEmoji: "⚡",
+        dailyGoalMinutes: 60,
+      });
+      const updatePayload = mockUpdateProfile.mock.calls[0][0];
+      expect(updatePayload.id).toBeUndefined();
+      expect(updatePayload.email).toBeUndefined();
+    });
+  });
 });
+

@@ -1,5 +1,5 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 1.0.3
+// Version: 1.0.4
 // Handles background, Home Screen, and lock-screen notifications with multi-device arbitration
 
 let scheduledTimerId = null;
@@ -11,7 +11,22 @@ self.addEventListener('install', () => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      // Safely clear any legacy or obsolete CacheStorage entries on activation
+      (async () => {
+        if (typeof caches !== 'undefined') {
+          try {
+            const cacheKeys = await caches.keys();
+            await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+          } catch {
+            // Ignore cache cleanup errors
+          }
+        }
+      })(),
+    ])
+  );
 });
 
 function clearExistingSchedule() {
