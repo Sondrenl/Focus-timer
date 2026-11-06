@@ -1,7 +1,7 @@
 # AI Development Declaration
 
 - **Project**: Focus Timer (Pomodor)
-- **Version**: 3.0.0
+- **Version**: 3.0.2
 - **Project Lead**: Sondre Lassen
 - **AI Collaborator**: Antigravity (Google DeepMind)
 - **Methodology**: Prompt-Driven Software Engineering
@@ -9,25 +9,30 @@
 ---
 
 ## 1. Overview
-This project was designed, implemented, and refined through **prompt-driven software engineering**. 
 
-System architecture, frontend components, state management, reactive backend schemas and functions, and high-frequency synchronization engines were authored by the AI assistant under the iterative specification, UX direction, and domain requirements provided by Sondre Lassen.
+This project was architected, implemented, and refined through **prompt-driven software engineering**. 
+
+System architecture, frontend interfaces, state management, reactive backend schemas, arbitration algorithms, and security controls were authored by the AI assistant under the iterative specification, UX direction, and domain requirements established by Sondre Lassen.
 
 ---
 
 ## 2. Verification & Quality Assurance
-- **Interactive Functional Validation**: Every feature iteration was tested and verified directly in real browser environments across desktop and mobile form factors.
-- **Automated Type Checks & Builds**: All code commits must compile cleanly with `tsc -b` and produce valid production bundles through Vite without warnings or type bypasses.
-- **Reactive Cloud Integration Testing**: Real-time schemas, queries, and mutations were validated against live backend deployments with end-to-end multi-device synchronization.
+
+- **Interactive Validation**: Every UX flow and component iteration was validated across mobile and desktop environments.
+- **Automated Test Suite**: Automated end-to-end unit and integration tests executed via Vitest and Convex Test covering timer state transitions, arbitration, synchronization, and security invariants.
+- **Strict Compilation & Bundling**: All commits compile cleanly under TypeScript (`tsc -b`) and bundle production assets via Vite with zero warnings or bypassed types.
+- **Backend Schema Verification**: Real-time schemas, compound indexes, and background mutations are validated against reactive cloud environments.
 
 ---
 
-## 3. Architecture & Generated Systems
-Key architectural layers engineered via prompt-driven workflows:
-1. **Frontend Architecture**: React 18 single-page application with modular Material 3 design tokens, strict TypeScript types, and repository patterns.
-2. **Timing Engine**: Background Web Worker paired with high-precision timestamp calculations to guarantee drift-free operation across tab switches, screen locks, and background throttling.
-3. **Multi-Device Presence & Arbitration**: Wall-clock gap detection combined with reactive presence heartbeats to pause asleep devices while allowing active secondary devices to maintain uninterrupted continuity. Smart audio arbitration ensures notifications chime only on the device actively in use.
-4. **Cloud Synchronization**: Real-time reactive subscriptions backed by a serverless database with Google OAuth 2.0 OIDC Identity Services.
-5. **Multi-Tab & Device Sync**: Combined `BroadcastChannel` for zero-latency local tab communication and sub-50ms WebSocket subscriptions for distributed multi-device synchronization.
-6. **Display & Audio APIs**: Screen Wake Lock API for mobile keep-awake and synthesized Web Audio API oscillators for crisp chime alerts without external audio file downloads.
-7. **Capacity Optimization & Change Detection**: Change-detection mutation guards, atomic batch deduplication, and throttled presence updates ensure zero wasted database writes and optimal free-tier performance.
+## 3. Architecture & Engineered Systems
+
+Core architectural layers developed through prompt-driven workflows:
+
+1. **Frontend Architecture**: React 18 single-page application with modular Material 3 design tokens, strict TypeScript typing, and decoupled repository patterns.
+2. **Timing Engine**: Dedicated background Web Worker combined with wall-clock timestamp calculations to ensure drift-free countdowns across device sleep, tab switching, and background throttling.
+3. **Multi-Device Presence & Arbitration**: Intelligent presence heartbeat and activity arbitration ensuring chime alerts and notifications route strictly to the device actively in use.
+4. **Reactive Cloud Synchronization**: Real-time WebSocket synchronization backed by Convex serverless functions and Google OAuth 2.0 / OIDC authentication.
+5. **Multi-Tab & Device Coordination**: Native `BroadcastChannel` communication for instant local tab coordination alongside sub-50ms cloud sync for multi-device continuity.
+6. **Security & Data Privacy**: Robust input sanitization, bounded database mutations, CSRF/SSRF protections, strict Content Security Policy, and sanitized export/import routines.
+7. **Resilience & Background Maintenance**: Self-healing dynamic chunk loading for seamless PWA updates and scheduled Convex crons for automated state maintenance.

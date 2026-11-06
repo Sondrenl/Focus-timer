@@ -263,7 +263,7 @@ export function useBackupAndMigration({
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
     return {
-      version: '3.0.1',
+      version: '3.0.2',
       exportedAt: new Date().toISOString(),
       profile: sanitizeProfileForExport(profile),
       tags,

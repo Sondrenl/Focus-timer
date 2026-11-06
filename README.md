@@ -1,79 +1,90 @@
 # Focus Timer (Pomodor)
 
-A fast, modern Pomodoro and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and a real-time reactive backend. Designed for frictionless flow state, zero-latency multi-device synchronization, and deep productivity insights.
+A fast, modern Pomodoro timer and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and a real-time reactive backend. Engineered for frictionless flow state, zero-latency multi-device synchronization, and deep productivity insights.
 
-[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.0.2-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
+[![Build & Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
 
 ---
 
-## Highlights
+## Features
 
-- **Reactive Multi-Device Synchronization (<50ms)**: Powered by real-time WebSocket subscriptions. Timers, coffee logs, custom tags, and user settings synchronize seamlessly across your phone, tablet, and laptop without manual refreshing or polling.
-- **Smart Device Arbitration & Alert Routing**: Intelligently detects whether you are active on mobile or desktop. Completion chimes and notifications route to the device you are actively using, avoiding annoying duplicate alarms.
-- **Drift-Free Background Timer**: Server-anchored timestamps combined with a dedicated background Web Worker maintain millisecond accuracy even when tabs are minimized, mobile screens lock, or the browser throttles timers.
-- **Sleep & Lid-Closed Detection**: Gracefully detects when your laptop lid closes or system sleeps, pausing local ticks while allowing connected peer devices to continue running smoothly.
-- **Instant Multi-Tab Communication**: Instant synchronization across tabs on the same computer using the browser's native `BroadcastChannel` API.
-- **Tag-Scoped Coffee & Caffeine Logging**: Visual, interactive coffee tray where clicking any cup selects its associated tag. Strict tag scoping, instant cloud logging, and detailed daily caffeine statistics.
-- **Keep Screen Awake (Mobile & Desktop)**: Leverages the Screen Wake Lock API to prevent device displays from dimming or sleeping during active focus intervals.
-- **Deep Productivity Analytics**: Comprehensive timeframe breakdowns (Day, Week, Month, Year, All-Time), interactive calendar inspector, peak productivity hours, daily coffee averages, and tag distribution donuts.
-- **Local-First with Seamless Cloud Continuity**: Operates 100% offline via local storage. Signing in with Google automatically connects cloud synchronization with automatic account linking and zero data loss.
-- **Synthesized Web Audio Alerts**: Clean, synthesized harmonic chime alerts powered by the Web Audio API without requiring external audio asset downloads.
-- **Customizable Intervals**: Configurable focus, short break, and long break durations, long break intervals, auto-start options, sound volumes, and daily focus goals.
+- **Real-Time Multi-Device Sync**: Powered by reactive Convex WebSocket subscriptions. Active timers, coffee logs, custom tags, and user preferences synchronize across mobile, tablet, and desktop without manual polling.
+- **Smart Device Arbitration**: Dynamically detects whether you are active on mobile or desktop to route alarms and notifications to the active device without duplicate chimes.
+- **Drift-Free Background Timing**: Web Worker engine combined with server timestamp anchoring ensures sub-millisecond precision even when tabs are backgrounded, mobile screens lock, or system sleep occurs.
+- **Tag-Scoped Caffeine Tracking**: Interactive coffee logging with customizable cups, milligrams tracking, tag scoping, and daily intake analytics.
+- **Productivity Analytics & Insights**: Multi-timeframe performance breakdowns (Day, Week, Month, Year, All-Time), interactive activity calendar, tag distribution, and correlation insights.
+- **Local-First with Cloud Continuity**: Full offline operation using local storage, with instant cloud synchronization upon signing in with Google OAuth.
+- **PWA & Display Controls**: Installable Progressive Web App with Screen Wake Lock support to keep displays awake during focus intervals, and self-healing dynamic chunk loading.
+- **Synthesized Web Audio**: Crisp harmonic alert chimes synthesized in-browser via the Web Audio API without external audio asset downloads.
 
 ---
 
 ## Tech Stack
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide React, Canvas Confetti
-- **Backend Database & Functions**: [Convex](https://www.convex.dev/) (Reactive real-time database, compound indexes, server-side scheduled actions)
-- **Authentication**: Google OAuth 2.0 Identity Services / OIDC JWT
-- **Browser APIs**: Screen Wake Lock API, Web Audio API, BroadcastChannel, Notifications API, Web Workers
+- **Backend & Database**: [Convex](https://www.convex.dev/) (Reactive document database, compound indexes, scheduled background crons)
+- **Authentication**: Google OAuth 2.0 / OIDC Identity Services
+- **Browser APIs**: Web Audio API, Screen Wake Lock API, Web Workers, BroadcastChannel, Notifications API, Service Worker
+- **Testing**: Vitest, Convex Test
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-- Node.js (v18 or newer)
-- npm
+
+- **Node.js** (v18 or newer)
+- **npm** (v9 or newer)
 
 ### Installation
-```bash
-# Clone the repository
-git clone https://github.com/sondrelassen/Focus-timer.git
 
-# Enter project directory
+```bash
+# Clone repository
+git clone https://github.com/sondrelassen/Focus-timer.git
 cd Focus-timer
 
 # Install dependencies
 npm install
 ```
 
-### Backend Setup
-1. Initialize or connect your Convex project:
-```bash
-npx convex dev
-```
-This configures your backend environment and writes the deployment URL to `.env.local`.
+### Environment Configuration
 
-2. Add your Google OAuth Web Client ID to `.env.local`:
+Create a `.env.local` file in the project root:
+
 ```env
+# Convex backend deployment URL (generated via convex dev)
+VITE_CONVEX_URL=https://your-deployment-name.convex.cloud
+
+# Google OAuth Web Client ID
 VITE_GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 ```
 
-### Running Locally
-To run both the Vite frontend and the Convex backend development server concurrently:
+### Development
+
+Run both the Vite frontend and the Convex backend concurrently:
+
 ```bash
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-You can also run them individually:
-- `npm run dev:frontend` – Starts the Vite dev server only
-- `npm run dev:convex` – Starts the Convex backend sync process only
+Alternatively, run each process individually:
+- `npm run dev:frontend` – Starts the Vite dev server (`http://localhost:5173`)
+- `npm run dev:convex` – Starts the Convex backend sync process
 
-### Building for Production
+### Testing
+
+Run the full automated test suite:
+
+```bash
+npm test
+```
+
+### Production Build
+
+Typecheck and generate optimized production bundles:
+
 ```bash
 npm run build
 ```
@@ -88,35 +99,37 @@ npm run build
 | `S` | Skip to next interval |
 | `R` | Reset current interval |
 
-*(Automatically hidden on mobile viewports)*
+*(Shortcuts are automatically disabled on mobile and touch devices)*
 
 ---
 
-## Architecture & Project Structure
+## Project Structure
 
 ```
-├── public/                 # Static assets, Web App Manifest, and Service Worker
+├── public/                 # Static assets, Web App Manifest, Service Worker, headers
 ├── convex/                 # Reactive real-time backend
-│   ├── schema.ts           # Database schema definitions & compound indexes
-│   ├── users.ts            # User profile, preferences & embedded tags
-│   ├── timer.ts            # Active timer state, server scheduler, and presence heartbeat
-│   ├── sessions.ts         # Pomodoro session history with time-window deduplication
-│   ├── coffee.ts           # Timestamped coffee intake tracking with strict tag scoping
-│   ├── tags.ts             # Tag operations and preference persistence
-│   ├── push.ts             # Multi-device push notification registrations
-│   ├── migrations.ts       # Atomic backup import/export and data ingestion routines
+│   ├── crons.ts            # Scheduled background maintenance tasks
+│   ├── schema.ts           # Database schema & compound indexes
+│   ├── timer.ts            # Active timer state, server scheduling & cleanup
+│   ├── sessions.ts         # Pomodoro session history & deduplication
+│   ├── coffee.ts           # Caffeine tracking with tag scoping
+│   ├── tags.ts             # Tag operations and color palettes
+│   ├── users.ts            # User profiles & settings persistence
+│   ├── push.ts             # Web Push notifications & allowlist validation
+│   ├── migrations.ts       # Atomic backup import/export
 │   └── auth.config.ts      # Google OIDC authentication provider config
-└── src/
-    ├── components/         # UI modules (Timer, Coffee, Stats, Tags, Settings, Profile)
-    ├── context/            # React state providers (AppContext, TimerContext)
-    ├── hooks/              # Reactive hooks (useConvexSync, useConvexTimer, useTimer)
-    ├── services/           # Repositories, AuthService, WakeLockService, SoundService, NotificationService
-    ├── types/              # TypeScript definitions (Timer, Session, Tag, Settings, Coffee, User)
-    └── utils/              # Math, environment detection, formatting, and visual effects
+├── src/
+│   ├── components/         # UI components (Timer, Coffee, Stats, Tags, Settings, Profile)
+│   ├── context/            # Global state providers (Auth, Timer, Data)
+│   ├── hooks/              # Custom reactive hooks & synchronization logic
+│   ├── services/           # Repositories, audio, notifications, arbitration
+│   ├── types/              # TypeScript definitions & data models
+│   └── utils/              # Formatting, color sanitization, resilience utilities
+└── tests/                  # Automated Vitest test suite
 ```
 
 ---
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the [MIT License](LICENSE).
