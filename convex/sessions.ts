@@ -34,6 +34,7 @@ export const list = query({
     const user = await getAuthenticatedUser(ctx);
     if (!user) return null;
 
+    const safeLimit = Math.min(Math.max(1, args.limit ?? 2000), 5000);
     let sessions;
     if (args.startDate || args.endDate) {
       const start = args.startDate
@@ -55,14 +56,13 @@ export const list = query({
             .gte("completedAt", start)
             .lte("completedAt", end)
         )
-        .collect();
+        .take(safeLimit);
     } else {
-      const limit = args.limit ?? 2000;
       const descSessions = await ctx.db
         .query("sessions")
         .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
         .order("desc")
-        .take(limit);
+        .take(safeLimit);
       sessions = descSessions.reverse();
     }
 
@@ -85,6 +85,10 @@ export const record = mutation({
     const user = await requireUser(ctx, true);
     if (!Number.isFinite(args.durationSeconds) || args.durationSeconds <= 0 || args.durationSeconds > 86400 * 7) {
       throw new Error("Invalid durationSeconds: must be a positive finite number up to 7 days.");
+    }
+
+    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
+      throw new Error("Invalid tagId format.");
     }
 
     const parsedMs = args.completedAt ? new Date(args.completedAt).getTime() : NaN;
@@ -136,7 +140,7 @@ export const clear = mutation({
     const sessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .collect();
+      .take(4096);
 
     for (const session of sessions) {
       await ctx.db.delete(session._id);

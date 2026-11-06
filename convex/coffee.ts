@@ -16,6 +16,7 @@ export const list = query({
     const user = await getAuthenticatedUser(ctx);
     if (!user) return null;
 
+    const safeLimit = Math.min(Math.max(1, args.limit ?? 2000), 5000);
     let cups;
     if (args.date) {
       cups = await ctx.db
@@ -23,14 +24,13 @@ export const list = query({
         .withIndex("by_user_date", (q) =>
           q.eq("userId", user._id).eq("date", args.date!)
         )
-        .collect();
+        .take(100);
     } else {
-      const limit = args.limit ?? 2000;
       const descCups = await ctx.db
         .query("coffee_cups")
         .withIndex("by_user_date", (q) => q.eq("userId", user._id))
         .order("desc")
-        .take(limit);
+        .take(safeLimit);
       cups = descCups.reverse();
     }
 
@@ -56,6 +56,10 @@ export const addCup = mutation({
     const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
     if (!DATE_REGEX.test(args.date)) {
       throw new Error("Invalid date format: must be YYYY-MM-DD.");
+    }
+
+    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
+      throw new Error("Invalid tagId format.");
     }
 
     const cupsToday = await ctx.db
@@ -94,13 +98,16 @@ export const removeCup = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
 
-    // 1. If an ID is provided, try to find and delete by ID
+    // 1. If an ID is provided, strictly resolve against coffee_cups table to prevent cross-table deletion
     if (args.id) {
       try {
-        const cup = await ctx.db.get(args.id as any);
-        if (cup && "userId" in cup && cup.userId === user._id) {
-          await ctx.db.delete(cup._id);
-          return true;
+        const normalizedId = ctx.db.normalizeId("coffee_cups", args.id);
+        if (normalizedId) {
+          const cup = await ctx.db.get(normalizedId);
+          if (cup && cup.userId === user._id) {
+            await ctx.db.delete(cup._id);
+            return true;
+          }
         }
       } catch {
         // Not a valid Convex ID format, fall through to date/tag matching
@@ -153,7 +160,7 @@ export const clear = mutation({
     const cups = await ctx.db
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-      .collect();
+      .take(4096);
 
     for (const cup of cups) {
       await ctx.db.delete(cup._id);

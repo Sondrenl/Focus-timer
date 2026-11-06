@@ -33,7 +33,7 @@ describe("Security Hardening & Input Validation", () => {
     expect(tag.color).toBe("#6B7280");
   });
 
-  it("rejects empty tag names and oversized tag names", async () => {
+  it("rejects empty tag names, oversized tag names, and malformed tag IDs", async () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createAuthenticatedTestUser(t);
 
@@ -50,6 +50,14 @@ describe("Security Hardening & Input Validation", () => {
         color: "#3B82F6",
       })
     ).rejects.toThrow("Tag name cannot exceed 50 characters.");
+
+    await expect(
+      asUser.mutation(api.tags.create, {
+        id: "invalid tag id with spaces!",
+        name: "Valid Name",
+        color: "#3B82F6",
+      })
+    ).rejects.toThrow("Invalid tag id format.");
   });
 
   it("rejects negative or excessive durationSeconds in sessions.record", async () => {
@@ -111,6 +119,30 @@ describe("Security Hardening & Input Validation", () => {
     ).rejects.toThrow("Maximum limit of 50 coffee cups per day reached.");
   });
 
+  it("prevents cross-table arbitrary document deletion in coffee.removeCup", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // Create a real session
+    const session = await asUser.mutation(api.sessions.record, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      completedAt: "2026-03-20T12:00:00.000Z",
+    });
+
+    // Attempt to pass the session ID to coffee.removeCup (IDOR / cross-table deletion attack)
+    const result = await asUser.mutation(api.coffee.removeCup, {
+      id: session.id,
+    });
+
+    expect(result).toBe(false);
+
+    // Verify session was NOT deleted from sessions table
+    const sessions = await asUser.query(api.sessions.list, {});
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].id).toBe(session.id);
+  });
+
   it("validates profile and settings bounds", async () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createAuthenticatedTestUser(t);
@@ -154,12 +186,74 @@ describe("Security Hardening & Input Validation", () => {
     ).rejects.toThrow("durationSeconds must be between 1 and 86400.");
 
     await expect(
+      asUser.mutation(api.timer.start, {
+        sessionType: "WORK",
+        durationSeconds: 1500,
+        currentCycle: 1,
+        timerRunId: "invalid run id with spaces!",
+      })
+    ).rejects.toThrow("Invalid timerRunId format.");
+
+    await expect(
       asUser.mutation(api.timer.reset, {
         sessionType: "WORK",
         durationSeconds: 1500,
         currentCycle: 101,
       })
     ).rejects.toThrow("currentCycle must be between 1 and 100.");
+  });
+
+  it("validates push subscription endpoints against SSRF and non-HTTPS schemes", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    await expect(
+      asUser.mutation(api.push.register, {
+        deviceId: "device-1",
+        endpoint: "http://169.254.169.254/latest/meta-data/",
+        p256dh: "BM6hZ/VALID=",
+        auth: "AUTHKEY==",
+      })
+    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL.");
+
+    await expect(
+      asUser.mutation(api.push.register, {
+        deviceId: "device-1",
+        endpoint: "javascript:alert(1)",
+        p256dh: "BM6hZ/VALID=",
+        auth: "AUTHKEY==",
+      })
+    ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL.");
+
+    // Valid HTTPS endpoint succeeds
+    const regId = await asUser.mutation(api.push.register, {
+      deviceId: "device-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/sample-token",
+      p256dh: "BM6hZ/VALID=",
+      auth: "AUTHKEY==",
+    });
+    expect(regId).toBeDefined();
+  });
+
+  it("enforces push subscription quota and prunes oldest devices when exceeding quota", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // Register 11 devices
+    for (let i = 1; i <= 11; i++) {
+      await asUser.mutation(api.push.register, {
+        deviceId: `device-${i}`,
+        endpoint: `https://fcm.googleapis.com/fcm/send/token-${i}`,
+        p256dh: "BM6hZ/VALID=",
+        auth: "AUTHKEY==",
+      });
+    }
+
+    const subs = await asUser.query(api.push.listSubscriptions, {});
+    expect(subs.length).toBeLessThanOrEqual(10);
+    // Device 1 should have been pruned
+    expect(subs.some((s) => s.deviceId === "device-1")).toBe(false);
+    expect(subs.some((s) => s.deviceId === "device-11")).toBe(true);
   });
 
   it("rejects oversized backup imports", async () => {

@@ -33,7 +33,9 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           (payload.name as string | undefined) ||
           email?.split("@")[0] ||
           "Focus Practitioner";
-        const picture = payload.picture as string | undefined;
+        const picture = typeof payload.picture === "string" && payload.picture.startsWith("https://")
+          ? payload.picture
+          : undefined;
 
         if (!email || !sub) {
           throw new Error("Invalid token payload: missing email or sub");

@@ -75,6 +75,12 @@ export const start = mutation({
     if (!Number.isFinite(args.currentCycle) || args.currentCycle < 1 || args.currentCycle > 100) {
       throw new Error("currentCycle must be between 1 and 100.");
     }
+    if (!args.timerRunId || args.timerRunId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(args.timerRunId)) {
+      throw new Error("Invalid timerRunId format.");
+    }
+    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
+      throw new Error("Invalid tagId format.");
+    }
 
     const now = Date.now();
     const remaining = Math.max(1, args.remainingSeconds ?? args.durationSeconds);
@@ -132,6 +138,9 @@ export const pause = mutation({
     const user = await requireUser(ctx);
     if (!Number.isFinite(args.remainingSeconds) || args.remainingSeconds < 0 || args.remainingSeconds > 86400) {
       throw new Error("remainingSeconds must be between 0 and 86400.");
+    }
+    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
+      throw new Error("Invalid tagId format.");
     }
     const existing = await ctx.db
       .query("active_timers")
@@ -231,6 +240,9 @@ export const reset = mutation({
     }
     if (!Number.isFinite(args.currentCycle) || args.currentCycle < 1 || args.currentCycle > 100) {
       throw new Error("currentCycle must be between 1 and 100.");
+    }
+    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
+      throw new Error("Invalid tagId format.");
     }
     const sanitizedTagId = args.tagId || undefined;
 

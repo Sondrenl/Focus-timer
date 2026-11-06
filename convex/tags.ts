@@ -39,6 +39,9 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
+    if (args.id !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
+      throw new Error("Invalid tag id format.");
+    }
     const now = new Date().toISOString();
     const sanitizedName = validateTagName(args.name);
     const sanitizedColor = sanitizeTagColor(args.color);
@@ -76,6 +79,9 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
+      throw new Error("Invalid tag id format.");
+    }
     const now = new Date().toISOString();
     const currentTags = user.tags ?? DEFAULT_TAGS;
 
@@ -122,6 +128,9 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
+      throw new Error("Invalid tag id format.");
+    }
     const currentTags = user.tags ?? DEFAULT_TAGS;
     const filtered = currentTags.filter((t) => t.id !== args.id);
 

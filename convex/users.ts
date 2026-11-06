@@ -161,9 +161,13 @@ export const getOrCreateUserForAuth = internalMutation({
       if (!existingByEmail.name && args.name) {
         patchData.name = args.name;
       }
-      if (args.avatarUrl && existingByEmail.avatarUrl !== args.avatarUrl) {
-        patchData.avatarUrl = args.avatarUrl;
-        patchData.image = args.avatarUrl;
+      const safeAvatar = args.avatarUrl && args.avatarUrl.startsWith("https://") ? args.avatarUrl : undefined;
+      if (safeAvatar && existingByEmail.avatarUrl !== safeAvatar) {
+        patchData.avatarUrl = safeAvatar;
+        patchData.image = safeAvatar;
+      }
+      if (!existingByEmail.tokenIdentifier) {
+        patchData.tokenIdentifier = args.sub;
       }
       if (Object.keys(patchData).length > 0) {
         await ctx.db.patch(existingByEmail._id, patchData);
