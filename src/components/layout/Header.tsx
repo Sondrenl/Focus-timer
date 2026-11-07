@@ -14,7 +14,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-20 md:static w-full shrink-0 flex items-center justify-between px-4 md:px-6 py-3 bg-md-background/90 backdrop-blur-xs md:bg-transparent md:backdrop-blur-none">
+    <header className="fixed top-0 left-0 right-0 z-20 lg:static w-full shrink-0 flex items-center justify-between px-4 lg:px-6 py-3 bg-md-background/90 backdrop-blur-xs lg:bg-transparent lg:backdrop-blur-none">
       {/* Left: Mobile hamburger drawer trigger */}
       <div className="flex items-center gap-3">
         <button
@@ -30,14 +30,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
       <div className="flex items-center gap-2">
         <button
           onClick={toggleSound}
-          className="w-11 h-11 md:w-9 md:h-9 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high text-md-on-surface-variant hover:text-md-on-surface transition-all shadow-xs active:scale-95"
+          className="w-11 h-11 lg:w-9 lg:h-9 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high text-md-on-surface-variant hover:text-md-on-surface transition-all shadow-xs active:scale-95"
           title={settings.soundEnabled ? 'Mute sound chime' : 'Enable sound chime'}
           aria-label={settings.soundEnabled ? 'Mute sound chime' : 'Enable sound chime'}
         >
           {settings.soundEnabled ? (
-            <Volume2 className="w-5 h-5 md:w-4 md:h-4 text-md-primary" />
+            <Volume2 className="w-5 h-5 lg:w-4 lg:h-4 text-md-primary" />
           ) : (
-            <VolumeX className="w-5 h-5 md:w-4 md:h-4 text-md-outline" />
+            <VolumeX className="w-5 h-5 lg:w-4 lg:h-4 text-md-outline" />
           )}
         </button>
       </div>

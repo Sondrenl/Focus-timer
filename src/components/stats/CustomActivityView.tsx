@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
+import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2, Filter } from 'lucide-react';
 import { ActivityInspectionCard } from './ActivityInspectionCard';
@@ -315,7 +315,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
 
           {/* 7-Column Calendar Grid */}
           <div
-            className="grid grid-cols-7 gap-1 sm:gap-2 max-h-[460px] overflow-y-auto pr-0.5 scrollbar-thin"
+            className="grid grid-cols-7 gap-1 sm:gap-2 sm:max-h-[460px] sm:overflow-y-auto pr-0.5 scrollbar-thin"
             onMouseLeave={() => setHoveredDayKey(null)}
           >
             {/* Empty Offset Days before the start date */}
@@ -346,13 +346,17 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                   )}
                   aria-label={`${bar.label} ${bar.subLabel}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  {/* Mobile View: Centered date number and activity indicator dot */}
-                  <div className="flex sm:hidden flex-col items-center justify-center">
+                  {/* Mobile View: Centered date number and compact duration */}
+                  <div className="flex sm:hidden flex-col items-center justify-center w-full">
                     <span className="text-xs font-bold leading-none">
                       {bar.label}
                     </span>
-                    {sec > 0 && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-85 mt-1" />
+                    {sec > 0 ? (
+                      <span className="text-[9px] font-bold text-md-on-surface truncate leading-tight mt-1">
+                        {formatCompactDuration(sec)}
+                      </span>
+                    ) : (
+                      <span className="text-[8px] opacity-25 mt-0.5 leading-none">—</span>
                     )}
                   </div>
 
@@ -398,7 +402,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
           />
         </div>
       ) : granularity === 'weekly' ? (
-        <div className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
+        <div className="flex flex-col gap-2.5 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
           {weeklyGroups.map((week) => {
             const widthPct = maxWeekSeconds > 0 ? Math.min(100, Math.round((week.totalSeconds / maxWeekSeconds) * 100)) : 0;
             const hasHours = week.totalSeconds > 0;
@@ -406,18 +410,18 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
             return (
               <div
                 key={`custom-week-${week.weekIndex}`}
-                className="flex items-center gap-3 p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
+                className="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
               >
-                <div className="w-32 sm:w-36 shrink-0 flex flex-col">
+                <div className="w-16 sm:w-36 shrink-0 flex flex-col min-w-0">
                   <span className="text-xs font-bold text-md-on-surface truncate">
                     Week {week.weekIndex}
                   </span>
-                  <span className="text-[11px] text-md-outline truncate">
+                  <span className="text-[11px] text-md-outline truncate hidden sm:inline">
                     {week.label}
                   </span>
                 </div>
 
-                <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+                <div className="flex-1 min-w-[35%] h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
                   <div
                     className={clsx(
                       'h-full rounded-lg transition-all duration-500 ease-out',
@@ -427,7 +431,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                   />
                 </div>
 
-                <div className="w-24 shrink-0 text-right flex flex-col items-end">
+                <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
                   <span
                     className={clsx(
                       'text-xs font-bold tabular-nums',
@@ -436,8 +440,9 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                   >
                     {hasHours ? formatDurationHoursMins(week.totalSeconds) : '0m'}
                   </span>
-                  <span className="text-[10px] text-md-on-surface-variant">
-                    {week.activeDays} {week.activeDays === 1 ? 'day' : 'days'} active
+                  <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
+                    <span className="hidden sm:inline">{week.activeDays} {week.activeDays === 1 ? 'day' : 'days'} active</span>
+                    <span className="sm:hidden">{week.activeDays}d</span>
                   </span>
                 </div>
               </div>
@@ -446,7 +451,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
         </div>
       ) : granularity === 'monthly' ? (
         /* Monthly Groups Mode */
-        <div className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
+        <div className="flex flex-col gap-2.5 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
           {monthlyGroups.map((month) => {
             const widthPct = maxMonthSeconds > 0 ? Math.min(100, Math.round((month.totalSeconds / maxMonthSeconds) * 100)) : 0;
             const hasHours = month.totalSeconds > 0;
@@ -454,18 +459,18 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
             return (
               <div
                 key={month.key}
-                className="flex items-center gap-3 p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
+                className="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
               >
-                <div className="w-32 sm:w-36 shrink-0 flex flex-col">
+                <div className="w-16 sm:w-36 shrink-0 flex flex-col min-w-0">
                   <span className="text-xs font-bold text-md-on-surface truncate">
                     {month.label}
                   </span>
-                  <span className="text-[11px] text-md-outline truncate">
+                  <span className="text-[11px] text-md-outline truncate hidden sm:inline">
                     {month.activeDays} active days
                   </span>
                 </div>
 
-                <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+                <div className="flex-1 min-w-[35%] h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
                   <div
                     className={clsx(
                       'h-full rounded-lg transition-all duration-500 ease-out',
@@ -475,7 +480,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                   />
                 </div>
 
-                <div className="w-24 shrink-0 text-right flex flex-col items-end">
+                <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
                   <span
                     className={clsx(
                       'text-xs font-bold tabular-nums',
@@ -484,8 +489,9 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                   >
                     {hasHours ? formatDurationHoursMins(month.totalSeconds) : '0m'}
                   </span>
-                  <span className="text-[10px] text-md-on-surface-variant">
-                    {month.sessionCount} {month.sessionCount === 1 ? 'session' : 'sessions'}
+                  <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
+                    <span className="hidden sm:inline">{month.sessionCount} {month.sessionCount === 1 ? 'session' : 'sessions'}</span>
+                    <span className="sm:hidden">{month.sessionCount} ses</span>
                   </span>
                 </div>
               </div>
@@ -494,7 +500,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
         </div>
       ) : (
         /* List Mode */
-        <div className="flex flex-col gap-2 max-h-96 overflow-y-auto pr-1 scrollbar-thin">
+        <div className="flex flex-col gap-2 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
           {dailyDisplayBars.length === 0 ? (
             <div className="text-center py-8 text-xs text-md-outline">
               No active focus days in this custom range.
@@ -510,7 +516,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                   key={bar.key}
                   onClick={() => setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key))}
                   className={clsx(
-                    'flex items-center gap-3 p-2.5 rounded-2xl border transition-all cursor-pointer',
+                    'flex items-center gap-2.5 sm:gap-3 p-2.5 rounded-2xl border transition-all cursor-pointer',
                     isSelected
                       ? 'bg-md-surface-container-high border-md-primary/50 shadow-xs'
                       : hasHours
@@ -518,13 +524,13 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                       : 'bg-md-surface-container/20 border-transparent opacity-60 hover:opacity-100 hover:bg-md-surface-container/40'
                   )}
                 >
-                  <div className="w-28 shrink-0 flex flex-col">
+                  <div className="w-16 sm:w-28 shrink-0 flex flex-col min-w-0">
                     <span className="text-xs font-bold text-md-on-surface truncate">
                       {formatDailyTitle(bar.key)}
                     </span>
                   </div>
 
-                  <div className="flex-1 h-6 bg-md-surface-container-high rounded-lg overflow-hidden flex items-center p-0.5">
+                  <div className="flex-1 min-w-[35%] h-6 bg-md-surface-container-high rounded-lg overflow-hidden flex items-center p-0.5">
                     <div
                       className={clsx(
                         'h-full rounded-md transition-all duration-300',
@@ -534,7 +540,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                     />
                   </div>
 
-                  <div className="w-24 shrink-0 text-right flex flex-col items-end">
+                  <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
                     <span
                       className={clsx(
                         'text-xs font-bold tabular-nums',
@@ -544,8 +550,9 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
                       {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
                     </span>
                     {bar.sessionCount > 0 && (
-                      <span className="text-[10px] text-md-on-surface-variant">
-                        {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
+                      <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
+                        <span className="hidden sm:inline">{bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}</span>
+                        <span className="sm:hidden">{bar.sessionCount} ses</span>
                       </span>
                     )}
                   </div>

@@ -138,6 +138,17 @@ export const StatisticsView: React.FC = () => {
             </button>
           )}
 
+          {periodType === 'custom' && (
+            <button
+              type="button"
+              onClick={() => setIsCalendarModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <CalendarDays className="w-3.5 h-3.5" />
+              <span>Pick Dates</span>
+            </button>
+          )}
+
           <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30">
             {periodType !== 'all' && periodType !== 'custom' && (
               <button

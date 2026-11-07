@@ -122,7 +122,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
         <div className="text-xs text-md-on-surface-variant font-medium">
           <span className="font-bold text-md-on-surface">{activeMonthsCount}</span> of 12 months active
           {totalFocusSeconds > 0 && (
-            <span className="hidden sm:inline text-md-outline">
+            <span className="inline text-xs sm:text-sm text-md-outline">
               {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
             </span>
           )}
@@ -243,8 +243,9 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
               totalSeconds={q.totalSeconds}
               maxSeconds={maxQuarterSeconds}
               secondaryText={
-                <span className="text-[10px] text-md-on-surface-variant">
-                  {q.activeMonths} active {q.activeMonths === 1 ? 'month' : 'months'}
+                <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
+                  <span className="hidden sm:inline">{q.activeMonths} active {q.activeMonths === 1 ? 'month' : 'months'}</span>
+                  <span className="sm:hidden">{q.activeMonths} mo</span>
                 </span>
               }
             />

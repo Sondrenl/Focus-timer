@@ -92,10 +92,11 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
             </div>
             <button
               onClick={openEditModal}
-              className="absolute -bottom-1 -right-1 p-1.5 rounded-full bg-md-primary text-md-on-primary hover:bg-[#584192] transition-colors shadow-sm"
+              className="absolute -bottom-2 -right-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-md-primary text-md-on-primary hover:bg-[#584192] transition-colors shadow-sm"
               title="Change Avatar & Profile"
+              aria-label="Change Avatar & Profile"
             >
-              <Edit2 className="w-3.5 h-3.5" />
+              <Edit2 className="w-4 h-4" />
             </button>
           </div>
 
@@ -135,7 +136,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
                   </span>
                   <button
                     onClick={openEditModal}
-                    className="text-xs font-bold text-md-primary hover:underline ml-1 px-1.5 py-0.5 rounded-lg bg-md-primary/10"
+                    className="min-h-[44px] px-2.5 py-1 text-xs font-bold text-md-primary hover:underline ml-1 rounded-lg bg-md-primary/10 flex items-center"
                   >
                     Edit Goal
                   </button>

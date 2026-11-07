@@ -109,10 +109,10 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
         )}
       </div>
 
-      {/* Compact 24-Hour Activity Ribbon */}
+      {/* 24-Hour Activity Ribbon (2-tier 12-hour grid on mobile, single row on desktop) */}
       <div className="flex flex-col gap-1.5 p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20">
         <div
-          className="grid grid-cols-[repeat(24,minmax(0,1fr))] gap-0.5 sm:gap-1 h-9 sm:h-11"
+          className="grid grid-cols-12 grid-rows-2 sm:grid-cols-[repeat(24,minmax(0,1fr))] sm:grid-rows-1 gap-1 h-20 sm:h-11"
           onMouseLeave={() => setHoveredHourKey(null)}
         >
           {full24Hours.map((bar, idx) => {
@@ -130,7 +130,7 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
                   setSelectedHourKey((prev) => (prev === bar.key ? null : bar.key));
                 }}
                 className={clsx(
-                  'h-full rounded sm:rounded-md border transition-all duration-150 flex flex-col items-center justify-center cursor-pointer group select-none relative',
+                  'h-full min-h-[38px] sm:min-h-0 rounded sm:rounded-md border transition-all duration-150 flex flex-col items-center justify-center cursor-pointer group select-none relative',
                   getActivityIntensityStyle(sec, maxHourSeconds, isSelected),
                   isCurrent && !isSelected && 'ring-2 ring-md-primary/40'
                 )}
@@ -138,17 +138,20 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
               >
                 {isCurrent && (
                   <span
-                    className="w-1 h-1 rounded-full bg-md-primary animate-pulse absolute top-1"
+                    className="w-1.5 h-1.5 rounded-full bg-md-primary animate-pulse absolute top-1"
                     title="Current Hour"
                   />
                 )}
+                <span className="text-[9px] sm:hidden font-mono leading-none select-none opacity-60">
+                  {idx}
+                </span>
               </button>
             );
           })}
         </div>
 
         {/* Landmark Hour Labels */}
-        <div className="flex items-center justify-between px-0.5 text-[10px] text-md-on-surface-variant/70 font-medium select-none">
+        <div className="hidden sm:flex items-center justify-between px-0.5 text-[10px] text-md-on-surface-variant/70 font-medium select-none">
           <span>00:00</span>
           <span>04:00</span>
           <span>08:00</span>
@@ -156,6 +159,10 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
           <span>16:00</span>
           <span>20:00</span>
           <span>23:00</span>
+        </div>
+        <div className="flex sm:hidden items-center justify-between px-0.5 text-[10px] text-md-on-surface-variant/70 font-medium select-none">
+          <span>Row 1: 00:00–11:00</span>
+          <span>Row 2: 12:00–23:00</span>
         </div>
       </div>
 
@@ -222,19 +229,22 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
                 onClick={() => setSelectedHourKey((prev) => (prev === bar.key ? null : bar.key))}
                 onMouseEnter={() => setHoveredHourKey(bar.key)}
                 className={clsx(
-                  'w-full flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl transition-all cursor-pointer text-left',
+                  'w-full flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl transition-all cursor-pointer text-left',
                   isSelected
                     ? 'bg-md-primary/10 border border-md-primary/30 ring-1 ring-md-primary/20'
                     : 'bg-md-surface-container/60 hover:bg-md-surface-container border border-transparent'
                 )}
               >
-                <div className="w-28 sm:w-32 shrink-0 flex flex-col">
-                  <span className="text-xs font-bold text-md-on-surface truncate">
+                <div className="w-16 sm:w-32 shrink-0 flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-md-on-surface truncate hidden sm:inline">
                     {formatHourSpan(bar.label)}
+                  </span>
+                  <span className="text-xs font-bold text-md-on-surface truncate sm:hidden">
+                    {bar.label}
                   </span>
                 </div>
 
-                <div className="flex-1 h-6 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+                <div className="flex-1 min-w-[35%] h-6 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
                   <div
                     className={clsx(
                       'h-full rounded-lg transition-all duration-500 ease-out',
@@ -244,7 +254,7 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
                   />
                 </div>
 
-                <div className="w-24 shrink-0 text-right flex flex-col items-end">
+                <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
                   <span
                     className={clsx(
                       'text-xs font-bold tabular-nums',
@@ -254,8 +264,9 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
                     {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
                   </span>
                   {bar.sessionCount > 0 && (
-                    <span className="text-[10px] text-md-on-surface-variant">
-                      {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
+                    <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
+                      <span className="hidden sm:inline">{bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}</span>
+                      <span className="sm:hidden">{bar.sessionCount} ses</span>
                     </span>
                   )}
                 </div>

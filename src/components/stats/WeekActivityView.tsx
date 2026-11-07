@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
+import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
 import { ActivityInspectionCard } from './ActivityInspectionCard';
@@ -72,7 +72,7 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
         <div className="text-xs text-md-on-surface-variant font-medium">
           <span className="font-bold text-md-on-surface">{totalActiveDays}</span> of 7 days active this week
           {totalFocusSeconds > 0 && (
-            <span className="hidden sm:inline text-md-outline">
+            <span className="inline text-xs sm:text-sm text-md-outline">
               {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
             </span>
           )}
@@ -150,21 +150,28 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
                     setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key));
                   }}
                   className={clsx(
-                    'aspect-square sm:aspect-auto sm:min-h-[82px] p-1.5 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
+                    'aspect-square min-h-[58px] sm:min-h-[82px] sm:aspect-auto p-1 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
                     getActivityIntensityStyle(sec, maxDaySeconds, isSelected),
-                    isToday && !isSelected && 'ring-2 ring-md-primary/30'
+                    isToday && !isSelected && 'ring-2 ring-md-primary/60 border-md-primary/40'
                   )}
                   aria-label={`${bar.label} ${bar.subLabel}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  {/* Mobile: Centered date number and activity indicator dot */}
-                  <div className="flex sm:hidden flex-col items-center justify-center">
-                    <span className="text-xs font-bold leading-none">
+                  {/* Mobile: Date number, Today badge, and compact duration */}
+                  <div className="flex sm:hidden flex-col items-center justify-center w-full gap-0.5">
+                    {isToday && (
+                      <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-md-primary text-white dark:text-md-on-primary leading-none tracking-tight">
+                        TODAY
+                      </span>
+                    )}
+                    <span className={clsx("text-xs font-bold leading-none", isToday && "text-md-primary font-extrabold")}>
                       {bar.subLabel}
                     </span>
                     {sec > 0 ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-85 mt-1" />
+                      <span className="text-[10px] font-bold text-md-on-surface truncate leading-tight mt-0.5">
+                        {formatCompactDuration(sec)}
+                      </span>
                     ) : (
-                      <span className="text-[10px] opacity-30 mt-0.5 leading-none">—</span>
+                      <span className="text-[9px] opacity-30 leading-none mt-0.5">—</span>
                     )}
                   </div>
 

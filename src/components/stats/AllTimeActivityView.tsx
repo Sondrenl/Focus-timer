@@ -62,7 +62,7 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
         <div className="text-xs text-md-on-surface-variant font-medium">
           <span className="font-bold text-md-on-surface">{totalActiveIntervals}</span> active intervals
           {totalFocusSeconds > 0 && (
-            <span className="hidden sm:inline text-md-outline">
+            <span className="inline text-xs sm:text-sm text-md-outline">
               {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
             </span>
           )}

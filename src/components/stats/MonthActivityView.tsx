@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
+import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
 import { ActivityInspectionCard } from './ActivityInspectionCard';
@@ -74,6 +74,10 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
   // Active days count & total focus
   const totalActiveDays = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
+  }, [activityBars]);
+
+  const totalFocusSeconds = useMemo(() => {
+    return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
   }, [activityBars]);
 
   // Currently inspected day (hovered/selected or null)
@@ -153,6 +157,11 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
         <div className="text-xs text-md-on-surface-variant font-medium">
           <span className="font-bold text-md-on-surface">{totalActiveDays}</span> of{' '}
           {daysInMonth} days active in {monthName}
+          {totalFocusSeconds > 0 && (
+            <span className="inline text-xs sm:text-sm text-md-outline">
+              {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
+            </span>
+          )}
         </div>
 
         {/* Calendar vs Weekly Segmented Toggle */}
@@ -236,13 +245,17 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
                   )}
                   aria-label={`${dayNum} ${monthName}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  {/* Mobile View: Centered date number and activity indicator dot */}
-                  <div className="flex sm:hidden flex-col items-center justify-center">
+                  {/* Mobile View: Centered date number and compact duration */}
+                  <div className="flex sm:hidden flex-col items-center justify-center w-full">
                     <span className="text-xs font-bold leading-none">
                       {dayNum}
                     </span>
-                    {sec > 0 && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-85 mt-1" />
+                    {sec > 0 ? (
+                      <span className="text-[9px] font-bold text-md-on-surface truncate leading-tight mt-1">
+                        {formatCompactDuration(sec)}
+                      </span>
+                    ) : (
+                      <span className="text-[8px] opacity-25 mt-0.5 leading-none">—</span>
                     )}
                   </div>
 

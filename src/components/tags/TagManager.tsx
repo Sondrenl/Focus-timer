@@ -3,6 +3,7 @@ import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon } from 'lucide-
 import { useApp } from '../../context/AppContext';
 import { Tag } from '../../types/tag';
 import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
 import { TagFormModal } from './TagFormModal';
 import { clsx } from 'clsx';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
@@ -180,36 +181,37 @@ export const TagManager: React.FC = () => {
       )}
 
       {/* Delete Confirmation Modal */}
-      {deleteConfirmId && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-sm w-full border border-md-outline-variant/30 shadow-elevation-3">
-            <h3 className="text-base font-bold text-md-on-surface mb-2">Delete Tag Permanently?</h3>
-            <p className="text-xs text-md-on-surface-variant mb-5 leading-relaxed">
-              This will permanently delete this tag. Completed sessions associated with this tag will become "Unassigned".
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="text"
-                size="sm"
-                onClick={() => setDeleteConfirmId(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="filled"
-                size="sm"
-                className="bg-md-error text-white hover:bg-red-700"
-                onClick={async () => {
-                  await deleteTag(deleteConfirmId);
-                  setDeleteConfirmId(null);
-                }}
-              >
-                Delete Tag
-              </Button>
-            </div>
-          </div>
+      <Modal
+        isOpen={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        title="Delete Tag"
+      >
+        <p className="text-xs text-md-on-surface-variant mb-5 leading-relaxed">
+          This will permanently delete this tag. Completed sessions associated with this tag will become "Unassigned".
+        </p>
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="text"
+            size="sm"
+            onClick={() => setDeleteConfirmId(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="filled"
+            size="sm"
+            className="bg-md-error text-white hover:bg-red-700"
+            onClick={async () => {
+              if (deleteConfirmId) {
+                await deleteTag(deleteConfirmId);
+                setDeleteConfirmId(null);
+              }
+            }}
+          >
+            Delete Tag
+          </Button>
         </div>
-      )}
+      </Modal>
 
       {/* Create / Edit Tag Modal */}
       <TagFormModal

@@ -164,7 +164,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
       <div className="flex flex-col gap-4">
         {/* Audio Chime */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-md-on-surface">Chime Alert</div>
             <div className="text-xs text-md-on-surface-variant">Play gentle acoustic sound on completion</div>
@@ -172,7 +172,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           <div className="flex items-center gap-2.5 shrink-0">
             <button
               onClick={handleTestSound}
-              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0 flex items-center justify-center"
             >
               Test Chime
             </button>
@@ -187,7 +187,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         </div>
 
         {/* Sound Volume Slider */}
-        <div className="flex items-center justify-between gap-4 border-t border-md-outline-variant/15 pt-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-md-on-surface">Chime Volume</div>
             <div className="text-xs text-md-on-surface-variant">Adjust completion bell volume</div>
@@ -212,9 +212,9 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         </div>
 
         {/* Desktop / Push Notifications Toggle & Test */}
-        <div className="flex items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <Bell className="w-4 h-4 text-md-on-surface-variant shrink-0" />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
+          <div className="flex items-start sm:items-center gap-2 min-w-0">
+            <Bell className="w-4 h-4 text-md-on-surface-variant shrink-0 mt-0.5 sm:mt-0" />
             <div className="min-w-0">
               <div className="text-sm font-semibold text-md-on-surface">Notifications</div>
               <div className={`text-xs ${notifSubtitle.className}`}>{notifSubtitle.text}</div>
@@ -223,7 +223,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           <div className="flex items-center gap-2.5 shrink-0">
             <button
               onClick={handleTestNotification}
-              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0 flex items-center justify-center"
             >
               Test Alert
             </button>

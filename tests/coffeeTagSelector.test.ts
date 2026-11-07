@@ -37,7 +37,7 @@ describe('Coffee Tag Selector - Timer Tag Mimicry & Unidirectional Observation',
     // Should display the active timer tag name in the helper cue and button title
     expect(html).toContain('Study');
     expect(html).toContain('Add cup of coffee with tag Study');
-    expect(html).toContain('logs a cup with <span class="font-bold text-md-on-surface">Study</span>');
+    expect(html).toContain('to log a cup with <span class="font-bold text-md-on-surface">Study</span>');
   });
 
   it('initializes to "No Tag" when timer activeTagId is null', () => {

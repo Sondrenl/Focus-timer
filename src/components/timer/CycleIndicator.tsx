@@ -49,13 +49,29 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
     }
   }, [currentCycle, sessionType]);
 
+  // Scroll container smoothly by an offset
+  const scroll = (direction: 'left' | 'right') => {
+    const el = containerRef.current;
+    if (!el) return;
+    const scrollAmount = 100;
+    el.scrollBy({
+      left: direction === 'left' ? -scrollAmount : scrollAmount,
+      behavior: 'smooth',
+    });
+  };
+
   return (
-    <div className="relative w-full max-w-[280px] sm:max-w-[340px] flex items-center justify-center py-2 select-none">
-      {/* Subtle Left Side Fade Cue */}
+    <div className="relative w-full max-w-[280px] md:max-w-[320px] flex items-center justify-center py-2 select-none">
+      {/* Interactive Left Side Fade Cue */}
       {canScrollLeft && (
-        <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-md-background via-md-background/90 to-transparent pointer-events-none flex items-center justify-start z-10 pl-0.5 animate-in fade-in duration-200">
-          <ChevronLeft className="w-3.5 h-3.5 text-md-outline/60" />
-        </div>
+        <button
+          type="button"
+          onClick={() => scroll('left')}
+          className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-md-background via-md-background/90 to-transparent pointer-events-auto cursor-pointer flex items-center justify-start z-10 pl-0.5 text-md-outline/60 hover:text-md-on-surface transition-colors focus:outline-none animate-in fade-in duration-200"
+          aria-label="Scroll cycles left"
+        >
+          <ChevronLeft className="w-3.5 h-3.5" />
+        </button>
       )}
 
       {/* Carousel Track */}
@@ -135,11 +151,16 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
         })}
       </div>
 
-      {/* Subtle Right Side Fade Cue */}
+      {/* Interactive Right Side Fade Cue */}
       {canScrollRight && (
-        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-md-background via-md-background/90 to-transparent pointer-events-none flex items-center justify-end z-10 pr-0.5 animate-in fade-in duration-200">
-          <ChevronRight className="w-3.5 h-3.5 text-md-outline/60" />
-        </div>
+        <button
+          type="button"
+          onClick={() => scroll('right')}
+          className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-md-background via-md-background/90 to-transparent pointer-events-auto cursor-pointer flex items-center justify-end z-10 pr-0.5 text-md-outline/60 hover:text-md-on-surface transition-colors focus:outline-none animate-in fade-in duration-200"
+          aria-label="Scroll cycles right"
+        >
+          <ChevronRight className="w-3.5 h-3.5" />
+        </button>
       )}
     </div>
   );
