@@ -16,6 +16,13 @@ import {
   loadInitialTimerState,
   saveTimerState,
 } from './timer/timerPersistence';
+import {
+  shouldResetForNewDay,
+  getLogicalDayKey,
+  getLastResetDayKey,
+  setLastResetDayKey,
+  getLastSessionCompletedAt,
+} from '../utils/newDayCheck';
 import { useTimerAlerts } from './timer/useTimerAlerts';
 import { useTimerCloudSync } from './timer/useTimerCloudSync';
 import { useTimerWorker } from './timer/useTimerWorker';
@@ -55,6 +62,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sound,
     notifications,
     isEffectiveAuthenticated,
+    sessions,
   } = useApp();
 
   const authService = AuthService.getInstance();
@@ -288,6 +296,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         completedAt: new Date().toISOString(),
       });
 
+      const completionDayKey = getLogicalDayKey(new Date());
+      if (getLastResetDayKey() !== completionDayKey) {
+        setLastResetDayKey(completionDayKey);
+      }
+
       const next = computeNextInterval(completedType, currentCycleRef.current, settingsRef.current);
       const nextType = next.nextType;
       const nextCycle = next.nextCycle;
@@ -442,6 +455,115 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [getDurationForType, sound, notifications, applyRemoteState, publishLocalTimerState]);
 
+  // Action: Reset timer and session indicator dots for a new day if criteria are met
+  const checkAndResetForNewDay = useCallback(() => {
+    if (statusRef.current === 'RUNNING') return false;
+
+    const latestSessionTime = getLastSessionCompletedAt(sessions);
+    const lastResetKey = getLastResetDayKey();
+    const now = new Date();
+
+    if (
+      shouldResetForNewDay({
+        now,
+        lastSessionTimeMs: latestSessionTime,
+        lastResetDayKey: lastResetKey,
+        isTimerRunning: false,
+      })
+    ) {
+      const defaultDuration = getDurationForType('WORK');
+      const nowMs = Date.now();
+      const currentDayKey = getLogicalDayKey(now);
+
+      sessionTypeRef.current = 'WORK';
+      statusRef.current = 'IDLE';
+      currentCycleRef.current = 1;
+      totalSecondsRef.current = defaultDuration;
+      remainingSecondsRef.current = defaultDuration;
+      targetEndTimeRef.current = null;
+      timerRunIdRef.current = null;
+      localUpdatedAtRef.current = nowMs;
+
+      setSessionType('WORK');
+      setStatus('IDLE');
+      setCurrentCycle(1);
+      setTotalSeconds(defaultDuration);
+      setRemainingSeconds(defaultDuration);
+      setTargetEndTime(null);
+
+      wakeLockService.release();
+      notifications.cancelScheduledNotification();
+
+      setLastResetDayKey(currentDayKey);
+
+      const resetState: SavedTimerState = {
+        sessionType: 'WORK',
+        status: 'IDLE',
+        currentCycle: 1,
+        remainingSeconds: defaultDuration,
+        totalSeconds: defaultDuration,
+        targetEndTime: null,
+        timerRunId: null,
+        updatedAtMs: nowMs,
+        activeTagId: activeTagIdRef.current,
+        deviceId: DEVICE_ID,
+        tabId: TAB_ID,
+        lastActiveAtMs: nowMs,
+        wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
+      };
+      saveTimerState(resetState, true);
+
+      publishLocalTimerState(
+        {
+          sessionType: 'WORK',
+          status: 'IDLE',
+          remainingSeconds: defaultDuration,
+          totalSeconds: defaultDuration,
+          targetEndTime: null,
+          currentCycle: 1,
+          activeTagId: activeTagIdRef.current,
+          timerRunId: null,
+          updatedAtMs: nowMs,
+        },
+        true
+      );
+
+      return true;
+    }
+
+    return false;
+  }, [sessions, getDurationForType, notifications, publishLocalTimerState]);
+
+  // Reactive listeners for waking tab / returning to tab / periodic new day rollover
+  useEffect(() => {
+    checkAndResetForNewDay();
+
+    const handleWakeOrFocus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
+        checkAndResetForNewDay();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      document.addEventListener('visibilitychange', handleWakeOrFocus);
+      window.addEventListener('pageshow', handleWakeOrFocus);
+      window.addEventListener('focus', handleWakeOrFocus);
+    }
+
+    const intervalId = setInterval(() => {
+      checkAndResetForNewDay();
+    }, 60000);
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleWakeOrFocus);
+        window.removeEventListener('pageshow', handleWakeOrFocus);
+        window.removeEventListener('focus', handleWakeOrFocus);
+      }
+      clearInterval(intervalId);
+    };
+  }, [checkAndResetForNewDay]);
+
   // Action: Start timer
   const start = useCallback(() => {
     if (statusRef.current === 'RUNNING') return;
@@ -460,6 +582,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     setTargetEndTime(calculatedTargetEnd);
     setStatus('RUNNING');
+
+    const currentDayKey = getLogicalDayKey(new Date());
+    if (getLastResetDayKey() !== currentDayKey) {
+      setLastResetDayKey(currentDayKey);
+    }
 
     publishLocalTimerState(
       {

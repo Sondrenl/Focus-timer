@@ -7,6 +7,7 @@ import { broadcastTimerState } from '../../services/timer/TimerBroadcast';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { useConvexTimer } from '../../services/convex/useConvexTimer';
 import { IS_MOBILE } from './timerPersistence';
+import { getLogicalDayKey } from '../../utils/newDayCheck';
 
 interface UseTimerCloudSyncParams {
   isAuthenticated: boolean;
@@ -338,23 +339,32 @@ export const useTimerCloudSync = ({
         setRemainingSeconds(remote.remainingSeconds);
         setStatus('PAUSED');
       } else {
-        const nextStatus: TimerStatus = remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
-        const dur =
-          remote.remainingSeconds && remote.remainingSeconds > 0
-            ? remote.remainingSeconds
-            : remote.status === 'COMPLETED' && remote.totalSeconds && remote.totalSeconds > 0
-            ? remote.totalSeconds
-            : getDurationForType(remote.sessionType);
-        const tot =
-          remote.totalSeconds && remote.totalSeconds > 0 ? remote.totalSeconds : dur;
+        const isFromPreviousDay =
+          getLogicalDayKey(remote.updatedAtMs) !== getLogicalDayKey(nowMs);
+        const resolvedSessionType = isFromPreviousDay ? 'WORK' : remote.sessionType;
+        const resolvedCycle = isFromPreviousDay ? 1 : (remote.currentCycle || 1);
+        const nextStatus: TimerStatus =
+          isFromPreviousDay || remote.status === 'COMPLETED' ? 'IDLE' : remote.status;
+        const dur = isFromPreviousDay
+          ? getDurationForType('WORK')
+          : remote.remainingSeconds && remote.remainingSeconds > 0
+          ? remote.remainingSeconds
+          : remote.status === 'COMPLETED' && remote.totalSeconds && remote.totalSeconds > 0
+          ? remote.totalSeconds
+          : getDurationForType(remote.sessionType);
+        const tot = isFromPreviousDay
+          ? dur
+          : remote.totalSeconds && remote.totalSeconds > 0
+          ? remote.totalSeconds
+          : dur;
 
-        sessionTypeRef.current = remote.sessionType;
-        currentCycleRef.current = remote.currentCycle || 1;
+        sessionTypeRef.current = resolvedSessionType;
+        currentCycleRef.current = resolvedCycle;
         totalSecondsRef.current = tot;
         remainingSecondsRef.current = dur;
         statusRef.current = nextStatus;
-        setSessionType(remote.sessionType);
-        setCurrentCycle(remote.currentCycle || 1);
+        setSessionType(resolvedSessionType);
+        setCurrentCycle(resolvedCycle);
         setTotalSeconds(tot);
         timerRunIdRef.current = remote.timerRunId || null;
         if (remote.activeTagId !== undefined && setActiveTagId) {

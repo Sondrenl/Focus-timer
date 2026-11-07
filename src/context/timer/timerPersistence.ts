@@ -1,6 +1,13 @@
 import { SessionType, TimerStatus } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
 import { TAB_ID } from '../../services/timer/TimerBroadcast';
+import {
+  shouldResetForNewDay,
+  getLogicalDayKey,
+  getLastResetDayKey,
+  setLastResetDayKey,
+  getLastSessionCompletedAtFromStorage,
+} from '../../utils/newDayCheck';
 
 export const TIMER_STORAGE_KEY = 'timer_state_v1';
 export const DEVICE_ID_KEY = 'focus_timer_device_id_v1';
@@ -65,7 +72,13 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
 
   try {
     const stored = localStorage.getItem(TIMER_STORAGE_KEY);
-    if (!stored) return fallback;
+    if (!stored) {
+      const currentDayKey = getLogicalDayKey(new Date());
+      if (!getLastResetDayKey()) {
+        setLastResetDayKey(currentDayKey);
+      }
+      return fallback;
+    }
     const parsed = JSON.parse(stored) as SavedTimerState;
 
     // Handle running timers across tab restarts or browser crashes
@@ -77,25 +90,53 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
       if (diffSec <= 0) {
         // If session expired more than 15 minutes ago while closed, reset to IDLE without recording stale session
         if (diffMs < -900000) {
+          parsed.status = 'IDLE';
+          parsed.targetEndTime = null;
+          parsed.timerRunId = null;
+          parsed.remainingSeconds = parsed.totalSeconds;
+        } else {
+          // Expired while closed, preserve state so mount effect can record and alert
           return {
             ...parsed,
-            status: 'IDLE',
-            targetEndTime: null,
-            timerRunId: null,
-            remainingSeconds: parsed.totalSeconds,
+            remainingSeconds: 0,
           };
         }
-        // Expired while closed, preserve state so mount effect can record and alert
+      } else {
         return {
           ...parsed,
-          remainingSeconds: 0,
+          remainingSeconds: diffSec,
         };
       }
+    }
 
-      return {
+    // Check if we should reset for a new day
+    const lastSessionTimeMs = getLastSessionCompletedAtFromStorage();
+    const lastResetDayKey = getLastResetDayKey();
+    const now = new Date();
+
+    if (
+      shouldResetForNewDay({
+        now,
+        lastSessionTimeMs,
+        lastResetDayKey,
+        isTimerRunning: parsed.status === 'RUNNING',
+      })
+    ) {
+      const currentDayKey = getLogicalDayKey(now);
+      setLastResetDayKey(currentDayKey);
+      const resetState: SavedTimerState = {
         ...parsed,
-        remainingSeconds: diffSec,
+        sessionType: 'WORK',
+        status: 'IDLE',
+        currentCycle: 1,
+        remainingSeconds: defaultSec,
+        totalSeconds: defaultSec,
+        targetEndTime: null,
+        timerRunId: null,
+        updatedAtMs: Date.now(),
       };
+      saveTimerState(resetState);
+      return resetState;
     }
 
     return parsed;
