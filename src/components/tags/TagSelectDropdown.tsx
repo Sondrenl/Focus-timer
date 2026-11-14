@@ -47,8 +47,8 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
         className={clsx(
           'flex items-center gap-3 md:gap-2.5 min-h-[48px] md:min-h-0 px-5 py-2.5 md:px-4 md:py-2 rounded-2xl md:rounded-full transition-colors duration-150 border text-sm font-semibold md:font-medium text-md-on-surface shadow-xs select-none touch-manipulation',
           isOpen
-            ? 'bg-md-surface-container-highest border-md-primary/40'
-            : 'bg-md-surface-container-high md:hover:bg-md-surface-container-highest active:bg-md-surface-container-highest border-md-outline-variant/40 md:border-md-outline-variant/30'
+            ? 'bg-white border-md-primary/50 ring-2 ring-md-primary/10'
+            : 'bg-white hover:bg-md-surface-container active:bg-md-surface-container-high border-md-outline-variant'
         )}
       >
         {currentTag ? (
@@ -83,7 +83,7 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-md-surface-container-high border border-md-outline-variant/40 rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30">
+        <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-white border border-md-outline-variant rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30">
           <div className="text-xs font-semibold text-md-on-surface-variant uppercase tracking-wider px-3 py-2 md:py-1.5">
             {menuTitle}
           </div>

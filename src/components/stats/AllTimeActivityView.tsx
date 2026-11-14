@@ -1,47 +1,24 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
-import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
-import { ActivityInspectionCard } from './ActivityInspectionCard';
-import { ActivityBarRow } from './ActivityBarRow';
+import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface AllTimeActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
 export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activityBars }) => {
-  const [displayMode, setDisplayMode] = useState<'calendar' | 'list'>('calendar');
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  // Max focus seconds across all items for intensity scaling
   const maxSeconds = useMemo(() => {
     return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
   }, [activityBars]);
 
-  // Peak interval
-  const peakItem = useMemo(() => {
-    let top: ActivityBarStat | null = null;
-    for (const bar of activityBars) {
-      if (bar.totalSeconds > 0 && (!top || bar.totalSeconds > top.totalSeconds)) {
-        top = bar;
-      }
-    }
-    return top;
-  }, [activityBars]);
-
-  // Total active intervals count & total focus
   const totalActiveIntervals = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
   }, [activityBars]);
 
-  const totalFocusSeconds = useMemo(() => {
-    return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
-  }, [activityBars]);
-
-  // Inspected item
   const activeKey = hoveredKey || selectedKey;
   const inspectedBar = useMemo(() => {
     if (!activeKey) return null;
@@ -55,132 +32,116 @@ export const AllTimeActivityView: React.FC<AllTimeActivityViewProps> = ({ activi
     return bar.label;
   };
 
+  if (activityBars.length === 0) {
+    return (
+      <div className="text-center py-8 text-xs text-md-outline">
+        No historical focus data available.
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      {/* Top Toggle & Summary Subheader */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-md-on-surface-variant font-medium">
-          <span className="font-bold text-md-on-surface">{totalActiveIntervals}</span> active intervals
-          {totalFocusSeconds > 0 && (
-            <span className="inline text-xs sm:text-sm text-md-outline">
-              {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
-            </span>
-          )}
-        </div>
-
-        {/* Calendar vs List Segmented Toggle */}
-        <div className="inline-flex p-0.5 bg-md-surface-container rounded-xl border border-md-outline-variant/30 text-xs">
-          <button
-            type="button"
-            onClick={() => setDisplayMode('calendar')}
-            className={clsx(
-              'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'calendar'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <CalendarIcon className="w-4 h-4" />
-            <span>Grid</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setDisplayMode('list')}
-            className={clsx(
-              'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'list'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <BarChart2 className="w-4 h-4" />
-            <span>List</span>
-          </button>
-        </div>
+      {/* Non-duplicative summary header */}
+      <div className="flex items-center justify-between text-xs text-md-on-surface-variant font-medium">
+        <span>
+          <span className="font-bold text-md-on-surface">{totalActiveIntervals}</span> of {activityBars.length} intervals active
+        </span>
       </div>
 
-      {displayMode === 'calendar' ? (
-        <div className="flex flex-col gap-2.5">
-          {/* Calendar-Style Grid */}
-          <div
-            className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5 sm:gap-2.5"
-            onMouseLeave={() => setHoveredKey(null)}
-          >
-            {activityBars.map((bar) => {
-              const sec = bar.totalSeconds;
-              const isSelected = selectedKey === bar.key;
+      {/* Progression Bar Chart */}
+      <div
+        className="flex items-end justify-between gap-1.5 sm:gap-3 h-44 sm:h-52 pt-6 pb-2 px-1 sm:px-2 rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/20 select-none overflow-x-auto"
+        onMouseLeave={() => setHoveredKey(null)}
+      >
+        {activityBars.map((bar) => {
+          const isSelected = activeKey === bar.key;
+          const heightPct = maxSeconds > 0 ? Math.round((bar.totalSeconds / maxSeconds) * 100) : 0;
 
-              return (
-                <button
-                  type="button"
-                  key={bar.key}
-                  onMouseEnter={() => setHoveredKey(bar.key)}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSelectedKey((prev) => (prev === bar.key ? null : bar.key));
-                  }}
-                  className={clsx(
-                    'aspect-auto min-h-[72px] sm:min-h-[82px] p-2 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col justify-between text-left cursor-pointer group select-none relative',
-                    getActivityIntensityStyle(sec, maxSeconds, isSelected)
-                  )}
-                  aria-label={`${formatItemTitle(bar)}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs sm:text-sm font-bold leading-none">
-                      {bar.label}
-                    </span>
-                    {bar.subLabel && (
-                      <span className="text-[10px] opacity-70">
-                        {bar.subLabel}
-                      </span>
-                    )}
-                  </div>
-
-                  {sec > 0 ? (
-                    <div className="flex flex-col w-full mt-2">
-                      <span className="text-xs sm:text-sm font-extrabold truncate leading-tight">
-                        {formatDurationHoursMins(sec)}
-                      </span>
-                      {bar.sessionCount > 0 && (
-                        <span className="text-[10px] opacity-75 truncate leading-tight mt-0.5">
-                          {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] opacity-25 mt-2">
-                      —
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dynamic Inspector Bar */}
-          <ActivityInspectionCard
-            inspectedBar={inspectedBar}
-            peakDay={peakItem}
-            formatInspectedDate={(key) => inspectedBar ? formatItemTitle(inspectedBar) : peakItem ? formatItemTitle(peakItem) : key}
-            peakLabel="Peak Interval"
-            noDataText="No focus recorded"
-            emptyPrompt="Hover or tap any interval to inspect focus duration."
-          />
-        </div>
-      ) : (
-        /* List View Mode */
-        <div className="flex flex-col gap-2.5">
-          {activityBars.map((bar) => (
-            <ActivityBarRow
+          return (
+            <button
+              type="button"
               key={bar.key}
-              label={formatItemTitle(bar)}
-              totalSeconds={bar.totalSeconds}
-              sessionCount={bar.sessionCount}
-              maxSeconds={maxSeconds}
-            />
-          ))}
-        </div>
-      )}
+              onClick={() => setSelectedKey((prev) => (prev === bar.key ? null : bar.key))}
+              onMouseEnter={() => setHoveredKey(bar.key)}
+              className={clsx(
+                'flex-1 min-w-[36px] sm:min-w-0 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl transition-all cursor-pointer group focus:outline-none',
+                isSelected && 'bg-md-primary/10'
+              )}
+            >
+              {/* Duration Label above Bar */}
+              <div className="text-[10px] sm:text-xs font-bold tabular-nums min-h-[16px] text-center">
+                {bar.totalSeconds > 0 ? (
+                  <span className={clsx(isSelected ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant')}>
+                    {formatCompactDuration(bar.totalSeconds)}
+                  </span>
+                ) : (
+                  <span className="text-md-outline/30">—</span>
+                )}
+              </div>
+
+              {/* Vertical Bar Track & Filled Progress */}
+              <div
+                className={clsx(
+                  'w-full max-w-[36px] sm:max-w-[48px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border transition-all',
+                  isSelected ? 'border-md-primary ring-1 ring-md-primary/30' : 'border-transparent'
+                )}
+              >
+                <div
+                  className={clsx(
+                    'w-full rounded-lg transition-all duration-500 ease-out',
+                    isSelected
+                      ? 'bg-md-primary shadow-xs'
+                      : bar.totalSeconds > 0
+                      ? 'bg-md-primary/70 group-hover:bg-md-primary'
+                      : 'bg-transparent'
+                  )}
+                  style={{ height: `${bar.totalSeconds > 0 ? Math.max(8, heightPct) : 0}%` }}
+                />
+              </div>
+
+              {/* Label */}
+              <div className="flex flex-col items-center leading-none pt-0.5">
+                <span className="text-[10px] sm:text-xs font-bold text-md-on-surface-variant">
+                  {bar.label}
+                </span>
+                {bar.subLabel && (
+                  <span className="text-[9px] text-md-outline tabular-nums">
+                    {bar.subLabel}
+                  </span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Minimal Status Inspector */}
+      <div className="min-h-[28px] px-3 py-1.5 rounded-xl bg-md-surface-container/50 border border-md-outline-variant/20 flex items-center justify-between text-xs">
+        {inspectedBar ? (
+          <div className="flex items-center justify-between w-full">
+            <span className="font-bold text-md-on-surface">
+              {formatItemTitle(inspectedBar)}
+            </span>
+            <span className="text-md-on-surface-variant">
+              {inspectedBar.totalSeconds > 0 ? (
+                <>
+                  <strong className="text-md-primary font-bold">
+                    {formatDurationHoursMins(inspectedBar.totalSeconds)}
+                  </strong>{' '}
+                  ({inspectedBar.sessionCount} {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'})
+                </>
+              ) : (
+                <span className="text-md-outline">No focus time logged</span>
+              )}
+            </span>
+          </div>
+        ) : (
+          <span className="text-md-outline">
+            Tap or hover any interval to view details
+          </span>
+        )}
+      </div>
     </div>
   );
 };

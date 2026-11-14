@@ -3,7 +3,6 @@ import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES } from '../../utils/dates';
 import { Calendar as CalendarIcon, BarChart2, Filter } from 'lucide-react';
-import { ActivityInspectionCard } from './ActivityInspectionCard';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -34,10 +33,6 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
     return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
   }, [activityBars]);
 
-  const totalSessionsCount = useMemo(() => {
-    return activityBars.reduce((acc, b) => acc + b.sessionCount, 0);
-  }, [activityBars]);
-
   const avgPerActiveDaySec = useMemo(() => {
     if (activeDaysCount === 0) return 0;
     return Math.round(totalFocusSeconds / activeDaysCount);
@@ -45,17 +40,6 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
 
   const maxDaySeconds = useMemo(() => {
     return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
-  }, [activityBars]);
-
-  // Peak day of custom range
-  const peakDay = useMemo(() => {
-    let top: ActivityBarStat | null = null;
-    for (const bar of activityBars) {
-      if (bar.totalSeconds > 0 && (!top || bar.totalSeconds > top.totalSeconds)) {
-        top = bar;
-      }
-    }
-    return top;
   }, [activityBars]);
 
   // Calendar Grid starting weekday offset
@@ -202,12 +186,12 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
         <div>
           <span className="text-md-outline block text-[11px]">Active Days</span>
           <span className="font-bold text-md-on-surface text-sm">
-            {activeDaysCount} <span className="text-[11px] font-normal text-md-outline">({Math.round((activeDaysCount / Math.max(1, totalDays)) * 100)}%)</span>
+            {activeDaysCount} of {totalDays}
           </span>
         </div>
         <div>
-          <span className="text-md-outline block text-[11px]">Total Focus</span>
-          <span className="font-bold text-md-primary text-sm">{formatDurationHoursMins(totalFocusSeconds)} <span className="text-[11px] font-normal text-md-outline">({totalSessionsCount})</span></span>
+          <span className="text-md-outline block text-[11px]">Consistency</span>
+          <span className="font-bold text-md-on-surface text-sm">{Math.round((activeDaysCount / Math.max(1, totalDays)) * 100)}%</span>
         </div>
         <div>
           <span className="text-md-outline block text-[11px]">Avg / Active Day</span>
@@ -394,12 +378,32 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
             })}
           </div>
 
-          {/* Dynamic Day Inspector Bar */}
-          <ActivityInspectionCard
-            inspectedBar={inspectedBar}
-            peakDay={peakDay}
-            formatInspectedDate={formatInspectedDate}
-          />
+          {/* Minimal Status Inspector */}
+          <div className="min-h-[28px] mt-2 px-3 py-1.5 rounded-xl bg-md-surface-container/50 border border-md-outline-variant/20 flex items-center justify-between text-xs">
+            {inspectedBar ? (
+              <div className="flex items-center justify-between w-full">
+                <span className="font-bold text-md-on-surface">
+                  {formatInspectedDate(inspectedBar.key)}
+                </span>
+                <span className="text-md-on-surface-variant">
+                  {inspectedBar.totalSeconds > 0 ? (
+                    <>
+                      <strong className="text-md-primary font-bold">
+                        {formatDurationHoursMins(inspectedBar.totalSeconds)}
+                      </strong>{' '}
+                      ({inspectedBar.sessionCount} {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'})
+                    </>
+                  ) : (
+                    <span className="text-md-outline">No focus time logged</span>
+                  )}
+                </span>
+              </div>
+            ) : (
+              <span className="text-md-outline">
+                Tap or hover any day to view details
+              </span>
+            )}
+          </div>
         </div>
       ) : granularity === 'weekly' ? (
         <div className="flex flex-col gap-2.5 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
