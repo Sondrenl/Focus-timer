@@ -32,18 +32,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* Mobile Backdrop */}
-      {isOpenOnMobile && (
-        <div
-          className="fixed inset-0 bg-black/30 z-30 lg:hidden backdrop-blur-xs transition-opacity"
-          onClick={onCloseMobile}
-        />
-      )}
+      {/* Mobile Backdrop - always mounted with smooth opacity transition to eliminate blinking */}
+      <div
+        className={clsx(
+          'fixed inset-0 bg-black/25 z-30 lg:hidden transition-opacity duration-200 ease-out',
+          isOpenOnMobile
+            ? 'opacity-100 pointer-events-auto'
+            : 'opacity-0 pointer-events-none'
+        )}
+        onClick={onCloseMobile}
+        aria-hidden="true"
+      />
 
       {/* Navigation Rail (collapsed by default, expands to Drawer on hover) */}
       <aside
         className={clsx(
-          'group fixed top-0 bottom-0 left-0 z-40 bg-md-surface-container-low border-r border-md-outline-variant/30 flex flex-col justify-between py-6 px-3 transition-all duration-300 ease-in-out',
+          'group fixed top-0 bottom-0 left-0 z-40 bg-md-surface-container-low border-r border-md-outline-variant/30 flex flex-col justify-between py-6 px-3 transition-transform lg:transition-all duration-200 ease-out',
           // Mobile state
           isOpenOnMobile
             ? 'w-64 translate-x-0 shadow-elevation-3'

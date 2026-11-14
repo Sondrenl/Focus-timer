@@ -1,254 +1,339 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
+import { CompletedSession } from '../../types/session';
 import { ActivityBarStat } from '../../hooks/useStatistics';
+import { useApp } from '../../context/AppContext';
 import { formatDurationHoursMins } from '../../utils/formatters';
-import { Award } from 'lucide-react';
+import { Sunrise, Sun, Sunset, Moon, Clock, Award, Sparkles } from 'lucide-react';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface DayActivityViewProps {
-  activityBars: ActivityBarStat[];
+  sessions?: CompletedSession[];
+  activityBars?: ActivityBarStat[];
 }
 
-export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }) => {
-  const [hoveredHourKey, setHoveredHourKey] = useState<string | null>(null);
-  const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
+interface TimeQuadrant {
+  id: 'morning' | 'afternoon' | 'evening' | 'night';
+  title: string;
+  timeRange: string;
+  icon: React.ComponentType<{ className?: string }>;
+  iconColor: string;
+  badgeBg: string;
+  totalSeconds: number;
+  sessionCount: number;
+}
 
-  const currentHour = useMemo(() => new Date().getHours(), []);
+export const DayActivityView: React.FC<DayActivityViewProps> = ({
+  sessions = [],
+  activityBars = [],
+}) => {
+  const { tags } = useApp();
 
-  // Ensure all 24 hours (00:00 to 23:00) are mapped
-  const full24Hours = useMemo(() => {
-    const barMap = new Map<number, ActivityBarStat>();
-    activityBars.forEach((bar) => {
-      const match = bar.key.match(/hour-(\d+)/) || bar.label.match(/^(\d+):/);
-      const h = match ? parseInt(match[1], 10) : NaN;
-      if (!isNaN(h)) {
-        barMap.set(h, bar);
-      }
-    });
+  // Create tag lookup map for quick resolution of names and colors
+  const tagMap = useMemo(() => {
+    return new Map(tags.map((t) => [t.id, t]));
+  }, [tags]);
 
-    return Array.from({ length: 24 }, (_, h) => {
-      const existing = barMap.get(h);
-      if (existing) return existing;
-      return {
-        key: `hour-${h}`,
-        label: `${h.toString().padStart(2, '0')}:00`,
-        totalSeconds: 0,
-        hours: 0,
-        sessionCount: 0,
-      };
-    });
-  }, [activityBars]);
+  // Filter to work/focus sessions
+  const workSessions = useMemo(() => {
+    return sessions
+      .filter((s) => s.sessionType === 'WORK')
+      .sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+  }, [sessions]);
 
-  // Max focus seconds in any single hour for intensity scaling
-  const maxHourSeconds = useMemo(() => {
-    return Math.max(1, ...full24Hours.map((b) => b.totalSeconds));
-  }, [full24Hours]);
+  // Aggregate focus time and sessions into 4 natural daily quadrants
+  const quadrants = useMemo<TimeQuadrant[]>(() => {
+    let morningSec = 0;
+    let morningCount = 0;
+    let afternoonSec = 0;
+    let afternoonCount = 0;
+    let eveningSec = 0;
+    let eveningCount = 0;
+    let nightSec = 0;
+    let nightCount = 0;
 
-  // Peak focus hour
-  const peakHour = useMemo(() => {
-    let top: ActivityBarStat | null = null;
-    for (const bar of full24Hours) {
-      if (bar.totalSeconds > 0 && (!top || bar.totalSeconds > top.totalSeconds)) {
-        top = bar;
+    if (workSessions.length > 0) {
+      workSessions.forEach((s) => {
+        const d = new Date(s.completedAt);
+        const hour = d.getHours();
+        if (hour >= 6 && hour < 12) {
+          morningSec += s.durationSeconds;
+          morningCount += 1;
+        } else if (hour >= 12 && hour < 17) {
+          afternoonSec += s.durationSeconds;
+          afternoonCount += 1;
+        } else if (hour >= 17 && hour < 22) {
+          eveningSec += s.durationSeconds;
+          eveningCount += 1;
+        } else {
+          nightSec += s.durationSeconds;
+          nightCount += 1;
+        }
+      });
+    } else if (activityBars.length > 0) {
+      // Fallback from hourly activityBars if direct session objects aren't available
+      activityBars.forEach((bar) => {
+        const match = bar.key.match(/hour-(\d+)/) || bar.label.match(/^(\d+):/);
+        const h = match ? parseInt(match[1], 10) : NaN;
+        if (!isNaN(h)) {
+          if (h >= 6 && h < 12) {
+            morningSec += bar.totalSeconds;
+            morningCount += bar.sessionCount;
+          } else if (h >= 12 && h < 17) {
+            afternoonSec += bar.totalSeconds;
+            afternoonCount += bar.sessionCount;
+          } else if (h >= 17 && h < 22) {
+            eveningSec += bar.totalSeconds;
+            eveningCount += bar.sessionCount;
+          } else {
+            nightSec += bar.totalSeconds;
+            nightCount += bar.sessionCount;
+          }
+        }
+      });
+    }
+
+    return [
+      {
+        id: 'morning',
+        title: 'Morning',
+        timeRange: '06:00 – 12:00',
+        icon: Sunrise,
+        iconColor: 'text-amber-500',
+        badgeBg: 'bg-amber-500/10 border-amber-500/20',
+        totalSeconds: morningSec,
+        sessionCount: morningCount,
+      },
+      {
+        id: 'afternoon',
+        title: 'Afternoon',
+        timeRange: '12:00 – 17:00',
+        icon: Sun,
+        iconColor: 'text-orange-500',
+        badgeBg: 'bg-orange-500/10 border-orange-500/20',
+        totalSeconds: afternoonSec,
+        sessionCount: afternoonCount,
+      },
+      {
+        id: 'evening',
+        title: 'Evening',
+        timeRange: '17:00 – 22:00',
+        icon: Sunset,
+        iconColor: 'text-indigo-500',
+        badgeBg: 'bg-indigo-500/10 border-indigo-500/20',
+        totalSeconds: eveningSec,
+        sessionCount: eveningCount,
+      },
+      {
+        id: 'night',
+        title: 'Night',
+        timeRange: '22:00 – 06:00',
+        icon: Moon,
+        iconColor: 'text-purple-500',
+        badgeBg: 'bg-purple-500/10 border-purple-500/20',
+        totalSeconds: nightSec,
+        sessionCount: nightCount,
+      },
+    ];
+  }, [workSessions, activityBars]);
+
+  const totalDaySeconds = useMemo(() => {
+    return quadrants.reduce((acc, q) => acc + q.totalSeconds, 0);
+  }, [quadrants]);
+
+  const totalSessionCount = useMemo(() => {
+    return workSessions.length > 0
+      ? workSessions.length
+      : quadrants.reduce((acc, q) => acc + q.sessionCount, 0);
+  }, [workSessions, quadrants]);
+
+  // Peak focus quadrant
+  const peakQuadrant = useMemo(() => {
+    let top: TimeQuadrant | null = null;
+    for (const q of quadrants) {
+      if (q.totalSeconds > 0 && (!top || q.totalSeconds > top.totalSeconds)) {
+        top = q;
       }
     }
     return top;
-  }, [full24Hours]);
+  }, [quadrants]);
 
-  // Active hours count and total focus duration
-  const activeHours = useMemo(() => {
-    return full24Hours.filter((b) => b.totalSeconds > 0);
-  }, [full24Hours]);
-
-  const activeHoursCount = activeHours.length;
-
-  const totalFocusSeconds = useMemo(() => {
-    return full24Hours.reduce((acc, b) => acc + b.totalSeconds, 0);
-  }, [full24Hours]);
-
-  // Inspected hour (hovered or selected)
-  const activeKey = hoveredHourKey || selectedHourKey;
-  const inspectedBar = useMemo(() => {
-    if (!activeKey) return null;
-    return full24Hours.find((b) => b.key === activeKey) || null;
-  }, [activeKey, full24Hours]);
-
-  const formatHourSpan = (hourLabel: string) => {
-    const h = parseInt(hourLabel.split(':')[0], 10);
-    const nextH = (h + 1) % 24;
-    return `${h.toString().padStart(2, '0')}:00 – ${nextH.toString().padStart(2, '0')}:00`;
-  };
+  const maxQuadrantSeconds = useMemo(() => {
+    return Math.max(1, ...quadrants.map((q) => q.totalSeconds));
+  }, [quadrants]);
 
   return (
-    <div className="flex flex-col gap-3.5">
-      {/* Top Summary Subheader */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-md-on-surface-variant font-medium">
-          <span className="font-bold text-md-on-surface">{activeHoursCount}</span> active{' '}
-          {activeHoursCount === 1 ? 'hour' : 'hours'}
-          {totalFocusSeconds > 0 && (
-            <span className="text-md-outline">
-              {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* 24-Hour Activity Ribbon (2-tier 12-hour grid on mobile, single row on desktop) */}
-      <div className="flex flex-col gap-1.5 p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20">
-        <div
-          className="grid grid-cols-12 grid-rows-2 sm:grid-cols-[repeat(24,minmax(0,1fr))] sm:grid-rows-1 gap-1 h-20 sm:h-11"
-          onMouseLeave={() => setHoveredHourKey(null)}
-        >
-          {full24Hours.map((bar, idx) => {
-            const sec = bar.totalSeconds;
-            const isSelected = selectedHourKey === bar.key;
-            const isCurrent = idx === currentHour;
-
-            return (
-              <button
-                type="button"
-                key={bar.key}
-                onMouseEnter={() => setHoveredHourKey(bar.key)}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setSelectedHourKey((prev) => (prev === bar.key ? null : bar.key));
-                }}
-                className={clsx(
-                  'h-full min-h-[38px] sm:min-h-0 rounded sm:rounded-md border transition-all duration-150 flex flex-col items-center justify-center cursor-pointer group select-none relative',
-                  getActivityIntensityStyle(sec, maxHourSeconds, isSelected),
-                  isCurrent && !isSelected && 'ring-2 ring-md-primary/40'
-                )}
-                aria-label={`${bar.label}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
-              >
-                {isCurrent && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-md-primary animate-pulse absolute top-1"
-                    title="Current Hour"
-                  />
-                )}
-                <span className="text-[9px] sm:hidden font-mono leading-none select-none opacity-60">
-                  {idx}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Landmark Hour Labels */}
-        <div className="hidden sm:flex items-center justify-between px-0.5 text-[10px] text-md-on-surface-variant/70 font-medium select-none">
-          <span>00:00</span>
-          <span>04:00</span>
-          <span>08:00</span>
-          <span>12:00</span>
-          <span>16:00</span>
-          <span>20:00</span>
-          <span>23:00</span>
-        </div>
-        <div className="flex sm:hidden items-center justify-between px-0.5 text-[10px] text-md-on-surface-variant/70 font-medium select-none">
-          <span>Row 1: 00:00–11:00</span>
-          <span>Row 2: 12:00–23:00</span>
-        </div>
-      </div>
-
-      {/* Dynamic Hour Inspector Bar */}
-      <div className="p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
-        {inspectedBar ? (
-          <>
-            <div className="font-semibold text-md-on-surface">
-              {formatHourSpan(inspectedBar.label)}
-            </div>
-            <div className="font-medium text-md-on-surface-variant">
-              {inspectedBar.totalSeconds > 0 ? (
-                <span>
-                  <strong className="text-md-primary font-bold">
-                    {formatDurationHoursMins(inspectedBar.totalSeconds)}
-                  </strong>{' '}
-                  focused across {inspectedBar.sessionCount}{' '}
-                  {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'}
-                </span>
-              ) : (
-                <span>No focus recorded in this hour</span>
-              )}
-            </div>
-          </>
-        ) : peakHour ? (
-          <>
-            <div className="font-semibold text-md-on-surface flex items-center gap-1.5">
-              <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+    <div className="flex flex-col gap-6">
+      {/* 1. Header Overview */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-md-outline-variant/15">
+        <div>
+          <span className="text-xs font-bold text-md-on-surface uppercase tracking-wider">
+            Daily Focus Flow
+          </span>
+          <div className="text-sm font-semibold text-md-on-surface-variant mt-0.5">
+            {totalDaySeconds > 0 ? (
               <span>
-                Peak Hour:{' '}
-                <span className="text-md-primary font-bold">
-                  {formatHourSpan(peakHour.label)}
+                <span className="text-md-on-surface font-bold">
+                  {formatDurationHoursMins(totalDaySeconds)}
+                </span>{' '}
+                focused across{' '}
+                <span className="text-md-on-surface font-bold">
+                  {totalSessionCount} {totalSessionCount === 1 ? 'session' : 'sessions'}
                 </span>
               </span>
-            </div>
-            <div className="text-md-on-surface-variant font-medium">
-              {formatDurationHoursMins(peakHour.totalSeconds)} focused ({peakHour.sessionCount}{' '}
-              {peakHour.sessionCount === 1 ? 'session' : 'sessions'})
-            </div>
-          </>
-        ) : (
-          <div className="text-md-outline">
-            Hover or tap any hour segment to inspect focus duration.
+            ) : (
+              <span>No focus time recorded for this day</span>
+            )}
+          </div>
+        </div>
+
+        {peakQuadrant && (
+          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-md-primary/10 border border-md-primary/20 text-xs font-semibold text-md-primary shrink-0 self-start sm:self-auto">
+            <Award className="w-4 h-4 text-amber-500 shrink-0" />
+            <span>Peak Window: <span className="font-bold">{peakQuadrant.title}</span></span>
           </div>
         )}
       </div>
 
-      {/* Focus Breakdown List - Active hours only */}
-      <div className="flex flex-col gap-2">
-        {activeHours.length === 0 ? (
-          <div className="text-center py-6 text-xs text-md-outline rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/10">
-            No focus sessions logged for this day.
-          </div>
-        ) : (
-          activeHours.map((bar) => {
-            const isSelected = activeKey === bar.key;
-            const widthPct = maxHourSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxHourSeconds) * 100)) : 0;
+      {/* 2. Natural Day Rhythm Quadrants (Morning / Afternoon / Evening / Night) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {quadrants.map((q) => {
+          const Icon = q.icon;
+          const isPeak = peakQuadrant?.id === q.id && q.totalSeconds > 0;
+          const pct = maxQuadrantSeconds > 0 ? Math.round((q.totalSeconds / maxQuadrantSeconds) * 100) : 0;
+          const shareOfTotal = totalDaySeconds > 0 ? Math.round((q.totalSeconds / totalDaySeconds) * 100) : 0;
 
-            return (
-              <button
-                type="button"
-                key={bar.key}
-                onClick={() => setSelectedHourKey((prev) => (prev === bar.key ? null : bar.key))}
-                onMouseEnter={() => setHoveredHourKey(bar.key)}
-                className={clsx(
-                  'w-full flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl transition-all cursor-pointer text-left',
-                  isSelected
-                    ? 'bg-md-primary/10 border border-md-primary/30 ring-1 ring-md-primary/20'
-                    : 'bg-md-surface-container/60 hover:bg-md-surface-container border border-transparent'
-                )}
-              >
-                <div className="w-16 sm:w-32 shrink-0 flex flex-col min-w-0">
-                  <span className="text-xs font-bold text-md-on-surface truncate hidden sm:inline">
-                    {formatHourSpan(bar.label)}
-                  </span>
-                  <span className="text-xs font-bold text-md-on-surface truncate sm:hidden">
-                    {bar.label}
-                  </span>
+          return (
+            <div
+              key={q.id}
+              className={clsx(
+                'p-3.5 sm:p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3',
+                isPeak
+                  ? 'bg-md-primary/5 border-md-primary/30 ring-1 ring-md-primary/20'
+                  : 'bg-md-surface-container/60 border-md-outline-variant/25'
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center border shrink-0', q.badgeBg)}>
+                    <Icon className={clsx('w-5 h-5', q.iconColor)} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-md-on-surface flex items-center gap-1.5">
+                      <span>{q.title}</span>
+                      {isPeak && (
+                        <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-md-primary text-white leading-none">
+                          Peak
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-md-outline font-medium">
+                      {q.timeRange}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="flex-1 min-w-[35%] h-6 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+                <div className="text-right">
+                  <div className={clsx('text-xs font-bold tabular-nums', q.totalSeconds > 0 ? 'text-md-on-surface' : 'text-md-outline/60')}>
+                    {q.totalSeconds > 0 ? formatDurationHoursMins(q.totalSeconds) : '0m'}
+                  </div>
+                  <div className="text-[10px] text-md-on-surface-variant font-medium">
+                    {q.sessionCount > 0 ? `${q.sessionCount} ${q.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Intensity Progress Bar */}
+              <div className="w-full flex items-center gap-2">
+                <div className="flex-1 h-2 bg-md-surface-container-highest rounded-full overflow-hidden">
                   <div
-                    className="h-full rounded-lg bg-md-primary transition-all duration-500 ease-out"
-                    style={{ width: `${Math.max(8, widthPct)}%` }}
+                    className={clsx(
+                      'h-full rounded-full transition-all duration-500 ease-out',
+                      isPeak ? 'bg-md-primary' : 'bg-md-primary/60'
+                    )}
+                    style={{ width: `${Math.max(q.totalSeconds > 0 ? 8 : 0, pct)}%` }}
                   />
                 </div>
-
-                <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
-                  <span className="text-xs font-bold tabular-nums text-md-on-surface">
-                    {formatDurationHoursMins(bar.totalSeconds)}
+                {shareOfTotal > 0 && (
+                  <span className="text-[10px] font-bold text-md-outline tabular-nums shrink-0 w-8 text-right">
+                    {shareOfTotal}%
                   </span>
-                  {bar.sessionCount > 0 && (
-                    <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
-                      <span className="hidden sm:inline">{bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}</span>
-                      <span className="sm:hidden">{bar.sessionCount} ses</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 3. Chronological Focus Session Log */}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold text-md-on-surface uppercase tracking-wider">
+            <Clock className="w-3.5 h-3.5 text-md-primary" />
+            <span>Completed Focus Sessions</span>
+          </div>
+          {workSessions.length > 0 && (
+            <span className="text-xs text-md-on-surface-variant font-medium">
+              {workSessions.length} {workSessions.length === 1 ? 'session' : 'sessions'}
+            </span>
+          )}
+        </div>
+
+        {workSessions.length === 0 ? (
+          <div className="text-center py-8 px-4 rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/15 flex flex-col items-center justify-center gap-2">
+            <div className="w-10 h-10 rounded-2xl bg-md-surface-container-high flex items-center justify-center text-md-outline/60">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div className="text-xs font-semibold text-md-on-surface">
+              No focus sessions logged for this day
+            </div>
+            <div className="text-[11px] text-md-outline max-w-xs">
+              Complete a pomodoro with the timer to start logging your daily rhythm and session timeline.
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {workSessions.map((s, idx) => {
+              const d = new Date(s.completedAt);
+              const timeString = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              const tag = s.tagId ? tagMap.get(s.tagId) : null;
+              const tagName = tag ? tag.name : 'No Tag';
+              const tagColor = tag ? tag.color : '#8C8690';
+
+              return (
+                <div
+                  key={s.id || `session-${idx}`}
+                  className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/20 hover:bg-md-surface-container transition-colors"
+                >
+                  {/* Left: Sequence and Tag */}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-7 h-7 rounded-xl bg-md-primary/10 text-md-primary flex items-center justify-center font-bold text-xs shrink-0">
+                      #{idx + 1}
+                    </div>
+
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="w-3 h-3 rounded-full shrink-0 shadow-xs"
+                        style={{ backgroundColor: tagColor }}
+                      />
+                      <span className="text-xs font-bold text-md-on-surface truncate">
+                        {tagName}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Right: Time and Duration Badge */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-[11px] font-medium text-md-outline tabular-nums">
+                      {timeString}
                     </span>
-                  )}
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-xl bg-md-primary-container text-md-on-primary-container tabular-nums">
+                      {formatDurationHoursMins(s.durationSeconds)}
+                    </span>
+                  </div>
                 </div>
-              </button>
-            );
-          })
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

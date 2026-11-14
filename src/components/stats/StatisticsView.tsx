@@ -48,6 +48,7 @@ export const StatisticsView: React.FC = () => {
     activityBars,
     productiveMetric,
     topInsight,
+    filteredSessions,
   } = useStatistics();
 
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
@@ -455,7 +456,7 @@ export const StatisticsView: React.FC = () => {
         </div>
 
         {periodType === 'day' ? (
-          <DayActivityView activityBars={activityBars} />
+          <DayActivityView sessions={filteredSessions} activityBars={activityBars} />
         ) : periodType === 'week' ? (
           <WeekActivityView activityBars={activityBars} />
         ) : periodType === 'month' ? (

@@ -84,7 +84,7 @@ const MainContent: React.FC = () => {
       <div className="flex-1 flex flex-col min-h-[100dvh] lg:h-full lg:min-h-0 lg:overflow-hidden lg:pl-[72px]">
         <Header onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
-        <main ref={mainRef} className="flex-1 w-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden p-2 pt-[68px] pb-8 sm:p-4 sm:pt-[68px] lg:p-6">
+        <main ref={mainRef} className="flex-1 w-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden p-2 pb-8 sm:p-4 lg:p-6">
           {/* Keep TimerWorkspace mounted so timer ticks and animations stay live across tab switches */}
           <div className={currentView === 'timer' ? 'contents' : 'hidden'}>
             <TimerWorkspace isActiveView={currentView === 'timer'} />
