@@ -140,36 +140,40 @@ export const TagManager: React.FC = () => {
                     <>
                       <button
                         onClick={() => handleEdit(tag)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container transition-colors shrink-0"
                         title="Edit Tag"
+                        aria-label="Edit Tag"
                       >
-                        <Edit2 className="w-5 h-5 md:w-4 md:h-4" />
+                        <Edit2 className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
 
                       <button
                         onClick={() => archiveTag(tag.id)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors shrink-0"
                         title="Archive Tag (Move to archived list before deleting)"
+                        aria-label="Archive Tag"
                       >
-                        <Archive className="w-5 h-5 md:w-4 md:h-4" />
+                        <Archive className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
                     </>
                   ) : (
                     <>
                       <button
                         onClick={() => unarchiveTag(tag.id)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors shrink-0"
                         title="Restore Tag"
+                        aria-label="Restore Tag"
                       >
-                        <RotateCcw className="w-5 h-5 md:w-4 md:h-4" />
+                        <RotateCcw className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
 
                       <button
                         onClick={() => setDeleteConfirmId(tag.id)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors shrink-0"
                         title="Delete Tag Permanently"
+                        aria-label="Delete Tag Permanently"
                       >
-                        <Trash2 className="w-5 h-5 md:w-4 md:h-4" />
+                        <Trash2 className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
                     </>
                   )}

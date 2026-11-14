@@ -28,28 +28,35 @@ const MainContent: React.FC = () => {
 
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
+      // Do not initiate global swipe if touching interactive controls like sliders or text inputs
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select')) {
+        touchStartX = 0;
+        touchStartY = 0;
+        return;
+      }
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      if (e.changedTouches.length !== 1) return;
+      if (e.changedTouches.length !== 1 || touchStartX === 0) return;
       const touchEndX = e.changedTouches[0].clientX;
       const touchEndY = e.changedTouches[0].clientY;
       const deltaX = touchEndX - touchStartX;
       const deltaY = touchEndY - touchStartY;
 
-      // Ensure horizontal gesture is dominant
+      // Ensure horizontal swipe is dominant
       const isHorizontalSwipe = Math.abs(deltaX) > Math.abs(deltaY) * 1.5;
       if (!isHorizontalSwipe) return;
 
       if (!mobileMenuOpen) {
-        // Edge swipe from left edge to the right opens sidebar
-        if (touchStartX < 70 && deltaX > 50) {
+        // Swiping left-to-right anywhere on the screen opens sidebar
+        if (deltaX > 50) {
           setMobileMenuOpen(true);
         }
       } else {
-        // Swiping from right to left when sidebar is open closes sidebar
+        // Swiping right-to-left anywhere on the screen closes sidebar
         if (deltaX < -50) {
           setMobileMenuOpen(false);
         }

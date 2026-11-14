@@ -200,10 +200,10 @@ export const CoffeeWorkspace: React.FC = () => {
                 aria-label={`Select tag ${cupName} from Cup #${idx + 1}`}
               >
                 <span
-                  className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-all duration-150 active:scale-95 [@media(hover:hover)]:group-hover:scale-110 [@media(hover:hover)]:group-hover:ring-1 [@media(hover:hover)]:group-hover:ring-md-outline/30"
+                  className="flex items-center justify-center w-8 h-8 rounded-xl transition-all duration-150 active:scale-95 [@media(hover:hover)]:group-hover:scale-110 [@media(hover:hover)]:group-hover:ring-1 [@media(hover:hover)]:group-hover:ring-md-outline/30"
                   style={{ backgroundColor: getAlphaColor(cupColor, '25') }}
                 >
-                  <Coffee className="w-4 h-4" style={{ color: sanitizeHexColor(cupColor) }} />
+                  <Coffee className="w-4.5 h-4.5" style={{ color: sanitizeHexColor(cupColor) }} />
                 </span>
               </button>
             );

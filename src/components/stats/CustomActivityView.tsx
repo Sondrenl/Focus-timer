@@ -224,13 +224,13 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
               type="button"
               onClick={() => setGranularity('calendar')}
               className={clsx(
-                'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
+                'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
                 granularity === 'calendar'
                   ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                   : 'text-md-on-surface-variant hover:text-md-on-surface'
               )}
             >
-              <CalendarIcon className="w-3.5 h-3.5" />
+              <CalendarIcon className="w-4 h-4" />
               <span>Calendar</span>
             </button>
           )}
@@ -240,13 +240,13 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
               type="button"
               onClick={() => setGranularity('weekly')}
               className={clsx(
-                'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
+                'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
                 granularity === 'weekly'
                   ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                   : 'text-md-on-surface-variant hover:text-md-on-surface'
               )}
             >
-              <BarChart2 className="w-3.5 h-3.5" />
+              <BarChart2 className="w-4 h-4" />
               <span>Weeks</span>
             </button>
           )}
@@ -256,7 +256,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
               type="button"
               onClick={() => setGranularity('monthly')}
               className={clsx(
-                'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
+                'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
                 granularity === 'monthly'
                   ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                   : 'text-md-on-surface-variant hover:text-md-on-surface'
@@ -270,7 +270,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
             type="button"
             onClick={() => setGranularity('daily')}
             className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
+              'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
               granularity === 'daily'
                 ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                 : 'text-md-on-surface-variant hover:text-md-on-surface'

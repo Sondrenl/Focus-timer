@@ -193,7 +193,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
             <div className="text-sm font-semibold text-md-on-surface">Chime Volume</div>
             <div className="text-xs text-md-on-surface-variant">Adjust completion bell volume</div>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-3.5 w-full sm:w-auto shrink-0">
             <input
               type="range"
               min="0.1"
@@ -204,9 +204,10 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
                 const val = parseFloat(e.target.value);
                 updateSettings({ soundVolume: Math.round(val * 100) / 100 });
               }}
-              className="w-28 md:w-36 accent-md-primary cursor-pointer"
+              className="flex-1 sm:w-48 md:w-60 h-2.5 rounded-full accent-md-primary cursor-pointer bg-md-surface-container-highest"
+              aria-label="Chime Volume"
             />
-            <span className="text-xs font-semibold text-md-on-surface-variant w-8 text-right">
+            <span className="text-sm font-bold text-md-on-surface w-12 text-right tabular-nums shrink-0">
               {Math.round((settings.soundVolume ?? 0.8) * 100)}%
             </span>
           </div>

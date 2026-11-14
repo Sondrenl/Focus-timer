@@ -16,8 +16,8 @@ export const Card: React.FC<CardProps> = ({
   const baseStyles = 'rounded-3xl transition-all duration-200 overflow-hidden';
 
   const variants = {
-    elevated: 'bg-md-surface-container-low shadow-elevation-1 hover:shadow-elevation-2',
-    filled: 'bg-md-surface-container hover:bg-md-surface-container-high/60 transition-colors duration-150',
+    elevated: 'bg-md-surface-container-low shadow-elevation-1',
+    filled: 'bg-md-surface-container',
     outlined: 'bg-md-surface border border-md-outline-variant',
   };
 

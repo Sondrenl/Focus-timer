@@ -30,14 +30,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
       <div className="flex items-center gap-2">
         <button
           onClick={toggleSound}
-          className="w-11 h-11 lg:w-9 lg:h-9 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high text-md-on-surface-variant hover:text-md-on-surface transition-all shadow-xs active:scale-95"
+          className="w-11 h-11 lg:w-10 lg:h-10 rounded-full flex items-center justify-center bg-md-surface-container hover:bg-md-surface-container-high text-md-on-surface-variant hover:text-md-on-surface transition-all shadow-xs active:scale-95"
           title={settings.soundEnabled ? 'Mute sound chime' : 'Enable sound chime'}
           aria-label={settings.soundEnabled ? 'Mute sound chime' : 'Enable sound chime'}
         >
           {settings.soundEnabled ? (
-            <Volume2 className="w-5 h-5 lg:w-4 lg:h-4 text-md-primary" />
+            <Volume2 className="w-5 h-5 lg:w-5 lg:h-5 text-md-primary" />
           ) : (
-            <VolumeX className="w-5 h-5 lg:w-4 lg:h-4 text-md-outline" />
+            <VolumeX className="w-5 h-5 lg:w-5 lg:h-5 text-md-outline" />
           )}
         </button>
       </div>

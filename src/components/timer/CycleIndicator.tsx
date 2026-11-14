@@ -67,10 +67,10 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
         <button
           type="button"
           onClick={() => scroll('left')}
-          className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-md-background via-md-background/90 to-transparent pointer-events-auto cursor-pointer flex items-center justify-start z-10 pl-0.5 text-md-outline/60 hover:text-md-on-surface transition-colors focus:outline-none animate-in fade-in duration-200"
+          className="absolute left-0 top-0 bottom-0 w-9 bg-gradient-to-r from-md-background via-md-background/90 to-transparent pointer-events-auto cursor-pointer flex items-center justify-start z-10 pl-1 text-md-outline/60 hover:text-md-on-surface transition-colors focus:outline-none animate-in fade-in duration-200"
           aria-label="Scroll cycles left"
         >
-          <ChevronLeft className="w-3.5 h-3.5" />
+          <ChevronLeft className="w-4.5 h-4.5" />
         </button>
       )}
 
@@ -156,10 +156,10 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
         <button
           type="button"
           onClick={() => scroll('right')}
-          className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-md-background via-md-background/90 to-transparent pointer-events-auto cursor-pointer flex items-center justify-end z-10 pr-0.5 text-md-outline/60 hover:text-md-on-surface transition-colors focus:outline-none animate-in fade-in duration-200"
+          className="absolute right-0 top-0 bottom-0 w-9 bg-gradient-to-l from-md-background via-md-background/90 to-transparent pointer-events-auto cursor-pointer flex items-center justify-end z-10 pr-1 text-md-outline/60 hover:text-md-on-surface transition-colors focus:outline-none animate-in fade-in duration-200"
           aria-label="Scroll cycles right"
         >
-          <ChevronRight className="w-3.5 h-3.5" />
+          <ChevronRight className="w-4.5 h-4.5" />
         </button>
       )}
     </div>

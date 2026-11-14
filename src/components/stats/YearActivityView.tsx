@@ -134,26 +134,26 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
             type="button"
             onClick={() => setDisplayMode('calendar')}
             className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
+              'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
               displayMode === 'calendar'
                 ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                 : 'text-md-on-surface-variant hover:text-md-on-surface'
             )}
           >
-            <CalendarIcon className="w-3.5 h-3.5" />
+            <CalendarIcon className="w-4 h-4" />
             <span>Months</span>
           </button>
           <button
             type="button"
             onClick={() => setDisplayMode('quarters')}
             className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
+              'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
               displayMode === 'quarters'
                 ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
                 : 'text-md-on-surface-variant hover:text-md-on-surface'
             )}
           >
-            <PieChart className="w-3.5 h-3.5" />
+            <PieChart className="w-4 h-4" />
             <span>Quarters</span>
           </button>
         </div>

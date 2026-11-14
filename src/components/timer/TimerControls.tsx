@@ -62,10 +62,10 @@ export const TimerControls: React.FC<TimerControlsProps> = ({
         <button
           onClick={onReset}
           title="Reset interval (R)"
-          className="flex items-center justify-center w-11 h-11 md:w-10 md:h-10 rounded-full bg-md-surface-container hover:bg-md-surface-container-high text-md-on-surface-variant hover:text-md-on-surface transition-all duration-200 active:scale-95 shadow-xs"
+          className="flex items-center justify-center w-11 h-11 rounded-full bg-md-surface-container hover:bg-md-surface-container-high text-md-on-surface-variant hover:text-md-on-surface transition-all duration-200 active:scale-95 shadow-xs"
           aria-label="Reset interval"
         >
-          <RotateCcw className="w-5 h-5 md:w-4 md:h-4" />
+          <RotateCcw className="w-5 h-5" />
         </button>
       </div>
     </div>

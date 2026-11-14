@@ -132,7 +132,7 @@ export const StatisticsView: React.FC = () => {
           {periodType !== 'all' && periodType !== 'custom' && !isCurrentPeriod && (
             <button
               onClick={goToToday}
-              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-md-primary hover:bg-md-primary/10 transition-colors"
+              className="px-3 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary hover:bg-md-primary/10 transition-colors flex items-center"
             >
               Today
             </button>
@@ -142,21 +142,22 @@ export const StatisticsView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsCalendarModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+              className="px-3.5 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
             >
-              <CalendarDays className="w-3.5 h-3.5" />
+              <CalendarDays className="w-4 h-4" />
               <span>Pick Dates</span>
             </button>
           )}
 
-          <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30">
+          <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 min-h-[36px]">
             {periodType !== 'all' && periodType !== 'custom' && (
               <button
                 onClick={goToPrev}
-                className="p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
                 title="Previous period"
+                aria-label="Previous period"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-4.5 h-4.5" />
               </button>
             )}
 
@@ -168,7 +169,7 @@ export const StatisticsView: React.FC = () => {
                 }
               }}
               className={clsx(
-                "px-3 text-xs font-bold text-md-on-surface whitespace-nowrap",
+                "px-3 py-1 text-xs font-bold text-md-on-surface whitespace-nowrap",
                 periodType === 'custom' && "hover:text-md-primary underline decoration-dotted underline-offset-4 cursor-pointer"
               )}
             >
@@ -180,12 +181,13 @@ export const StatisticsView: React.FC = () => {
                 onClick={goToNext}
                 disabled={!canGoNext}
                 className={clsx(
-                  "p-1.5 rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors",
+                  "w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors",
                   !canGoNext && "opacity-30 cursor-not-allowed pointer-events-none"
                 )}
                 title="Next period"
+                aria-label="Next period"
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-4.5 h-4.5" />
               </button>
             )}
           </div>
