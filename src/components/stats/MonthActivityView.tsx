@@ -1,30 +1,43 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
-import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
+import { MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface MonthActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
-const SHORT_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const SHORT_WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+interface MonthWeekData {
+  weekNumber: number;
+  label: string;
+  totalSeconds: number;
+  sessionCount: number;
+  activeDaysCount: number;
+  isCurrentWeek: boolean;
+  days: {
+    dateKey: string;
+    dayNum: number;
+    weekdayIndex: number; // 0=Mon, 6=Sun
+    totalSeconds: number;
+    sessionCount: number;
+    isInMonth: boolean;
+    isToday: boolean;
+  }[];
+}
 
 export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBars }) => {
-  const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
-  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-
   const todayKey = useMemo(() => toDateKey(new Date()), []);
 
   // Parse Year and Month from the first bar's key (format 'YYYY-MM-DD')
-  const { year, monthIndex, startingDayOfWeek, daysInMonth, monthName } = useMemo(() => {
+  const { year, monthIndex, daysInMonth, monthName } = useMemo(() => {
     if (activityBars.length === 0) {
       const now = new Date();
       return {
         year: now.getFullYear(),
         monthIndex: now.getMonth(),
-        startingDayOfWeek: 0,
         daysInMonth: 30,
         monthName: MONTH_NAMES[now.getMonth()],
       };
@@ -32,14 +45,11 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
 
     const [y, m] = activityBars[0].key.split('-').map(Number);
     const monthIdx = m - 1;
-    const firstDay = new Date(y, monthIdx, 1);
-    const startDow = (firstDay.getDay() + 6) % 7;
     const totalDays = new Date(y, m, 0).getDate();
 
     return {
       year: y,
       monthIndex: monthIdx,
-      startingDayOfWeek: startDow,
       daysInMonth: totalDays,
       monthName: MONTH_NAMES[monthIdx],
     };
@@ -52,162 +62,231 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
     return map;
   }, [activityBars]);
 
-  const maxDaySeconds = useMemo(() => {
-    return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
-  }, [activityBars]);
-
+  // Total active days in month
   const totalActiveDays = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
   }, [activityBars]);
+
+  const totalFocusSeconds = useMemo(() => {
+    return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
+  }, [activityBars]);
+
+  const avgPerActiveDaySec = useMemo(() => {
+    return totalActiveDays > 0 ? Math.round(totalFocusSeconds / totalActiveDays) : 0;
+  }, [totalFocusSeconds, totalActiveDays]);
 
   const consistencyPct = useMemo(() => {
     return daysInMonth > 0 ? Math.round((totalActiveDays / daysInMonth) * 100) : 0;
   }, [totalActiveDays, daysInMonth]);
 
-  const activeKey = hoveredDayKey || selectedDayKey;
-  const inspectedBar = useMemo(() => {
-    if (!activeKey) return null;
-    return dayMap.get(activeKey) || null;
-  }, [activeKey, dayMap]);
+  // Group all days of the month into natural calendar weeks (Monday–Sunday)
+  const weeksData = useMemo<MonthWeekData[]>(() => {
+    if (activityBars.length === 0) return [];
 
-  const formatInspectedDate = (dateKey: string) => {
-    const [y, m, d] = dateKey.split('-').map(Number);
-    const dateObj = new Date(y, m - 1, d);
-    const weekday = WEEKDAY_NAMES[dateObj.getDay()];
-    return `${weekday}, ${d} ${MONTH_NAMES[m - 1]}`;
-  };
+    const weeks: MonthWeekData[] = [];
+    let currentWeekDays: MonthWeekData['days'] = [];
+    let weekIndex = 1;
+
+    // Fill days 1..daysInMonth
+    for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
+      const dateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      const dateObj = new Date(year, monthIndex, dayNum);
+      const weekdayIndex = (dateObj.getDay() + 6) % 7; // Mon=0 .. Sun=6
+      const bar = dayMap.get(dateKey);
+      const isToday = dateKey === todayKey;
+
+      // On first day of week or first day of month, pad leading empty days
+      if (dayNum === 1 && weekdayIndex > 0) {
+        for (let pad = 0; pad < weekdayIndex; pad++) {
+          currentWeekDays.push({
+            dateKey: `pad-pre-${pad}`,
+            dayNum: 0,
+            weekdayIndex: pad,
+            totalSeconds: 0,
+            sessionCount: 0,
+            isInMonth: false,
+            isToday: false,
+          });
+        }
+      }
+
+      currentWeekDays.push({
+        dateKey,
+        dayNum,
+        weekdayIndex,
+        totalSeconds: bar ? bar.totalSeconds : 0,
+        sessionCount: bar ? bar.sessionCount : 0,
+        isInMonth: true,
+        isToday,
+      });
+
+      // Close week on Sunday or end of month
+      if (weekdayIndex === 6 || dayNum === daysInMonth) {
+        // Pad trailing days if end of month didn't finish on Sunday
+        if (dayNum === daysInMonth && weekdayIndex < 6) {
+          for (let pad = weekdayIndex + 1; pad <= 6; pad++) {
+            currentWeekDays.push({
+              dateKey: `pad-post-${pad}`,
+              dayNum: 0,
+              weekdayIndex: pad,
+              totalSeconds: 0,
+              sessionCount: 0,
+              isInMonth: false,
+              isToday: false,
+            });
+          }
+        }
+
+        const inMonthDays = currentWeekDays.filter((d) => d.isInMonth);
+        const firstDayNum = inMonthDays[0]?.dayNum || 1;
+        const lastDayNum = inMonthDays[inMonthDays.length - 1]?.dayNum || daysInMonth;
+        const weekSeconds = inMonthDays.reduce((acc, d) => acc + d.totalSeconds, 0);
+        const weekSessions = inMonthDays.reduce((acc, d) => acc + d.sessionCount, 0);
+        const weekActiveDays = inMonthDays.filter((d) => d.totalSeconds > 0).length;
+        const isCurrentWeek = inMonthDays.some((d) => d.isToday);
+
+        weeks.push({
+          weekNumber: weekIndex,
+          label: `${firstDayNum} – ${lastDayNum} ${monthName.slice(0, 3)}`,
+          totalSeconds: weekSeconds,
+          sessionCount: weekSessions,
+          activeDaysCount: weekActiveDays,
+          isCurrentWeek,
+          days: currentWeekDays,
+        });
+
+        currentWeekDays = [];
+        weekIndex++;
+      }
+    }
+
+    return weeks;
+  }, [activityBars, year, monthIndex, daysInMonth, monthName, dayMap, todayKey]);
+
+  const maxWeekSeconds = useMemo(() => {
+    return Math.max(1, ...weeksData.map((w) => w.totalSeconds));
+  }, [weeksData]);
+
+  if (totalFocusSeconds === 0) {
+    return (
+      <div className="text-center py-8 text-xs text-md-outline">
+        No focus sessions logged in {monthName}.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Non-duplicative summary header */}
-      <div className="flex items-center justify-between text-xs text-md-on-surface-variant font-medium">
-        <span>
-          <span className="font-bold text-md-on-surface">{totalActiveDays}</span> of {daysInMonth} days active in {monthName}
-          {consistencyPct > 0 && (
-            <span className="text-md-outline font-semibold"> ({consistencyPct}% consistency)</span>
-          )}
-        </span>
+      {/* Monthly Attendance & Pace Banner */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 text-xs">
+        <div>
+          <span className="text-md-outline block text-[11px]">Monthly Attendance</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {totalActiveDays} of {daysInMonth} days <span className="text-[11px] font-normal text-md-outline">({consistencyPct}%)</span>
+          </span>
+        </div>
+        <div>
+          <span className="text-md-outline block text-[11px]">Daily Pace</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {avgPerActiveDaySec > 0 ? `${formatCompactDuration(avgPerActiveDaySec)} / active day` : '—'}
+          </span>
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <span className="text-md-outline block text-[11px]">Weekly Average</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {weeksData.length > 0 ? `${formatCompactDuration(Math.round(totalFocusSeconds / weeksData.length))} / week` : '—'}
+          </span>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        {/* Weekday Header Row */}
-        <div className="grid grid-cols-7 gap-1 sm:gap-2 text-center select-none">
-          {SHORT_WEEKDAYS.map((wd) => (
+      {/* Weekly Rhythm Breakdown Cards (Zero day shading!) */}
+      <div className="flex flex-col gap-2.5">
+        {weeksData.map((week) => {
+          const widthPct = maxWeekSeconds > 0 ? Math.round((week.totalSeconds / maxWeekSeconds) * 100) : 0;
+
+          return (
             <div
-              key={wd}
-              className="text-[11px] font-bold text-md-on-surface-variant/70 uppercase tracking-wider py-1"
+              key={`month-week-${week.weekNumber}`}
+              className={clsx(
+                'p-3 sm:p-3.5 rounded-2xl border transition-colors flex flex-col gap-2.5',
+                week.isCurrentWeek
+                  ? 'bg-md-primary/5 border-md-primary/30 ring-1 ring-md-primary/20'
+                  : 'bg-md-surface-container/40 border-md-outline-variant/20 hover:bg-md-surface-container/60'
+              )}
             >
-              {wd}
-            </div>
-          ))}
-        </div>
-
-        {/* 7-Column Calendar Grid */}
-        <div
-          className="grid grid-cols-7 gap-1 sm:gap-2 select-none"
-          onMouseLeave={() => setHoveredDayKey(null)}
-        >
-          {/* Empty Offset Days before the 1st of the month */}
-          {Array.from({ length: startingDayOfWeek }).map((_, i) => (
-            <div
-              key={`empty-${i}`}
-              className="min-h-[44px] sm:min-h-[58px] rounded-xl sm:rounded-2xl bg-transparent"
-            />
-          ))}
-
-          {/* Days of the Month */}
-          {Array.from({ length: daysInMonth }).map((_, i) => {
-            const dayNum = i + 1;
-            const dateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-            const bar = dayMap.get(dateKey);
-            const sec = bar ? bar.totalSeconds : 0;
-            const isSelected = selectedDayKey === dateKey;
-            const isToday = dateKey === todayKey;
-
-            return (
-              <button
-                type="button"
-                key={dateKey}
-                onMouseEnter={() => setHoveredDayKey(dateKey)}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setSelectedDayKey((prev) => (prev === dateKey ? null : dateKey));
-                }}
-                className={clsx(
-                  'min-h-[46px] sm:min-h-[58px] p-1.5 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative focus:outline-none',
-                  getActivityIntensityStyle(sec, maxDaySeconds, isSelected),
-                  isToday && !isSelected && 'ring-2 ring-md-primary/50 border-md-primary/40'
-                )}
-                aria-label={`${dayNum} ${monthName}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
-              >
-                {/* Mobile View: Centered date number and compact duration */}
-                <div className="flex sm:hidden flex-col items-center justify-center w-full gap-0.5">
-                  <span className={clsx('text-xs font-bold leading-none', isToday && 'text-md-primary font-extrabold')}>
-                    {dayNum}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                {/* Week Label & Date Range */}
+                <div className="flex items-center gap-2.5 min-w-[130px] shrink-0">
+                  <span className="text-xs font-bold text-md-on-surface">
+                    Week {week.weekNumber}
                   </span>
-                  {sec > 0 ? (
-                    <span className="text-[9px] font-bold text-md-on-surface truncate leading-tight">
-                      {formatCompactDuration(sec)}
-                    </span>
-                  ) : (
-                    <span className="text-[8px] opacity-25 leading-none">—</span>
-                  )}
-                </div>
-
-                {/* Desktop View: Top-left date with bottom duration & sessions */}
-                <div className="hidden sm:flex items-center justify-between w-full">
-                  <span className={clsx('text-xs font-bold leading-none', isToday && 'text-md-primary font-extrabold')}>
-                    {dayNum}
+                  <span className="text-[11px] font-medium text-md-outline">
+                    {week.label}
                   </span>
-                  {isToday && (
-                    <span className="text-[8px] font-extrabold px-1 rounded bg-md-primary/15 text-md-primary leading-tight">
-                      TODAY
+                  {week.isCurrentWeek && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-md-primary text-white leading-none">
+                      CURRENT
                     </span>
                   )}
                 </div>
 
-                {sec > 0 ? (
-                  <div className="hidden sm:flex flex-col w-full mt-1">
-                    <span className="text-[11px] font-extrabold truncate leading-tight">
-                      {formatCompactDuration(sec)}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="hidden sm:block text-[10px] opacity-20">
-                    —
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
+                {/* Discrete Habit Pips (Mon to Sun) - Instant habit view, zero shading! */}
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  {week.days.map((d) => {
+                    const dayLetter = SHORT_WEEKDAYS[d.weekdayIndex];
+                    if (!d.isInMonth) {
+                      return (
+                        <div
+                          key={d.dateKey}
+                          className="w-6 h-6 rounded-lg opacity-15 flex items-center justify-center text-[10px] text-md-outline"
+                        >
+                          {dayLetter}
+                        </div>
+                      );
+                    }
 
-        {/* Minimal Status Inspector */}
-        <div className="min-h-[28px] mt-2 px-3 py-1.5 rounded-xl bg-md-surface-container/50 border border-md-outline-variant/20 flex items-center justify-between text-xs">
-          {inspectedBar ? (
-            <div className="flex items-center justify-between w-full">
-              <span className="font-bold text-md-on-surface">
-                {formatInspectedDate(inspectedBar.key)}
-              </span>
-              <span className="text-md-on-surface-variant">
-                {inspectedBar.totalSeconds > 0 ? (
-                  <>
-                    <strong className="text-md-primary font-bold">
-                      {formatDurationHoursMins(inspectedBar.totalSeconds)}
-                    </strong>{' '}
-                    ({inspectedBar.sessionCount} {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'})
-                  </>
-                ) : (
-                  <span className="text-md-outline">No focus time logged</span>
-                )}
-              </span>
+                    const hasFocus = d.totalSeconds > 0;
+
+                    return (
+                      <div
+                        key={d.dateKey}
+                        title={hasFocus ? `${d.dayNum} ${monthName}: ${formatDurationHoursMins(d.totalSeconds)} (${d.sessionCount} sessions)` : `${d.dayNum} ${monthName}: No focus`}
+                        className={clsx(
+                          'w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all',
+                          hasFocus
+                            ? 'bg-md-primary text-white shadow-xs'
+                            : d.isToday
+                            ? 'border border-md-primary/60 text-md-primary'
+                            : 'bg-md-surface-container-high/80 text-md-outline/60'
+                        )}
+                      >
+                        {dayLetter}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Duration & Session Count on Right */}
+                <div className="text-left sm:text-right flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 min-w-[110px] shrink-0">
+                  <span className="text-xs font-bold tabular-nums text-md-on-surface">
+                    {week.totalSeconds > 0 ? formatDurationHoursMins(week.totalSeconds) : '0m'}
+                  </span>
+                  <span className="text-[10px] text-md-on-surface-variant font-medium">
+                    {week.sessionCount > 0 ? `${week.sessionCount} ${week.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Weekly Volume Bar */}
+              <div className="w-full h-1.5 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(week.totalSeconds > 0 ? 6 : 0, widthPct)}%` }}
+                />
+              </div>
             </div>
-          ) : (
-            <span className="text-md-outline">
-              Tap or hover any day to view details
-            </span>
-          )}
-        </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -130,16 +130,7 @@ export const StatisticsView: React.FC = () => {
 
         {/* Period Navigator Controls */}
         <div className="flex items-center justify-end gap-2">
-          {periodType !== 'all' && periodType !== 'custom' && !isCurrentPeriod && (
-            <button
-              onClick={goToToday}
-              className="px-3 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary hover:bg-md-primary/10 transition-colors flex items-center"
-            >
-              Today
-            </button>
-          )}
-
-          {periodType === 'custom' && (
+          {periodType === 'custom' ? (
             <button
               type="button"
               onClick={() => setIsCalendarModalOpen(true)}
@@ -148,10 +139,21 @@ export const StatisticsView: React.FC = () => {
               <CalendarDays className="w-4 h-4" />
               <span>Pick Dates</span>
             </button>
+          ) : (
+            <button
+              onClick={goToToday}
+              disabled={isCurrentPeriod || periodType === 'all'}
+              className={clsx(
+                "px-3 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary hover:bg-md-primary/10 transition-colors flex items-center",
+                (isCurrentPeriod || periodType === 'all') && "opacity-0 pointer-events-none select-none"
+              )}
+            >
+              Today
+            </button>
           )}
 
           <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 min-h-[36px]">
-            {periodType !== 'all' && periodType !== 'custom' && (
+            {periodType !== 'all' && periodType !== 'custom' ? (
               <button
                 onClick={goToPrev}
                 className="w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
@@ -160,6 +162,8 @@ export const StatisticsView: React.FC = () => {
               >
                 <ChevronLeft className="w-4.5 h-4.5" />
               </button>
+            ) : (
+              <div className="w-8 h-8 invisible pointer-events-none" />
             )}
 
             <button
@@ -170,14 +174,14 @@ export const StatisticsView: React.FC = () => {
                 }
               }}
               className={clsx(
-                "px-3 py-1 text-xs font-bold text-md-on-surface whitespace-nowrap",
+                "px-3 py-1 text-xs font-bold text-md-on-surface whitespace-nowrap min-w-[70px] text-center",
                 periodType === 'custom' && "hover:text-md-primary underline decoration-dotted underline-offset-4 cursor-pointer"
               )}
             >
               {periodLabel}
             </button>
 
-            {periodType !== 'all' && periodType !== 'custom' && (
+            {periodType !== 'all' && periodType !== 'custom' ? (
               <button
                 onClick={goToNext}
                 disabled={!canGoNext}
@@ -190,6 +194,8 @@ export const StatisticsView: React.FC = () => {
               >
                 <ChevronRight className="w-4.5 h-4.5" />
               </button>
+            ) : (
+              <div className="w-8 h-8 invisible pointer-events-none" />
             )}
           </div>
         </div>
@@ -243,7 +249,7 @@ export const StatisticsView: React.FC = () => {
                 <ChevronLeft className="w-5 h-5" />
               </button>
             ) : (
-              <div className="w-3" />
+              <div className="w-10 h-10 invisible pointer-events-none" />
             )}
 
             <button
@@ -276,21 +282,11 @@ export const StatisticsView: React.FC = () => {
                 <ChevronRight className="w-5 h-5" />
               </button>
             ) : (
-              <div className="w-3" />
+              <div className="w-10 h-10 invisible pointer-events-none" />
             )}
           </div>
 
-          {periodType !== 'all' && periodType !== 'custom' && !isCurrentPeriod && (
-            <button
-              type="button"
-              onClick={goToToday}
-              className="min-h-[48px] px-3.5 py-2.5 rounded-2xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all shrink-0"
-            >
-              Today
-            </button>
-          )}
-
-          {periodType === 'custom' && (
+          {periodType === 'custom' ? (
             <button
               type="button"
               onClick={() => setIsCalendarModalOpen(true)}
@@ -298,6 +294,18 @@ export const StatisticsView: React.FC = () => {
             >
               <CalendarDays className="w-4 h-4" />
               <span>Pick</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={goToToday}
+              disabled={isCurrentPeriod || periodType === 'all'}
+              className={clsx(
+                "min-h-[48px] px-3.5 py-2.5 rounded-2xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all shrink-0",
+                (isCurrentPeriod || periodType === 'all') && "opacity-0 pointer-events-none select-none"
+              )}
+            >
+              Today
             </button>
           )}
         </div>

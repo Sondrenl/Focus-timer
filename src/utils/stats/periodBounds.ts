@@ -150,7 +150,7 @@ export function computePeriodBounds(
     // 'all' time
     startDate = new Date(0);
     endDate = new Date(Date.now() + 86400000 * 365);
-    periodLabel = 'All Time History';
+    periodLabel = 'All Time';
   }
 
   return {

@@ -64,12 +64,12 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
             <button
               type="button"
               key={bar.key}
-              onClick={() => setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key))}
+              onClick={() => {
+                setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key));
+                setHoveredDayKey(null);
+              }}
               onMouseEnter={() => setHoveredDayKey(bar.key)}
-              className={clsx(
-                'flex-1 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl transition-all cursor-pointer group focus:outline-none',
-                isSelected && 'bg-md-primary/10'
-              )}
+              className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl cursor-pointer group focus:outline-none select-none touch-manipulation"
             >
               {/* Duration Label above Bar */}
               <div className="text-[10px] sm:text-xs font-bold tabular-nums min-h-[16px] text-center">
@@ -85,7 +85,7 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
               {/* Vertical Bar Track & Filled Progress */}
               <div
                 className={clsx(
-                  'w-full max-w-[32px] sm:max-w-[44px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border transition-all',
+                  'w-full max-w-[32px] sm:max-w-[44px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border',
                   isSelected
                     ? 'border-md-primary ring-1 ring-md-primary/30'
                     : isToday
@@ -95,13 +95,13 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
               >
                 <div
                   className={clsx(
-                    'w-full rounded-lg transition-all duration-500 ease-out',
+                    'w-full rounded-lg transition-[height] duration-300 ease-out',
                     isSelected
-                      ? 'bg-md-primary shadow-xs'
+                      ? 'bg-md-primary'
                       : isToday
                       ? 'bg-md-primary/90'
                       : bar.totalSeconds > 0
-                      ? 'bg-md-primary/70 group-hover:bg-md-primary'
+                      ? 'bg-md-primary/70'
                       : 'bg-transparent'
                   )}
                   style={{ height: `${bar.totalSeconds > 0 ? Math.max(8, heightPct) : 0}%` }}

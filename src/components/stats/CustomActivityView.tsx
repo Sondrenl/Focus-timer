@@ -1,30 +1,37 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
-import { WEEKDAY_NAMES, MONTH_NAMES } from '../../utils/dates';
-import { Calendar as CalendarIcon, BarChart2, Filter } from 'lucide-react';
+import { MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface CustomActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
-const SHORT_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const SHORT_WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+interface CustomWeekData {
+  weekNumber: number;
+  label: string;
+  totalSeconds: number;
+  sessionCount: number;
+  activeDaysCount: number;
+  isCurrentWeek: boolean;
+  days: {
+    dateKey: string;
+    dayNum: number;
+    weekdayIndex: number;
+    totalSeconds: number;
+    sessionCount: number;
+    isInRange: boolean;
+    isToday: boolean;
+  }[];
+}
 
 export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activityBars }) => {
   const totalDays = activityBars.length;
+  const todayKey = useMemo(() => toDateKey(new Date()), []);
 
-  // Decide default mode based on range duration
-  const defaultMode: 'calendar' | 'weekly' | 'monthly' | 'daily' =
-    totalDays <= 45 ? 'calendar' : totalDays <= 90 ? 'weekly' : 'monthly';
-
-  const [granularity, setGranularity] = useState<'calendar' | 'weekly' | 'monthly' | 'daily'>(defaultMode);
-  const [showActiveOnly, setShowActiveOnly] = useState<boolean>(false);
-  const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
-  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-
-  // Summary Metrics
   const activeDaysCount = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
   }, [activityBars]);
@@ -34,151 +41,121 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
   }, [activityBars]);
 
   const avgPerActiveDaySec = useMemo(() => {
-    if (activeDaysCount === 0) return 0;
-    return Math.round(totalFocusSeconds / activeDaysCount);
+    return activeDaysCount > 0 ? Math.round(totalFocusSeconds / activeDaysCount) : 0;
   }, [totalFocusSeconds, activeDaysCount]);
+
+  const consistencyPct = useMemo(() => {
+    return totalDays > 0 ? Math.round((activeDaysCount / totalDays) * 100) : 0;
+  }, [activeDaysCount, totalDays]);
 
   const maxDaySeconds = useMemo(() => {
     return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
   }, [activityBars]);
 
-  // Calendar Grid starting weekday offset
-  const startingDayOfWeek = useMemo(() => {
-    if (activityBars.length === 0) return 0;
-    const [y, m, d] = activityBars[0].key.split('-').map(Number);
-    const firstDay = new Date(y, m - 1, d);
-    return (firstDay.getDay() + 6) % 7; // Monday = 0, Sunday = 6
-  }, [activityBars]);
-
-  // Map of dateKey -> bar
-  const dayMap = useMemo(() => {
-    const map = new Map<string, ActivityBarStat>();
-    activityBars.forEach((bar) => map.set(bar.key, bar));
-    return map;
-  }, [activityBars]);
-
-  // Group into calendar weeks (Monday to Sunday)
-  const weeklyGroups = useMemo(() => {
+  // Group into calendar weeks for ranges > 7 days
+  const weeklyGroups = useMemo<CustomWeekData[]>(() => {
     if (activityBars.length === 0) return [];
 
-    const weeks: {
-      weekIndex: number;
-      label: string;
-      totalSeconds: number;
-      sessionCount: number;
-      activeDays: number;
-      days: ActivityBarStat[];
-    }[] = [];
-
-    let currentWeekDays: ActivityBarStat[] = [];
-    let weekCounter = 1;
+    const weeks: CustomWeekData[] = [];
+    let currentWeekDays: CustomWeekData['days'] = [];
+    let weekIndex = 1;
 
     for (let i = 0; i < activityBars.length; i++) {
       const bar = activityBars[i];
       const [y, m, d] = bar.key.split('-').map(Number);
       const dateObj = new Date(y, m - 1, d);
-      const dow = (dateObj.getDay() + 6) % 7; // Monday = 0, Sunday = 6
+      const weekdayIndex = (dateObj.getDay() + 6) % 7; // Mon=0 .. Sun=6
+      const isToday = bar.key === todayKey;
 
-      currentWeekDays.push(bar);
+      // On first item, if not Monday, pad leading
+      if (i === 0 && weekdayIndex > 0) {
+        for (let pad = 0; pad < weekdayIndex; pad++) {
+          currentWeekDays.push({
+            dateKey: `pad-pre-${pad}`,
+            dayNum: 0,
+            weekdayIndex: pad,
+            totalSeconds: 0,
+            sessionCount: 0,
+            isInRange: false,
+            isToday: false,
+          });
+        }
+      }
 
-      // Break at Sunday or at the end of the range
-      if (dow === 6 || i === activityBars.length - 1) {
-        const first = currentWeekDays[0];
-        const last = currentWeekDays[currentWeekDays.length - 1];
+      currentWeekDays.push({
+        dateKey: bar.key,
+        dayNum: d,
+        weekdayIndex,
+        totalSeconds: bar.totalSeconds,
+        sessionCount: bar.sessionCount,
+        isInRange: true,
+        isToday,
+      });
 
-        const [, fm, fd] = first.key.split('-').map(Number);
-        const [, lm, ld] = last.key.split('-').map(Number);
+      // Close week on Sunday or last item
+      if (weekdayIndex === 6 || i === activityBars.length - 1) {
+        if (i === activityBars.length - 1 && weekdayIndex < 6) {
+          for (let pad = weekdayIndex + 1; pad <= 6; pad++) {
+            currentWeekDays.push({
+              dateKey: `pad-post-${pad}`,
+              dayNum: 0,
+              weekdayIndex: pad,
+              totalSeconds: 0,
+              sessionCount: 0,
+              isInRange: false,
+              isToday: false,
+            });
+          }
+        }
 
-        const firstLabel = `${fd} ${MONTH_NAMES[fm - 1].slice(0, 3)}`;
-        const lastLabel = `${ld} ${MONTH_NAMES[lm - 1].slice(0, 3)}`;
+        const inRangeDays = currentWeekDays.filter((d) => d.isInRange);
+        const sKey = inRangeDays[0]?.dateKey || '';
+        const eKey = inRangeDays[inRangeDays.length - 1]?.dateKey || '';
+        const formatShort = (key: string) => {
+          if (!key) return '';
+          const [, mNum, dNum] = key.split('-').map(Number);
+          return `${dNum} ${MONTH_NAMES[mNum - 1]?.slice(0, 3) || ''}`;
+        };
 
-        const sLabel = firstLabel === lastLabel ? firstLabel : `${firstLabel} – ${lastLabel}`;
-        const sec = currentWeekDays.reduce((acc, b) => acc + b.totalSeconds, 0);
-        const count = currentWeekDays.reduce((acc, b) => acc + b.sessionCount, 0);
-        const active = currentWeekDays.filter((b) => b.totalSeconds > 0).length;
+        const weekSec = inRangeDays.reduce((acc, d) => acc + d.totalSeconds, 0);
+        const weekSes = inRangeDays.reduce((acc, d) => acc + d.sessionCount, 0);
+        const weekActive = inRangeDays.filter((d) => d.totalSeconds > 0).length;
+        const isCurrentWeek = inRangeDays.some((d) => d.isToday);
 
         weeks.push({
-          weekIndex: weekCounter++,
-          label: sLabel,
-          totalSeconds: sec,
-          sessionCount: count,
-          activeDays: active,
+          weekNumber: weekIndex,
+          label: `${formatShort(sKey)} – ${formatShort(eKey)}`,
+          totalSeconds: weekSec,
+          sessionCount: weekSes,
+          activeDaysCount: weekActive,
+          isCurrentWeek,
           days: currentWeekDays,
         });
 
         currentWeekDays = [];
+        weekIndex++;
       }
     }
 
     return weeks;
-  }, [activityBars]);
+  }, [activityBars, todayKey]);
 
   const maxWeekSeconds = useMemo(() => {
     return Math.max(1, ...weeklyGroups.map((w) => w.totalSeconds));
   }, [weeklyGroups]);
 
-  // Group into calendar months (if range spans multiple months)
-  const monthlyGroups = useMemo(() => {
-    if (activityBars.length === 0) return [];
-
-    const monthMap = new Map<string, { label: string; totalSeconds: number; sessionCount: number; activeDays: number }>();
-
-    activityBars.forEach((bar) => {
-      const [y, m] = bar.key.split('-').map(Number);
-      const monthKey = `${y}-${String(m).padStart(2, '0')}`;
-      const cur = monthMap.get(monthKey) || {
-        label: `${MONTH_NAMES[m - 1]} ${y}`,
-        totalSeconds: 0,
-        sessionCount: 0,
-        activeDays: 0,
-      };
-
-      cur.totalSeconds += bar.totalSeconds;
-      cur.sessionCount += bar.sessionCount;
-      if (bar.totalSeconds > 0) cur.activeDays += 1;
-      monthMap.set(monthKey, cur);
-    });
-
-    return Array.from(monthMap.entries()).map(([key, data]) => ({
-      key,
-      ...data,
-    }));
-  }, [activityBars]);
-
-  const maxMonthSeconds = useMemo(() => {
-    return Math.max(1, ...monthlyGroups.map((m) => m.totalSeconds));
-  }, [monthlyGroups]);
-
-  // Filtered daily bars for list display
-  const dailyDisplayBars = useMemo(() => {
-    if (!showActiveOnly) return activityBars;
-    return activityBars.filter((b) => b.totalSeconds > 0);
-  }, [activityBars, showActiveOnly]);
-
-  const formatDailyTitle = (dateKey: string) => {
-    const [y, m, d] = dateKey.split('-').map(Number);
-    const dateObj = new Date(y, m - 1, d);
-    const weekday = WEEKDAY_NAMES[dateObj.getDay()];
-    return `${weekday.slice(0, 3)}, ${d} ${MONTH_NAMES[m - 1].slice(0, 3)}`;
-  };
-
-  const formatInspectedDate = (dateKey: string) => {
-    const [y, m, d] = dateKey.split('-').map(Number);
-    const dateObj = new Date(y, m - 1, d);
-    const weekday = WEEKDAY_NAMES[dateObj.getDay()];
-    return `${weekday}, ${d} ${MONTH_NAMES[m - 1]}`;
-  };
-
-  const activeKey = hoveredDayKey || selectedDayKey;
-  const inspectedBar = useMemo(() => {
-    if (!activeKey) return null;
-    return dayMap.get(activeKey) || null;
-  }, [activeKey, dayMap]);
+  if (totalDays === 0 || totalFocusSeconds === 0) {
+    return (
+      <div className="text-center py-8 text-xs text-md-outline">
+        No focus sessions logged in this custom range.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Range Quick Metrics Header */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-2xl bg-md-surface-container/50 border border-md-outline-variant/20 text-xs">
+      {/* Range Quick Metrics Header (Non-duplicative) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 text-xs">
         <div>
           <span className="text-md-outline block text-[11px]">Range Length</span>
           <span className="font-bold text-md-on-surface text-sm">{totalDays} days</span>
@@ -191,379 +168,150 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
         </div>
         <div>
           <span className="text-md-outline block text-[11px]">Consistency</span>
-          <span className="font-bold text-md-on-surface text-sm">{Math.round((activeDaysCount / Math.max(1, totalDays)) * 100)}%</span>
+          <span className="font-bold text-md-on-surface text-sm">{consistencyPct}%</span>
         </div>
         <div>
           <span className="text-md-outline block text-[11px]">Avg / Active Day</span>
-          <span className="font-bold text-md-on-surface text-sm">{formatDurationHoursMins(avgPerActiveDaySec)}</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {avgPerActiveDaySec > 0 ? formatCompactDuration(avgPerActiveDaySec) : '—'}
+          </span>
         </div>
       </div>
 
-      {/* Granularity & Filter Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {/* Granularity Toggle */}
-        <div className="inline-flex p-0.5 bg-md-surface-container rounded-xl border border-md-outline-variant/30 text-xs">
-          {totalDays <= 62 && (
-            <button
-              type="button"
-              onClick={() => setGranularity('calendar')}
-              className={clsx(
-                'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
-                granularity === 'calendar'
-                  ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                  : 'text-md-on-surface-variant hover:text-md-on-surface'
-              )}
-            >
-              <CalendarIcon className="w-4 h-4" />
-              <span>Calendar</span>
-            </button>
-          )}
-
-          {totalDays >= 7 && (
-            <button
-              type="button"
-              onClick={() => setGranularity('weekly')}
-              className={clsx(
-                'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
-                granularity === 'weekly'
-                  ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                  : 'text-md-on-surface-variant hover:text-md-on-surface'
-              )}
-            >
-              <BarChart2 className="w-4 h-4" />
-              <span>Weeks</span>
-            </button>
-          )}
-
-          {totalDays >= 35 && (
-            <button
-              type="button"
-              onClick={() => setGranularity('monthly')}
-              className={clsx(
-                'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
-                granularity === 'monthly'
-                  ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                  : 'text-md-on-surface-variant hover:text-md-on-surface'
-              )}
-            >
-              <span>Months</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setGranularity('daily')}
-            className={clsx(
-              'px-3 py-1.5 min-h-[32px] sm:min-h-[34px] rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              granularity === 'daily'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <span>List</span>
-          </button>
-        </div>
-
-        {/* Daily List Mode: Active Days Filter */}
-        {granularity === 'daily' && totalDays > 7 && (
-          <button
-            type="button"
-            onClick={() => setShowActiveOnly((prev) => !prev)}
-            className={clsx(
-              'px-2.5 py-1 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5',
-              showActiveOnly
-                ? 'bg-md-primary/10 border-md-primary/30 text-md-primary'
-                : 'bg-md-surface-container/60 border-md-outline-variant/30 text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <Filter className="w-3 h-3" />
-            <span>{showActiveOnly ? `Active Only (${activeDaysCount})` : 'Show All Days'}</span>
-          </button>
-        )}
-      </div>
-
-      {/* Main Breakdown Content */}
-      {granularity === 'calendar' ? (
-        <div className="flex flex-col gap-2.5">
-          {/* Weekday Header Row */}
-          <div className="grid grid-cols-7 gap-1 sm:gap-2 text-center select-none">
-            {SHORT_WEEKDAYS.map((wd) => (
-              <div
-                key={wd}
-                className="text-[11px] font-bold text-md-on-surface-variant/80 uppercase tracking-wider py-1"
-              >
-                {wd}
-              </div>
-            ))}
-          </div>
-
-          {/* 7-Column Calendar Grid */}
-          <div
-            className="grid grid-cols-7 gap-1 sm:gap-2 sm:max-h-[460px] sm:overflow-y-auto pr-0.5 scrollbar-thin"
-            onMouseLeave={() => setHoveredDayKey(null)}
-          >
-            {/* Empty Offset Days before the start date */}
-            {Array.from({ length: startingDayOfWeek }).map((_, i) => (
-              <div
-                key={`empty-${i}`}
-                className="aspect-square sm:aspect-auto sm:min-h-[64px] rounded-xl sm:rounded-2xl bg-transparent"
-              />
-            ))}
-
-            {/* Days of the Range */}
-            {activityBars.map((bar) => {
-              const sec = bar.totalSeconds;
-              const isSelected = selectedDayKey === bar.key;
-
-              return (
-                <button
-                  type="button"
-                  key={bar.key}
-                  onMouseEnter={() => setHoveredDayKey(bar.key)}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key));
-                  }}
-                  className={clsx(
-                    'aspect-square sm:aspect-auto sm:min-h-[64px] p-1 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
-                    getActivityIntensityStyle(sec, maxDaySeconds, isSelected)
-                  )}
-                  aria-label={`${bar.label} ${bar.subLabel}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
-                >
-                  {/* Mobile View: Centered date number and compact duration */}
-                  <div className="flex sm:hidden flex-col items-center justify-center w-full">
-                    <span className="text-xs font-bold leading-none">
-                      {bar.label}
-                    </span>
-                    {sec > 0 ? (
-                      <span className="text-[9px] font-bold text-md-on-surface truncate leading-tight mt-1">
-                        {formatCompactDuration(sec)}
-                      </span>
-                    ) : (
-                      <span className="text-[8px] opacity-25 mt-0.5 leading-none">—</span>
-                    )}
-                  </div>
-
-                  {/* Desktop View: Top date with month label */}
-                  <div className="hidden sm:flex items-center justify-between w-full">
-                    <span className="text-sm font-bold leading-none">
-                      {bar.label}
-                    </span>
-                    {bar.subLabel && (
-                      <span className="text-[10px] opacity-70 font-medium">
-                        {bar.subLabel}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Desktop View: Bottom duration */}
-                  {sec > 0 ? (
-                    <div className="hidden sm:flex flex-col w-full mt-1">
-                      <span className="text-[11px] font-extrabold truncate leading-tight">
-                        {formatDurationHoursMins(sec)}
-                      </span>
-                      {bar.sessionCount > 0 && (
-                        <span className="text-[9px] opacity-75 truncate leading-tight">
-                          {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="hidden sm:block text-[10px] opacity-20">
-                      —
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Minimal Status Inspector */}
-          <div className="min-h-[28px] mt-2 px-3 py-1.5 rounded-xl bg-md-surface-container/50 border border-md-outline-variant/20 flex items-center justify-between text-xs">
-            {inspectedBar ? (
-              <div className="flex items-center justify-between w-full">
-                <span className="font-bold text-md-on-surface">
-                  {formatInspectedDate(inspectedBar.key)}
-                </span>
-                <span className="text-md-on-surface-variant">
-                  {inspectedBar.totalSeconds > 0 ? (
-                    <>
-                      <strong className="text-md-primary font-bold">
-                        {formatDurationHoursMins(inspectedBar.totalSeconds)}
-                      </strong>{' '}
-                      ({inspectedBar.sessionCount} {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'})
-                    </>
-                  ) : (
-                    <span className="text-md-outline">No focus time logged</span>
-                  )}
-                </span>
-              </div>
-            ) : (
-              <span className="text-md-outline">
-                Tap or hover any day to view details
-              </span>
-            )}
-          </div>
-        </div>
-      ) : granularity === 'weekly' ? (
-        <div className="flex flex-col gap-2.5 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
-          {weeklyGroups.map((week) => {
-            const widthPct = maxWeekSeconds > 0 ? Math.min(100, Math.round((week.totalSeconds / maxWeekSeconds) * 100)) : 0;
-            const hasHours = week.totalSeconds > 0;
+      {totalDays <= 7 ? (
+        /* Daily Column Bar Chart for Short Ranges <= 7 days */
+        <div className="flex items-end justify-between gap-1.5 sm:gap-3 h-44 sm:h-52 pt-6 pb-2 px-1 sm:px-2 rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/20 select-none">
+          {activityBars.map((bar) => {
+            const isToday = bar.key === todayKey;
+            const heightPct = maxDaySeconds > 0 ? Math.round((bar.totalSeconds / maxDaySeconds) * 100) : 0;
 
             return (
               <div
-                key={`custom-week-${week.weekIndex}`}
-                className="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
+                key={bar.key}
+                className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl"
               >
-                <div className="w-16 sm:w-36 shrink-0 flex flex-col min-w-0">
-                  <span className="text-xs font-bold text-md-on-surface truncate">
-                    Week {week.weekIndex}
-                  </span>
-                  <span className="text-[11px] text-md-outline truncate hidden sm:inline">
-                    {week.label}
-                  </span>
+                <div className="text-[10px] sm:text-xs font-bold tabular-nums min-h-[16px] text-center">
+                  {bar.totalSeconds > 0 ? (
+                    <span className="text-md-on-surface-variant font-semibold">
+                      {formatCompactDuration(bar.totalSeconds)}
+                    </span>
+                  ) : (
+                    <span className="text-md-outline/30">—</span>
+                  )}
                 </div>
 
-                <div className="flex-1 min-w-[35%] h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+                <div className="w-full max-w-[36px] sm:max-w-[48px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border border-transparent">
                   <div
                     className={clsx(
-                      'h-full rounded-lg transition-all duration-500 ease-out',
-                      hasHours ? 'bg-md-primary' : 'bg-transparent'
+                      'w-full rounded-lg transition-[height] duration-300 ease-out',
+                      isToday ? 'bg-md-primary/90' : bar.totalSeconds > 0 ? 'bg-md-primary/70' : 'bg-transparent'
                     )}
-                    style={{ width: `${Math.max(hasHours ? 8 : 0, widthPct)}%` }}
+                    style={{ height: `${bar.totalSeconds > 0 ? Math.max(8, heightPct) : 0}%` }}
                   />
                 </div>
 
-                <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
-                  <span
-                    className={clsx(
-                      'text-xs font-bold tabular-nums',
-                      hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                    )}
-                  >
-                    {hasHours ? formatDurationHoursMins(week.totalSeconds) : '0m'}
+                <div className="flex flex-col items-center leading-none gap-0.5 pt-0.5">
+                  <span className={clsx('text-[10px] sm:text-xs font-bold', isToday ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant')}>
+                    {bar.label}
                   </span>
-                  <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
-                    <span className="hidden sm:inline">{week.activeDays} {week.activeDays === 1 ? 'day' : 'days'} active</span>
-                    <span className="sm:hidden">{week.activeDays}d</span>
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : granularity === 'monthly' ? (
-        /* Monthly Groups Mode */
-        <div className="flex flex-col gap-2.5 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
-          {monthlyGroups.map((month) => {
-            const widthPct = maxMonthSeconds > 0 ? Math.min(100, Math.round((month.totalSeconds / maxMonthSeconds) * 100)) : 0;
-            const hasHours = month.totalSeconds > 0;
-
-            return (
-              <div
-                key={month.key}
-                className="flex items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-2xl bg-md-surface-container/60 hover:bg-md-surface-container transition-all"
-              >
-                <div className="w-16 sm:w-36 shrink-0 flex flex-col min-w-0">
-                  <span className="text-xs font-bold text-md-on-surface truncate">
-                    {month.label}
-                  </span>
-                  <span className="text-[11px] text-md-outline truncate hidden sm:inline">
-                    {month.activeDays} active days
-                  </span>
-                </div>
-
-                <div className="flex-1 min-w-[35%] h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
-                  <div
-                    className={clsx(
-                      'h-full rounded-lg transition-all duration-500 ease-out',
-                      hasHours ? 'bg-md-primary' : 'bg-transparent'
-                    )}
-                    style={{ width: `${Math.max(hasHours ? 8 : 0, widthPct)}%` }}
-                  />
-                </div>
-
-                <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
-                  <span
-                    className={clsx(
-                      'text-xs font-bold tabular-nums',
-                      hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                    )}
-                  >
-                    {hasHours ? formatDurationHoursMins(month.totalSeconds) : '0m'}
-                  </span>
-                  <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
-                    <span className="hidden sm:inline">{month.sessionCount} {month.sessionCount === 1 ? 'session' : 'sessions'}</span>
-                    <span className="sm:hidden">{month.sessionCount} ses</span>
-                  </span>
+                  {bar.subLabel && (
+                    <span className="text-[9px] text-md-outline tabular-nums">
+                      {bar.subLabel}
+                    </span>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
       ) : (
-        /* List Mode */
-        <div className="flex flex-col gap-2 sm:max-h-96 sm:overflow-y-auto pr-1 scrollbar-thin">
-          {dailyDisplayBars.length === 0 ? (
-            <div className="text-center py-8 text-xs text-md-outline">
-              No active focus days in this custom range.
-            </div>
-          ) : (
-            dailyDisplayBars.map((bar) => {
-              const widthPct = maxDaySeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxDaySeconds) * 100)) : 0;
-              const hasHours = bar.totalSeconds > 0;
-              const isSelected = selectedDayKey === bar.key;
+        /* Weekly Habit & Focus Rhythm for Ranges > 7 days (Zero Day-Shading!) */
+        <div className="flex flex-col gap-2.5">
+          {weeklyGroups.map((week) => {
+            const widthPct = maxWeekSeconds > 0 ? Math.round((week.totalSeconds / maxWeekSeconds) * 100) : 0;
 
-              return (
-                <div
-                  key={bar.key}
-                  onClick={() => setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key))}
-                  className={clsx(
-                    'flex items-center gap-2.5 sm:gap-3 p-2.5 rounded-2xl border transition-all cursor-pointer',
-                    isSelected
-                      ? 'bg-md-surface-container-high border-md-primary/50 shadow-xs'
-                      : hasHours
-                      ? 'bg-md-surface-container/60 border-transparent hover:bg-md-surface-container'
-                      : 'bg-md-surface-container/20 border-transparent opacity-60 hover:opacity-100 hover:bg-md-surface-container/40'
-                  )}
-                >
-                  <div className="w-16 sm:w-28 shrink-0 flex flex-col min-w-0">
-                    <span className="text-xs font-bold text-md-on-surface truncate">
-                      {formatDailyTitle(bar.key)}
+            return (
+              <div
+                key={`custom-week-${week.weekNumber}`}
+                className={clsx(
+                  'p-3 sm:p-3.5 rounded-2xl border transition-colors flex flex-col gap-2.5',
+                  week.isCurrentWeek
+                    ? 'bg-md-primary/5 border-md-primary/30 ring-1 ring-md-primary/20'
+                    : 'bg-md-surface-container/40 border-md-outline-variant/20 hover:bg-md-surface-container/60'
+                )}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5 min-w-[140px] shrink-0">
+                    <span className="text-xs font-bold text-md-on-surface">
+                      Week {week.weekNumber}
                     </span>
-                  </div>
-
-                  <div className="flex-1 min-w-[35%] h-6 bg-md-surface-container-high rounded-lg overflow-hidden flex items-center p-0.5">
-                    <div
-                      className={clsx(
-                        'h-full rounded-md transition-all duration-300',
-                        hasHours ? 'bg-md-primary' : 'bg-transparent'
-                      )}
-                      style={{ width: `${Math.max(hasHours ? 6 : 0, widthPct)}%` }}
-                    />
-                  </div>
-
-                  <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
-                    <span
-                      className={clsx(
-                        'text-xs font-bold tabular-nums',
-                        hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                      )}
-                    >
-                      {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
+                    <span className="text-[11px] font-medium text-md-outline">
+                      {week.label}
                     </span>
-                    {bar.sessionCount > 0 && (
-                      <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
-                        <span className="hidden sm:inline">{bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}</span>
-                        <span className="sm:hidden">{bar.sessionCount} ses</span>
+                    {week.isCurrentWeek && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-md-primary text-white leading-none">
+                        CURRENT
                       </span>
                     )}
                   </div>
+
+                  {/* Discrete Habit Pips */}
+                  <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                    {week.days.map((d) => {
+                      const dayLetter = SHORT_WEEKDAYS[d.weekdayIndex];
+                      if (!d.isInRange) {
+                        return (
+                          <div
+                            key={d.dateKey}
+                            className="w-6 h-6 rounded-lg opacity-15 flex items-center justify-center text-[10px] text-md-outline"
+                          >
+                            {dayLetter}
+                          </div>
+                        );
+                      }
+
+                      const hasFocus = d.totalSeconds > 0;
+
+                      return (
+                        <div
+                          key={d.dateKey}
+                          title={hasFocus ? `${d.dateKey}: ${formatDurationHoursMins(d.totalSeconds)} (${d.sessionCount} sessions)` : `${d.dateKey}: No focus`}
+                          className={clsx(
+                            'w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all',
+                            hasFocus
+                              ? 'bg-md-primary text-white shadow-xs'
+                              : d.isToday
+                              ? 'border border-md-primary/60 text-md-primary'
+                              : 'bg-md-surface-container-high/80 text-md-outline/60'
+                          )}
+                        >
+                          {dayLetter}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Duration on Right */}
+                  <div className="text-left sm:text-right flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 min-w-[110px] shrink-0">
+                    <span className="text-xs font-bold tabular-nums text-md-on-surface">
+                      {week.totalSeconds > 0 ? formatDurationHoursMins(week.totalSeconds) : '0m'}
+                    </span>
+                    <span className="text-[10px] text-md-on-surface-variant font-medium">
+                      {week.sessionCount > 0 ? `${week.sessionCount} ${week.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
+                    </span>
+                  </div>
                 </div>
-              );
-            })
-          )}
+
+                {/* Weekly Volume Bar */}
+                <div className="w-full h-1.5 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
+                    style={{ width: `${Math.max(week.totalSeconds > 0 ? 6 : 0, widthPct)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

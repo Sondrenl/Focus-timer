@@ -46,6 +46,36 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
     return full12Months.filter((b) => b.totalSeconds > 0).length;
   }, [full12Months]);
 
+  // Aggregate into 4 quarters: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec)
+  const quarters = useMemo(() => {
+    const qNames = [
+      { name: 'Q1', span: 'Jan – Mar' },
+      { name: 'Q2', span: 'Apr – Jun' },
+      { name: 'Q3', span: 'Jul – Sep' },
+      { name: 'Q4', span: 'Oct – Dec' },
+    ];
+
+    return qNames.map((q, qIdx) => {
+      const mStart = qIdx * 3;
+      const mEnd = mStart + 3;
+      const qMonths = full12Months.slice(mStart, mEnd);
+      const totalSec = qMonths.reduce((acc, m) => acc + m.totalSeconds, 0);
+      const totalSes = qMonths.reduce((acc, m) => acc + m.sessionCount, 0);
+      const activeMo = qMonths.filter((m) => m.totalSeconds > 0).length;
+
+      return {
+        ...q,
+        totalSeconds: totalSec,
+        sessionCount: totalSes,
+        activeMonths: activeMo,
+      };
+    });
+  }, [full12Months]);
+
+  const maxQuarterSeconds = useMemo(() => {
+    return Math.max(1, ...quarters.map((q) => q.totalSeconds));
+  }, [quarters]);
+
   const activeKey = hoveredMonthKey || selectedMonthKey;
   const inspectedBar = useMemo(() => {
     if (!activeKey) return null;
@@ -62,7 +92,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       {/* Non-duplicative summary header */}
       <div className="flex items-center justify-between text-xs text-md-on-surface-variant font-medium">
         <span>
@@ -84,12 +114,12 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
             <button
               type="button"
               key={bar.key}
-              onClick={() => setSelectedMonthKey((prev) => (prev === bar.key ? null : bar.key))}
+              onClick={() => {
+                setSelectedMonthKey((prev) => (prev === bar.key ? null : bar.key));
+                setHoveredMonthKey(null);
+              }}
               onMouseEnter={() => setHoveredMonthKey(bar.key)}
-              className={clsx(
-                'flex-1 min-w-[20px] sm:min-w-0 h-full flex flex-col items-center justify-end gap-1.5 p-0.5 sm:p-1 rounded-xl transition-all cursor-pointer group focus:outline-none',
-                isSelected && 'bg-md-primary/10'
-              )}
+              className="flex-1 min-w-[20px] sm:min-w-0 h-full flex flex-col items-center justify-end gap-1.5 p-0.5 sm:p-1 rounded-xl cursor-pointer group focus:outline-none select-none touch-manipulation"
             >
               {/* Duration Label above Bar */}
               <div className="text-[9px] sm:text-[11px] font-bold tabular-nums min-h-[16px] text-center">
@@ -105,7 +135,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
               {/* Vertical Bar Track & Filled Progress */}
               <div
                 className={clsx(
-                  'w-full max-w-[28px] sm:max-w-[40px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border transition-all',
+                  'w-full max-w-[28px] sm:max-w-[40px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border',
                   isSelected
                     ? 'border-md-primary ring-1 ring-md-primary/30'
                     : isCurrentMonth
@@ -115,13 +145,13 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
               >
                 <div
                   className={clsx(
-                    'w-full rounded-lg transition-all duration-500 ease-out',
+                    'w-full rounded-lg transition-[height] duration-300 ease-out',
                     isSelected
-                      ? 'bg-md-primary shadow-xs'
+                      ? 'bg-md-primary'
                       : isCurrentMonth
                       ? 'bg-md-primary/90'
                       : bar.totalSeconds > 0
-                      ? 'bg-md-primary/70 group-hover:bg-md-primary'
+                      ? 'bg-md-primary/70'
                       : 'bg-transparent'
                   )}
                   style={{ height: `${bar.totalSeconds > 0 ? Math.max(8, heightPct) : 0}%` }}
@@ -169,6 +199,42 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
             Tap or hover any month to view details
           </span>
         )}
+      </div>
+
+      {/* Quarterly Trajectory (Q1, Q2, Q3, Q4) - zero shading! */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        {quarters.map((q) => {
+          const widthPct = maxQuarterSeconds > 0 ? Math.round((q.totalSeconds / maxQuarterSeconds) * 100) : 0;
+
+          return (
+            <div
+              key={q.name}
+              className="p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 flex flex-col justify-between gap-2"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-md-on-surface">{q.name}</span>
+                <span className="text-[10px] text-md-outline font-medium">{q.span}</span>
+              </div>
+
+              <div>
+                <div className="text-sm font-extrabold text-md-on-surface tabular-nums">
+                  {q.totalSeconds > 0 ? formatCompactDuration(q.totalSeconds) : '0m'}
+                </div>
+                <div className="text-[10px] text-md-on-surface-variant font-medium">
+                  {q.sessionCount > 0 ? `${q.sessionCount} sessions` : '—'}
+                </div>
+              </div>
+
+              {/* Proportional Volume Bar */}
+              <div className="w-full h-1.5 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(q.totalSeconds > 0 ? 8 : 0, widthPct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

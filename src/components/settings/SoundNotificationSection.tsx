@@ -60,26 +60,38 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       return;
     }
 
+    // Immediately enable in user settings
+    updateSettings({ notificationsEnabled: true });
+    onSaved();
+
     const currentPerm = notifications.getPermissionState();
     if (currentPerm === 'granted') {
-      updateSettings({ notificationsEnabled: true });
-      onSaved();
+      showNotifFeedback('Notifications enabled for this device.');
       return;
     }
 
+    if (currentPerm === 'unsupported') {
+      showNotifFeedback('Notifications are not supported in this browser.');
+      return;
+    }
+
+    if (currentPerm === 'denied') {
+      showNotifFeedback('Notifications are blocked in your browser site settings.');
+      return;
+    }
+
+    // Request permission from browser
     const granted = await notifications.requestPermission();
     const updatedPerm = notifications.getPermissionState();
     setPermissionState(updatedPerm);
-    updateSettings({ notificationsEnabled: granted });
 
     if (granted) {
       showNotifFeedback('Notifications enabled for this device.');
     } else if (updatedPerm === 'denied') {
       showNotifFeedback('Notifications are blocked in your browser site settings.');
-    } else if (updatedPerm === 'unsupported') {
-      showNotifFeedback('On iPhone/iPad, use Share → Add to Home Screen to enable notifications.');
+    } else {
+      showNotifFeedback('Notification permission was not granted.');
     }
-    onSaved();
   };
 
   const handleTestNotification = async () => {
@@ -89,21 +101,25 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       return;
     }
 
-    const granted = await notifications.requestPermission();
-    const updatedPerm = notifications.getPermissionState();
-    setPermissionState(updatedPerm);
-
+    let granted = currentPerm === 'granted';
     if (!granted) {
-      showNotifFeedback(
-        updatedPerm === 'denied'
-          ? 'Blocked by browser — allow Notifications for this site in browser settings.'
-          : 'Notification permission was not granted.'
-      );
-      return;
+      granted = await notifications.requestPermission();
+      const updatedPerm = notifications.getPermissionState();
+      setPermissionState(updatedPerm);
+
+      if (!granted) {
+        showNotifFeedback(
+          updatedPerm === 'denied'
+            ? 'Blocked by browser — allow Notifications for this site in browser settings.'
+            : 'Notification permission was not granted.'
+        );
+        return;
+      }
     }
 
     if (!settings.notificationsEnabled) {
       updateSettings({ notificationsEnabled: true });
+      onSaved();
     }
 
     const sent = await notifications.notify(
@@ -230,7 +246,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
               Test Alert
             </button>
             <Switch
-              checked={settings.notificationsEnabled && permissionState === 'granted'}
+              checked={Boolean(settings.notificationsEnabled)}
               onChange={handleToggleNotifications}
             />
           </div>
