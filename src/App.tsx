@@ -21,6 +21,50 @@ const MainContent: React.FC = () => {
     mainRef.current?.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, [currentView]);
 
+  // Swipe gestures for opening / closing the sidebar drawer on mobile
+  useEffect(() => {
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.changedTouches.length !== 1) return;
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+      const deltaX = touchEndX - touchStartX;
+      const deltaY = touchEndY - touchStartY;
+
+      // Ensure horizontal gesture is dominant
+      const isHorizontalSwipe = Math.abs(deltaX) > Math.abs(deltaY) * 1.5;
+      if (!isHorizontalSwipe) return;
+
+      if (!mobileMenuOpen) {
+        // Edge swipe from left edge to the right opens sidebar
+        if (touchStartX < 70 && deltaX > 50) {
+          setMobileMenuOpen(true);
+        }
+      } else {
+        // Swiping from right to left when sidebar is open closes sidebar
+        if (deltaX < -50) {
+          setMobileMenuOpen(false);
+        }
+      }
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [mobileMenuOpen]);
+
   return (
     <div className="min-h-[100dvh] w-full lg:h-screen lg:w-screen flex lg:overflow-hidden bg-md-background">
       {/* Left Collapsible Rail / Sidebar */}

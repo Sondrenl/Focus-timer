@@ -7,6 +7,7 @@ import { subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/T
 import { wakeLockService } from '../services/screen/WakeLockService';
 import {
   computeNextInterval,
+  computePreviousInterval,
   getDurationForType as getBaseDurationForType,
 } from '../utils/timerTransitions';
 import {
@@ -43,10 +44,12 @@ export interface TimerContextValue {
   pause: () => void;
   reset: () => void;
   skip: () => void;
+  previous: () => void;
   switchSessionType: (type: SessionType) => void;
   toggleStartPause: () => void;
   resetTimer: () => void;
   skipInterval: () => void;
+  previousInterval: () => void;
   setSessionTypeManually: (type: SessionType) => void;
   peerPresence: PeerPresence;
 }
@@ -737,6 +740,53 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, [getDurationForType, sound, notifications, publishLocalTimerState]);
 
+  // Action: Previous interval
+  const previousInterval = useCallback(() => {
+    wakeLockService.release();
+    notifications.cancelScheduledNotification();
+
+    const prev = computePreviousInterval(
+      sessionTypeRef.current,
+      currentCycleRef.current,
+      settingsRef.current
+    );
+
+    const prevType = prev.previousType;
+    const prevCycle = prev.previousCycle;
+    const prevDuration = prev.previousDuration;
+
+    targetEndTimeRef.current = null;
+    timerRunIdRef.current = null;
+    sessionTypeRef.current = prevType;
+    currentCycleRef.current = prevCycle;
+    statusRef.current = 'IDLE';
+    remainingSecondsRef.current = prevDuration;
+    totalSecondsRef.current = prevDuration;
+
+    setSessionType(prevType);
+    setCurrentCycle(prevCycle);
+    setStatus('IDLE');
+    setRemainingSeconds(prevDuration);
+    setTotalSeconds(prevDuration);
+    setTargetEndTime(null);
+
+    const nowMs = Date.now();
+    publishLocalTimerState(
+      {
+        sessionType: prevType,
+        status: 'IDLE',
+        remainingSeconds: prevDuration,
+        totalSeconds: prevDuration,
+        targetEndTime: null,
+        currentCycle: prevCycle,
+        activeTagId: activeTagIdRef.current,
+        timerRunId: null,
+        updatedAtMs: nowMs,
+      },
+      true
+    );
+  }, [notifications, publishLocalTimerState]);
+
   // Action: Explicitly switch session type
   const switchSessionType = useCallback(
     (type: SessionType) => {
@@ -807,10 +857,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     pause,
     reset,
     skip,
+    previous: previousInterval,
     switchSessionType,
     toggleStartPause,
     resetTimer: reset,
     skipInterval: skip,
+    previousInterval,
     setSessionTypeManually: switchSessionType,
     peerPresence: peerPresenceRef.current,
   };

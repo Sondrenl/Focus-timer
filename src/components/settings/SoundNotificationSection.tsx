@@ -48,7 +48,8 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
   };
 
   const handleTestSound = () => {
-    sound.playChime(settings.soundVolume);
+    sound.prepareForPlayback();
+    sound.playChime(settings.soundVolume || 0.8);
   };
 
   const handleToggleNotifications = async (enable: boolean) => {

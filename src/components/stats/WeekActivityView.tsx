@@ -150,28 +150,23 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
                     setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key));
                   }}
                   className={clsx(
-                    'aspect-square min-h-[58px] sm:min-h-[82px] sm:aspect-auto p-1 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
+                    'min-h-[64px] sm:min-h-[82px] p-1.5 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
                     getActivityIntensityStyle(sec, maxDaySeconds, isSelected),
                     isToday && !isSelected && 'ring-2 ring-md-primary/60 border-md-primary/40'
                   )}
                   aria-label={`${bar.label} ${bar.subLabel}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  {/* Mobile: Date number, Today badge, and compact duration */}
-                  <div className="flex sm:hidden flex-col items-center justify-center w-full gap-0.5">
-                    {isToday && (
-                      <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-md-primary text-white dark:text-md-on-primary leading-none tracking-tight">
-                        TODAY
-                      </span>
-                    )}
+                  {/* Mobile: Date number and compact duration */}
+                  <div className="flex sm:hidden flex-col items-center justify-center w-full gap-1">
                     <span className={clsx("text-xs font-bold leading-none", isToday && "text-md-primary font-extrabold")}>
                       {bar.subLabel}
                     </span>
                     {sec > 0 ? (
-                      <span className="text-[10px] font-bold text-md-on-surface truncate leading-tight mt-0.5">
+                      <span className="text-[10px] font-bold text-md-on-surface truncate leading-tight">
                         {formatCompactDuration(sec)}
                       </span>
                     ) : (
-                      <span className="text-[9px] opacity-30 leading-none mt-0.5">—</span>
+                      <span className="text-[9px] opacity-30 leading-none">—</span>
                     )}
                   </div>
 

@@ -165,7 +165,7 @@ export const CoffeeWorkspace: React.FC = () => {
           <Minus className="w-7 h-7 md:w-6 md:h-6" />
         </button>
 
-        {/* Center: Add Button (Hero FAB showing next cup tag indicator) */}
+        {/* Add Button (Hero FAB showing next cup tag indicator) */}
         <button
           onClick={handleAdd}
           className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
@@ -175,9 +175,6 @@ export const CoffeeWorkspace: React.FC = () => {
         >
           <Plus className="w-9 h-9 stroke-[2.5]" />
         </button>
-
-        {/* Right: Balancing spacer so Add button is centered */}
-        <div className="w-16 h-16 md:w-14 md:h-14 pointer-events-none" aria-hidden="true" />
       </div>
 
       {/* Helper Cue directly below plus/minus buttons */}

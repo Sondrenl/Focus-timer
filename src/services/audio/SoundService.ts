@@ -75,6 +75,8 @@ export class SoundService {
   private audioCtx: AudioContext | null = null;
   private chimeWavUrl: string | null = null;
   private chimeAudio: HTMLAudioElement | null = null;
+  private isPlayingChime: boolean = false;
+  private chimeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -84,6 +86,7 @@ export class SoundService {
           this.chimeAudio = new Audio(this.chimeWavUrl);
           this.chimeAudio.preload = 'auto';
           this.chimeAudio.addEventListener('ended', () => {
+            this.isPlayingChime = false;
             if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
               try {
                 navigator.mediaSession.playbackState = 'none';
@@ -142,25 +145,28 @@ export class SoundService {
   /**
    * Primes the HTML5 audio element within a user gesture so modern browsers permit
    * asynchronous audio playback while the tab is hidden / in the background.
+   * Does NOT pause or alter volume if a chime is actively playing.
    */
   primeAudio(): void {
-    if (this.chimeAudio) {
-      try {
-        this.chimeAudio.volume = 0.001;
-        const p = this.chimeAudio.play();
-        if (p !== undefined) {
-          p.then(() => {
-            this.chimeAudio?.pause();
-            if (this.chimeAudio) {
-              this.chimeAudio.currentTime = 0;
-            }
-          }).catch(() => {
-            // Priming error ignored
-          });
-        }
-      } catch {
-        // Ignored
+    if (!this.chimeAudio) return;
+    if (this.isPlayingChime) return;
+
+    try {
+      this.chimeAudio.volume = 0.001;
+      const p = this.chimeAudio.play();
+      if (p !== undefined) {
+        p.then(() => {
+          // Double check that chime didn't start playing while prime promise was in flight
+          if (!this.isPlayingChime && this.chimeAudio) {
+            this.chimeAudio.pause();
+            this.chimeAudio.currentTime = 0;
+          }
+        }).catch(() => {
+          // Priming error ignored
+        });
       }
+    } catch {
+      // Ignored
     }
   }
 
@@ -180,6 +186,11 @@ export class SoundService {
    * Explicitly suspends audio context when the app or tab is being unloaded.
    */
   stopAudio(): void {
+    this.isPlayingChime = false;
+    if (this.chimeTimeoutId) {
+      clearTimeout(this.chimeTimeoutId);
+      this.chimeTimeoutId = null;
+    }
     if (this.chimeAudio) {
       try {
         this.chimeAudio.pause();
@@ -194,17 +205,34 @@ export class SoundService {
 
   /**
    * Plays a gentle, pleasant triple-tone chime (Major triad: C5 - E5 - G5).
-   * Uses primed HTML5 Audio for immediate background-tab playback with Web Audio as fallback.
+   * For user gestures and foreground playback, Web Audio is reliably used to prevent
+   * mobile iOS/Android muting or race condition cutoffs.
+   * In background tabs, primed HTML5 Audio is used for immediate background playback.
    * @param volume Volume scalar between 0.0 and 1.0
    */
   playChime(volume: number = 0.8): void {
     const clampedVol = Math.max(0, Math.min(1, volume));
     if (clampedVol === 0) return;
 
-    // 1. Try HTML5 Audio first — primed HTMLMediaElement plays immediately in background tabs
-    // without being blocked or deferred by document.hidden like AudioContext.resume() is.
+    // 1. For user interactions / foreground playback, Web Audio provides unblocked sound
+    // that respects volume on iOS/Android without being affected by HTML5 media restrictions.
+    const isForeground = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    const ctx = this.getAudioContext();
+
+    if (isForeground && ctx) {
+      this.playWebAudioChime(clampedVol);
+      return;
+    }
+
+    // 2. In background tabs (where Web Audio resume is deferred), use primed HTML5 Audio
     if (this.chimeAudio) {
       try {
+        this.isPlayingChime = true;
+        if (this.chimeTimeoutId) clearTimeout(this.chimeTimeoutId);
+        this.chimeTimeoutId = setTimeout(() => {
+          this.isPlayingChime = false;
+        }, 2000);
+
         this.chimeAudio.pause();
         this.chimeAudio.currentTime = 0;
         this.chimeAudio.volume = clampedVol;
@@ -216,20 +244,30 @@ export class SoundService {
               // HTML5 audio started playing successfully
             })
             .catch((err) => {
+              this.isPlayingChime = false;
               console.warn('HTML5 chime play failed, falling back to Web Audio:', err);
               this.playWebAudioChime(clampedVol);
             });
           return;
         }
       } catch (err) {
+        this.isPlayingChime = false;
         console.warn('HTML5 chime play error, falling back to Web Audio:', err);
         this.playWebAudioChime(clampedVol);
         return;
       }
     }
 
-    // 2. Fallback to Web Audio synthesis if HTML5 audio is not available
+    // Fallback to Web Audio synthesis
     this.playWebAudioChime(clampedVol);
+  }
+
+  /**
+   * Dedicated test chime player ensuring immediate playback on user interaction
+   */
+  playTestChime(volume?: number): void {
+    this.prepareForPlayback();
+    this.playChime(volume ?? 0.8);
   }
 
   private playWebAudioChime(clampedVol: number): void {

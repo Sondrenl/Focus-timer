@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
-import { Award, Eye } from 'lucide-react';
+import { Award } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getActivityIntensityStyle } from './activityUtils';
 
@@ -12,7 +12,6 @@ interface DayActivityViewProps {
 export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }) => {
   const [hoveredHourKey, setHoveredHourKey] = useState<string | null>(null);
   const [selectedHourKey, setSelectedHourKey] = useState<string | null>(null);
-  const [showAllHours, setShowAllHours] = useState<boolean>(false);
 
   const currentHour = useMemo(() => new Date().getHours(), []);
 
@@ -80,12 +79,9 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
     return `${h.toString().padStart(2, '0')}:00 – ${nextH.toString().padStart(2, '0')}:00`;
   };
 
-  // Rows displayed in the breakdown list below the ribbon
-  const displayedBars = showAllHours ? full24Hours : activeHours;
-
   return (
     <div className="flex flex-col gap-3.5">
-      {/* Top Summary & Toggle Subheader */}
+      {/* Top Summary Subheader */}
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs text-md-on-surface-variant font-medium">
           <span className="font-bold text-md-on-surface">{activeHoursCount}</span> active{' '}
@@ -96,17 +92,6 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
             </span>
           )}
         </div>
-
-        {activeHoursCount > 0 && activeHoursCount < 24 && (
-          <button
-            type="button"
-            onClick={() => setShowAllHours((prev) => !prev)}
-            className="text-xs font-semibold text-md-primary hover:text-md-primary/80 flex items-center gap-1 transition-colors py-1 px-2 rounded-lg hover:bg-md-primary/5 cursor-pointer"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span>{showAllHours ? 'Show Active Only' : 'Show All 24h'}</span>
-          </button>
-        )}
       </div>
 
       {/* 24-Hour Activity Ribbon (2-tier 12-hour grid on mobile, single row on desktop) */}
@@ -210,17 +195,16 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
         )}
       </div>
 
-      {/* Focus Breakdown List */}
+      {/* Focus Breakdown List - Active hours only */}
       <div className="flex flex-col gap-2">
-        {activeHoursCount === 0 && !showAllHours ? (
+        {activeHours.length === 0 ? (
           <div className="text-center py-6 text-xs text-md-outline rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/10">
             No focus sessions logged for this day.
           </div>
         ) : (
-          displayedBars.map((bar) => {
+          activeHours.map((bar) => {
             const isSelected = activeKey === bar.key;
             const widthPct = maxHourSeconds > 0 ? Math.min(100, Math.round((bar.totalSeconds / maxHourSeconds) * 100)) : 0;
-            const hasHours = bar.totalSeconds > 0;
 
             return (
               <button
@@ -246,22 +230,14 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({ activityBars }
 
                 <div className="flex-1 min-w-[35%] h-6 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
                   <div
-                    className={clsx(
-                      'h-full rounded-lg transition-all duration-500 ease-out',
-                      hasHours ? 'bg-md-primary' : 'bg-transparent'
-                    )}
-                    style={{ width: `${Math.max(hasHours ? 8 : 0, widthPct)}%` }}
+                    className="h-full rounded-lg bg-md-primary transition-all duration-500 ease-out"
+                    style={{ width: `${Math.max(8, widthPct)}%` }}
                   />
                 </div>
 
                 <div className="w-16 sm:w-24 shrink-0 text-right flex flex-col items-end min-w-0">
-                  <span
-                    className={clsx(
-                      'text-xs font-bold tabular-nums',
-                      hasHours ? 'text-md-on-surface' : 'text-md-outline'
-                    )}
-                  >
-                    {hasHours ? formatDurationHoursMins(bar.totalSeconds) : '0m'}
+                  <span className="text-xs font-bold tabular-nums text-md-on-surface">
+                    {formatDurationHoursMins(bar.totalSeconds)}
                   </span>
                   {bar.sessionCount > 0 && (
                     <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">

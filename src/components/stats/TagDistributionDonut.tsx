@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { TagStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { clsx } from 'clsx';
@@ -49,6 +49,24 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
 }) => {
   const [hoveredTagId, setHoveredTagId] = useState<string | null>(null);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Click outside listener: clicking anywhere outside the component unselects
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setSelectedTagId(null);
+        setHoveredTagId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, []);
 
   const radius = 86;
   const strokeWidth = 24;
@@ -114,20 +132,17 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
 
     const { svgDist, matchedSlice } = getSliceAtPoint(e, center, slicesWithOffsets);
 
-    // Clicking the center hole clears pinned selection
-    if (svgDist < radius - strokeWidth / 2 - 4) {
+    const innerHoleThreshold = radius - strokeWidth / 2 - 4;
+    const outerBoundaryThreshold = radius + strokeWidth / 2 + 6;
+
+    // Clicking outside the donut ring or with no matched slice unselects
+    if (svgDist < innerHoleThreshold || svgDist > outerBoundaryThreshold || !matchedSlice) {
       setSelectedTagId(null);
       setHoveredTagId(null);
       return;
     }
 
-    if (svgDist > radius + strokeWidth / 2 + 8) {
-      return;
-    }
-
-    if (matchedSlice) {
-      setSelectedTagId((prev) => (prev === matchedSlice.tagId ? null : matchedSlice.tagId));
-    }
+    setSelectedTagId((prev) => (prev === matchedSlice.tagId ? null : matchedSlice.tagId));
   };
 
   if (activeSlices.length === 0) {
@@ -139,7 +154,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   }
 
   return (
-    <div className="flex flex-col md:flex-row items-center justify-around gap-6 py-2">
+    <div ref={containerRef} className="flex flex-col md:flex-row items-center justify-around gap-6 py-2">
       {/* 1. SVG Donut Diagram */}
       <div className="relative w-56 h-56 shrink-0 flex items-center justify-center select-none">
         <svg
