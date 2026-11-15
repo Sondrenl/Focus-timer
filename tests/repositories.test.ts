@@ -357,7 +357,7 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       renderToStaticMarkup(React.createElement(HookHarness));
 
       expect(exportedBackupData).not.toBeNull();
-      expect(exportedBackupData!.version).toBe("3.0.2");
+      expect(exportedBackupData!.version).toBe("3.0.3");
 
       // Verify profile is present but sanitized
       expect(exportedBackupData!.profile).toBeDefined();

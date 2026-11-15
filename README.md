@@ -2,7 +2,7 @@
 
 A fast, modern Pomodoro timer and caffeine tracker web app built with React 18, TypeScript, Tailwind CSS, and a real-time reactive backend. Engineered for frictionless flow state, zero-latency multi-device synchronization, and deep productivity insights.
 
-[![Version](https://img.shields.io/badge/version-3.0.2-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.0.3-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Build & Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
 

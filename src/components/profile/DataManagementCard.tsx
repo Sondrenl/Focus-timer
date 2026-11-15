@@ -100,7 +100,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
         }
 
         setPendingBackup({
-          version: parsed.version || '3.0.2',
+          version: parsed.version || '3.0.3',
           exportedAt: parsed.exportedAt || new Date().toISOString(),
           profile: parsed.profile,
           settings: parsed.settings,
