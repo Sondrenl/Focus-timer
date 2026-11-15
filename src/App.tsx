@@ -73,7 +73,7 @@ const MainContent: React.FC = () => {
   }, [mobileMenuOpen]);
 
   return (
-    <div className="min-h-[100dvh] w-full lg:h-screen lg:w-screen flex lg:overflow-hidden bg-md-background">
+    <div className="min-h-[100dvh] w-full max-w-full overflow-x-hidden lg:h-screen lg:w-screen flex lg:overflow-hidden bg-md-background">
       {/* Left Collapsible Rail / Sidebar */}
       <Sidebar
         isOpenOnMobile={mobileMenuOpen}
@@ -81,10 +81,10 @@ const MainContent: React.FC = () => {
       />
 
       {/* Main Workspace Area with offset for the collapsed rail */}
-      <div className="flex-1 flex flex-col min-h-[100dvh] lg:h-full lg:min-h-0 lg:overflow-hidden lg:pl-[72px]">
+      <div className="flex-1 min-w-0 w-full max-w-full overflow-x-hidden flex flex-col min-h-[100dvh] lg:h-full lg:min-h-0 lg:overflow-hidden lg:pl-[72px]">
         <Header onOpenMobileMenu={() => setMobileMenuOpen(true)} />
 
-        <main ref={mainRef} className="flex-1 w-full lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden p-2 pb-8 sm:p-4 lg:p-6">
+        <main ref={mainRef} className="flex-1 min-w-0 w-full overflow-x-hidden lg:min-h-0 lg:overflow-y-auto lg:overflow-x-hidden p-2 pb-8 sm:p-4 lg:p-6">
           {/* Keep TimerWorkspace mounted so timer ticks and animations stay live across tab switches */}
           <div className={currentView === 'timer' ? 'contents' : 'hidden'}>
             <TimerWorkspace isActiveView={currentView === 'timer'} />

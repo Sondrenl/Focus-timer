@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
+import { formatCompactDuration } from '../../utils/formatters';
 import { MONTH_NAMES } from '../../utils/dates';
 import { clsx } from 'clsx';
 
@@ -9,9 +9,6 @@ interface YearActivityViewProps {
 }
 
 export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars }) => {
-  const [hoveredMonthKey, setHoveredMonthKey] = useState<string | null>(null);
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
-
   const currentMonthIdx = useMemo(() => new Date().getMonth(), []);
 
   // Ensure 12 months (Jan to Dec)
@@ -76,23 +73,8 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
     return Math.max(1, ...quarters.map((q) => q.totalSeconds));
   }, [quarters]);
 
-  const activeKey = hoveredMonthKey || selectedMonthKey;
-  const inspectedBar = useMemo(() => {
-    if (!activeKey) return null;
-    return full12Months.find((b) => b.key === activeKey) || null;
-  }, [activeKey, full12Months]);
-
-  const getFullMonthName = (key: string) => {
-    const match = key.match(/month-(\d+)/);
-    const m = match ? parseInt(match[1], 10) : NaN;
-    if (!isNaN(m) && MONTH_NAMES[m]) {
-      return MONTH_NAMES[m];
-    }
-    return key;
-  };
-
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5 min-w-0">
       {/* Non-duplicative summary header */}
       <div className="flex items-center justify-between text-xs text-md-on-surface-variant font-medium">
         <span>
@@ -100,108 +82,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
         </span>
       </div>
 
-      {/* 12-Month Progression Bar Chart */}
-      <div
-        className="flex items-end justify-between gap-1 sm:gap-2 h-44 sm:h-52 pt-6 pb-2 px-1 sm:px-2 rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/20 select-none overflow-x-auto"
-        onMouseLeave={() => setHoveredMonthKey(null)}
-      >
-        {full12Months.map((bar, idx) => {
-          const isCurrentMonth = idx === currentMonthIdx;
-          const isSelected = activeKey === bar.key;
-          const heightPct = maxMonthSeconds > 0 ? Math.round((bar.totalSeconds / maxMonthSeconds) * 100) : 0;
-
-          return (
-            <button
-              type="button"
-              key={bar.key}
-              onClick={() => {
-                setSelectedMonthKey((prev) => (prev === bar.key ? null : bar.key));
-                setHoveredMonthKey(null);
-              }}
-              onMouseEnter={() => setHoveredMonthKey(bar.key)}
-              className="flex-1 min-w-[20px] sm:min-w-0 h-full flex flex-col items-center justify-end gap-1.5 p-0.5 sm:p-1 rounded-xl cursor-pointer group focus:outline-none select-none touch-manipulation"
-            >
-              {/* Duration Label above Bar */}
-              <div className="text-[9px] sm:text-[11px] font-bold tabular-nums min-h-[16px] text-center">
-                {bar.totalSeconds > 0 ? (
-                  <span className={clsx(isSelected ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant')}>
-                    {formatCompactDuration(bar.totalSeconds)}
-                  </span>
-                ) : (
-                  <span className="text-md-outline/30">—</span>
-                )}
-              </div>
-
-              {/* Vertical Bar Track & Filled Progress */}
-              <div
-                className={clsx(
-                  'w-full max-w-[28px] sm:max-w-[40px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border',
-                  isSelected
-                    ? 'border-md-primary ring-1 ring-md-primary/30'
-                    : isCurrentMonth
-                    ? 'border-md-primary/50'
-                    : 'border-transparent'
-                )}
-              >
-                <div
-                  className={clsx(
-                    'w-full rounded-lg transition-[height] duration-300 ease-out',
-                    isSelected
-                      ? 'bg-md-primary'
-                      : isCurrentMonth
-                      ? 'bg-md-primary/90'
-                      : bar.totalSeconds > 0
-                      ? 'bg-md-primary/70'
-                      : 'bg-transparent'
-                  )}
-                  style={{ height: `${bar.totalSeconds > 0 ? Math.max(8, heightPct) : 0}%` }}
-                />
-              </div>
-
-              {/* Month Label */}
-              <div className="flex flex-col items-center leading-none pt-0.5">
-                <span
-                  className={clsx(
-                    'text-[10px] sm:text-xs font-bold uppercase tracking-wider',
-                    isCurrentMonth ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant'
-                  )}
-                >
-                  {bar.label}
-                </span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Minimal Status Inspector */}
-      <div className="min-h-[28px] px-3 py-1.5 rounded-xl bg-md-surface-container/50 border border-md-outline-variant/20 flex items-center justify-between text-xs">
-        {inspectedBar ? (
-          <div className="flex items-center justify-between w-full">
-            <span className="font-bold text-md-on-surface">
-              {getFullMonthName(inspectedBar.key)}
-            </span>
-            <span className="text-md-on-surface-variant">
-              {inspectedBar.totalSeconds > 0 ? (
-                <>
-                  <strong className="text-md-primary font-bold">
-                    {formatDurationHoursMins(inspectedBar.totalSeconds)}
-                  </strong>{' '}
-                  ({inspectedBar.sessionCount} {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'})
-                </>
-              ) : (
-                <span className="text-md-outline">No focus time logged</span>
-              )}
-            </span>
-          </div>
-        ) : (
-          <span className="text-md-outline">
-            Tap or hover any month to view details
-          </span>
-        )}
-      </div>
-
-      {/* Quarterly Trajectory (Q1, Q2, Q3, Q4) - zero shading! */}
+      {/* Quarterly Trajectory (Q1, Q2, Q3, Q4) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         {quarters.map((q) => {
           const widthPct = maxQuarterSeconds > 0 ? Math.round((q.totalSeconds / maxQuarterSeconds) * 100) : 0;
@@ -209,11 +90,11 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
           return (
             <div
               key={q.name}
-              className="p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 flex flex-col justify-between gap-2"
+              className="p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 flex flex-col justify-between gap-2 min-w-0"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-1">
                 <span className="text-xs font-bold text-md-on-surface">{q.name}</span>
-                <span className="text-[10px] text-md-outline font-medium">{q.span}</span>
+                <span className="text-[10px] text-md-outline font-medium truncate">{q.span}</span>
               </div>
 
               <div>
@@ -221,7 +102,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
                   {q.totalSeconds > 0 ? formatCompactDuration(q.totalSeconds) : '0m'}
                 </div>
                 <div className="text-[10px] text-md-on-surface-variant font-medium">
-                  {q.sessionCount > 0 ? `${q.sessionCount} sessions` : '—'}
+                  {q.sessionCount > 0 ? `${q.sessionCount} ${q.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
                 </div>
               </div>
 
@@ -231,6 +112,65 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
                   className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
                   style={{ width: `${Math.max(q.totalSeconds > 0 ? 8 : 0, widthPct)}%` }}
                 />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 12-Month Horizontal Progress Grid (spacious & readable on mobile and desktop) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {full12Months.map((bar, idx) => {
+          const isCurrentMonth = idx === currentMonthIdx;
+          const widthPct = maxMonthSeconds > 0 ? Math.round((bar.totalSeconds / maxMonthSeconds) * 100) : 0;
+
+          return (
+            <div
+              key={bar.key}
+              className={clsx(
+                'px-3 py-2.5 rounded-2xl border flex items-center gap-3 min-w-0',
+                isCurrentMonth
+                  ? 'bg-md-primary/5 border-md-primary/30'
+                  : 'bg-md-surface-container/40 border-md-outline-variant/20'
+              )}
+            >
+              {/* Month Name */}
+              <div className="w-10 shrink-0 flex items-center gap-1">
+                <span
+                  className={clsx(
+                    'text-xs font-bold uppercase tracking-wider',
+                    isCurrentMonth ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant'
+                  )}
+                >
+                  {bar.label}
+                </span>
+              </div>
+
+              {/* Horizontal Proportional Track */}
+              <div className="flex-1 min-w-0 h-2.5 bg-md-surface-container-high rounded-full overflow-hidden">
+                <div
+                  className={clsx(
+                    'h-full rounded-full transition-[width] duration-300 ease-out',
+                    isCurrentMonth ? 'bg-md-primary' : bar.totalSeconds > 0 ? 'bg-md-primary/75' : 'bg-transparent'
+                  )}
+                  style={{ width: `${bar.totalSeconds > 0 ? Math.max(6, widthPct) : 0}%` }}
+                />
+              </div>
+
+              {/* Duration & Session Count */}
+              <div className="w-[74px] shrink-0 text-right leading-tight">
+                {bar.totalSeconds > 0 ? (
+                  <>
+                    <div className="text-xs font-bold text-md-on-surface tabular-nums">
+                      {formatCompactDuration(bar.totalSeconds)}
+                    </div>
+                    <div className="text-[10px] text-md-on-surface-variant font-medium tabular-nums">
+                      {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
+                    </div>
+                  </>
+                ) : (
+                  <span className="text-xs text-md-outline/40 font-medium">—</span>
+                )}
               </div>
             </div>
           );

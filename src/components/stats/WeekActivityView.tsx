@@ -69,7 +69,7 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
                 setHoveredDayKey(null);
               }}
               onMouseEnter={() => setHoveredDayKey(bar.key)}
-              className="flex-1 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl cursor-pointer group focus:outline-none select-none touch-manipulation"
+              className="flex-1 min-w-0 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl cursor-pointer group focus:outline-none select-none touch-manipulation"
             >
               {/* Duration Label above Bar */}
               <div className="text-[10px] sm:text-xs font-bold tabular-nums min-h-[16px] text-center">

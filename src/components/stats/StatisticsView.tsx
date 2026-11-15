@@ -64,7 +64,7 @@ export const StatisticsView: React.FC = () => {
   ];
 
   return (
-    <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6">
+    <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6 min-w-0">
       {/* View Header */}
       <div>
         <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
@@ -93,10 +93,10 @@ export const StatisticsView: React.FC = () => {
       )}
 
       {/* 1. Time Period Selector & Period Navigator */}
-      {/* Desktop Layout (md and up) */}
-      <div className="hidden md:flex flex-row items-center justify-between gap-4 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
-        {/* Period Type Segmented Buttons */}
-        <div className="inline-flex p-1 bg-md-surface-container rounded-2xl border border-md-outline-variant/30 overflow-x-auto">
+      {/* Desktop Layout (lg and up) */}
+      <div className="hidden lg:flex flex-row items-center justify-between gap-4 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
+        {/* Period Type Segmented Buttons - shrink-0 locks width across all period changes */}
+        <div className="inline-flex shrink-0 p-1 bg-md-surface-container rounded-2xl border border-md-outline-variant/30">
           {periodOptions.map((opt) => {
             const isActive = periodType === opt.type;
             return (
@@ -129,14 +129,14 @@ export const StatisticsView: React.FC = () => {
         </div>
 
         {/* Period Navigator Controls */}
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex flex-nowrap items-center justify-end gap-2 min-w-0">
           {periodType === 'custom' ? (
             <button
               type="button"
               onClick={() => setIsCalendarModalOpen(true)}
-              className="px-3.5 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+              className="px-3.5 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
             >
-              <CalendarDays className="w-4 h-4" />
+              <CalendarDays className="w-4 h-4 shrink-0" />
               <span>Pick Dates</span>
             </button>
           ) : (
@@ -144,7 +144,7 @@ export const StatisticsView: React.FC = () => {
               onClick={goToToday}
               disabled={isCurrentPeriod || periodType === 'all'}
               className={clsx(
-                "px-3 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary hover:bg-md-primary/10 transition-colors flex items-center",
+                "px-3 py-1.5 min-h-[34px] rounded-xl text-xs font-bold text-md-primary hover:bg-md-primary/10 transition-colors flex items-center shrink-0 whitespace-nowrap",
                 (isCurrentPeriod || periodType === 'all') && "opacity-0 pointer-events-none select-none"
               )}
             >
@@ -152,18 +152,18 @@ export const StatisticsView: React.FC = () => {
             </button>
           )}
 
-          <div className="flex items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 min-h-[36px]">
+          <div className="flex flex-nowrap items-center gap-1 bg-md-surface-container rounded-2xl p-1 border border-md-outline-variant/30 min-h-[36px] min-w-0">
             {periodType !== 'all' && periodType !== 'custom' ? (
               <button
                 onClick={goToPrev}
-                className="w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors shrink-0"
                 title="Previous period"
                 aria-label="Previous period"
               >
                 <ChevronLeft className="w-4.5 h-4.5" />
               </button>
             ) : (
-              <div className="w-8 h-8 invisible pointer-events-none" />
+              <div className="w-8 h-8 shrink-0 invisible pointer-events-none" />
             )}
 
             <button
@@ -174,7 +174,7 @@ export const StatisticsView: React.FC = () => {
                 }
               }}
               className={clsx(
-                "px-3 py-1 text-xs font-bold text-md-on-surface whitespace-nowrap min-w-[70px] text-center",
+                "px-3 py-1 text-xs font-bold text-md-on-surface whitespace-nowrap min-w-[70px] text-center truncate",
                 periodType === 'custom' && "hover:text-md-primary underline decoration-dotted underline-offset-4 cursor-pointer"
               )}
             >
@@ -186,7 +186,7 @@ export const StatisticsView: React.FC = () => {
                 onClick={goToNext}
                 disabled={!canGoNext}
                 className={clsx(
-                  "w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors",
+                  "w-8 h-8 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors shrink-0",
                   !canGoNext && "opacity-30 cursor-not-allowed pointer-events-none"
                 )}
                 title="Next period"
@@ -195,15 +195,15 @@ export const StatisticsView: React.FC = () => {
                 <ChevronRight className="w-4.5 h-4.5" />
               </button>
             ) : (
-              <div className="w-8 h-8 invisible pointer-events-none" />
+              <div className="w-8 h-8 shrink-0 invisible pointer-events-none" />
             )}
           </div>
         </div>
       </div>
 
-      {/* Mobile Layout (< md only - 3x2 grid & large touch navigator) */}
-      <div className="flex md:hidden flex-col gap-3.5 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs">
-        <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-md-surface-container rounded-2xl border border-md-outline-variant/30">
+      {/* Mobile & Tablet Layout (< lg - 3x2 grid & full-width adaptive navigator) */}
+      <div className="flex lg:hidden flex-col gap-3.5 p-4 rounded-3xl bg-md-surface-container-low border border-md-outline-variant/30 shadow-xs w-full min-w-0">
+        <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-md-surface-container rounded-2xl border border-md-outline-variant/30 w-full">
           {periodOptions.map((opt) => {
             const isActive = periodType === opt.type;
             return (
@@ -217,7 +217,7 @@ export const StatisticsView: React.FC = () => {
                   }
                 }}
                 className={clsx(
-                  'min-h-[44px] px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 select-none flex items-center justify-center gap-1.5 active:scale-95',
+                  'min-h-[44px] px-2 sm:px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 select-none flex items-center justify-center gap-1.5 active:scale-95 whitespace-nowrap',
                   isActive
                     ? 'bg-md-primary-container text-md-on-primary-container shadow-xs font-bold'
                     : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
@@ -236,8 +236,9 @@ export const StatisticsView: React.FC = () => {
           })}
         </div>
 
-        <div className="flex items-center justify-between gap-2 w-full">
-          <div className="flex items-center justify-between flex-1 min-w-0 bg-md-surface-container rounded-2xl p-1 sm:p-1.5 border border-md-outline-variant/30 min-h-[48px]">
+        {/* Bottom Row: Navigator pill expands to full selector width when Today button is hidden; never wraps */}
+        <div className="flex flex-nowrap items-center gap-2 w-full min-w-0">
+          <div className="flex flex-nowrap items-center justify-between flex-1 min-w-0 bg-md-surface-container rounded-2xl p-1 sm:p-1.5 border border-md-outline-variant/30 min-h-[48px]">
             {periodType !== 'all' && periodType !== 'custom' ? (
               <button
                 type="button"
@@ -249,7 +250,7 @@ export const StatisticsView: React.FC = () => {
                 <ChevronLeft className="w-5 h-5" />
               </button>
             ) : (
-              <div className="w-10 h-10 invisible pointer-events-none" />
+              <div className="w-10 h-10 shrink-0 invisible pointer-events-none" />
             )}
 
             <button
@@ -260,7 +261,7 @@ export const StatisticsView: React.FC = () => {
                 }
               }}
               className={clsx(
-                'px-2 py-1.5 text-xs sm:text-sm font-bold text-md-on-surface text-center truncate min-w-0 flex-1',
+                'px-2 py-1.5 text-xs sm:text-sm font-bold text-md-on-surface text-center truncate min-w-0 flex-1 whitespace-nowrap',
                 periodType === 'custom' && 'hover:text-md-primary underline decoration-dotted underline-offset-4 cursor-pointer'
               )}
             >
@@ -282,7 +283,7 @@ export const StatisticsView: React.FC = () => {
                 <ChevronRight className="w-5 h-5" />
               </button>
             ) : (
-              <div className="w-10 h-10 invisible pointer-events-none" />
+              <div className="w-10 h-10 shrink-0 invisible pointer-events-none" />
             )}
           </div>
 
@@ -290,23 +291,21 @@ export const StatisticsView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsCalendarModalOpen(true)}
-              className="min-h-[48px] px-3.5 py-2.5 rounded-2xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all flex items-center gap-1.5 shrink-0"
+              className="min-h-[48px] px-3.5 py-2.5 rounded-2xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap"
             >
-              <CalendarDays className="w-4 h-4" />
+              <CalendarDays className="w-4 h-4 shrink-0" />
               <span>Pick</span>
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={goToToday}
-              disabled={isCurrentPeriod || periodType === 'all'}
-              className={clsx(
-                "min-h-[48px] px-3.5 py-2.5 rounded-2xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all shrink-0",
-                (isCurrentPeriod || periodType === 'all') && "opacity-0 pointer-events-none select-none"
-              )}
-            >
-              Today
-            </button>
+            !isCurrentPeriod && periodType !== 'all' && (
+              <button
+                type="button"
+                onClick={goToToday}
+                className="min-h-[48px] px-3.5 py-2.5 rounded-2xl text-xs font-bold text-md-primary bg-md-primary/10 hover:bg-md-primary/15 active:scale-95 transition-all shrink-0 whitespace-nowrap"
+              >
+                Today
+              </button>
+            )
           )}
         </div>
       </div>

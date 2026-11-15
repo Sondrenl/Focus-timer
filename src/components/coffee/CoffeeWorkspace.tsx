@@ -138,37 +138,39 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Controls (Minus and Plus Buttons) */}
+      {/* 3. Controls (Minus and Plus Buttons centered on the midpoint between them) */}
       <div className="flex items-center justify-center gap-6 mt-4 mb-2">
-        {/* Left: Minus Button */}
-        <button
-          onClick={handleRemove}
-          disabled={!canRemove}
-          title={
-            !canRemove
-              ? selectedTagId
-                ? `No cups logged with tag "${currentTagName}" to remove`
-                : 'No untagged cups to remove'
-              : `Remove cup (${currentTagName})`
-          }
-          className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
-            !canRemove
-              ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed opacity-50'
-              : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
-          }`}
-          aria-label={
-            !canRemove
-              ? 'No cups available to remove for the selected tag'
-              : `Remove cup of coffee (${currentTagName})`
-          }
-        >
-          <Minus className="w-7 h-7 md:w-6 md:h-6" />
-        </button>
+        {/* Left: Minus Button in matching 80px slot so gap midpoint is dead center */}
+        <div className="w-20 flex items-center justify-end">
+          <button
+            onClick={handleRemove}
+            disabled={!canRemove}
+            title={
+              !canRemove
+                ? selectedTagId
+                  ? `No cups logged with tag "${currentTagName}" to remove`
+                  : 'No untagged cups to remove'
+                : `Remove cup (${currentTagName})`
+            }
+            className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
+              !canRemove
+                ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed opacity-50'
+                : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
+            }`}
+            aria-label={
+              !canRemove
+                ? 'No cups available to remove for the selected tag'
+                : `Remove cup of coffee (${currentTagName})`
+            }
+          >
+            <Minus className="w-7 h-7 md:w-6 md:h-6" />
+          </button>
+        </div>
 
         {/* Add Button (Hero FAB showing next cup tag indicator) */}
         <button
           onClick={handleAdd}
-          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
+          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative shrink-0"
           style={{ backgroundColor: currentTagColor }}
           aria-label={`Add cup of coffee with tag ${currentTagName}`}
           title={`Add cup (${currentTagName})`}
