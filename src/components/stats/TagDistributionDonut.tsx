@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { TagStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { clsx } from 'clsx';
@@ -49,6 +49,24 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
 }) => {
   const [hoveredTagId, setHoveredTagId] = useState<string | null>(null);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Click outside listener: clicking anywhere outside the donut diagram or legend unselects
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as HTMLElement | null;
+      // If clicking inside the donut container or legend items, let their specific handlers run
+      if (containerRef.current && !containerRef.current.contains(target)) {
+        setSelectedTagId(null);
+        setHoveredTagId(null);
+      }
+    };
+
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => {
+      document.removeEventListener('pointerdown', handleClickOutside);
+    };
+  }, []);
 
   const radius = 86;
   const strokeWidth = 24;
@@ -80,11 +98,10 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
     };
   });
 
-  // Effective active item (hovered takes precedence, then pinned/selected)
+  // Effective active item (hovered takes precedence, then selected)
   const activeTagId = hoveredTagId || selectedTagId;
   const activeItem = activeSlices.find((item) => item.tagId === activeTagId);
   const activeSlice = slicesWithOffsets.find((item) => item.tagId === activeTagId);
-  const isPinned = Boolean(selectedTagId && activeTagId === selectedTagId && !hoveredTagId);
 
   // Geometric angle & distance calculation for 100% reliable SVG hover
   const handleSvgMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -114,20 +131,17 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
 
     const { svgDist, matchedSlice } = getSliceAtPoint(e, center, slicesWithOffsets);
 
-    // Clicking the center hole clears pinned selection
-    if (svgDist < radius - strokeWidth / 2 - 4) {
+    const innerHoleThreshold = radius - strokeWidth / 2 - 4;
+    const outerBoundaryThreshold = radius + strokeWidth / 2 + 6;
+
+    // Clicking outside the donut ring or with no matched slice unselects
+    if (svgDist < innerHoleThreshold || svgDist > outerBoundaryThreshold || !matchedSlice) {
       setSelectedTagId(null);
       setHoveredTagId(null);
       return;
     }
 
-    if (svgDist > radius + strokeWidth / 2 + 8) {
-      return;
-    }
-
-    if (matchedSlice) {
-      setSelectedTagId((prev) => (prev === matchedSlice.tagId ? null : matchedSlice.tagId));
-    }
+    setSelectedTagId((prev) => (prev === matchedSlice.tagId ? null : matchedSlice.tagId));
   };
 
   if (activeSlices.length === 0) {
@@ -139,7 +153,17 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
   }
 
   return (
-    <div className="flex flex-col md:flex-row items-center justify-around gap-6 py-2">
+    <div
+      ref={containerRef}
+      onClick={(e) => {
+        // If clicking on the container background itself, unselect
+        if (e.target === e.currentTarget) {
+          setSelectedTagId(null);
+          setHoveredTagId(null);
+        }
+      }}
+      className="flex flex-col md:flex-row items-center justify-around gap-6 py-2"
+    >
       {/* 1. SVG Donut Diagram */}
       <div className="relative w-56 h-56 shrink-0 flex items-center justify-center select-none">
         <svg
@@ -220,11 +244,6 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
               <span className="text-[10px] text-md-outline">
                 {formatDurationHoursMins(activeItem.totalSeconds)}
               </span>
-              {isPinned && (
-                <span className="text-[9px] font-bold text-md-primary mt-0.5 tracking-wider uppercase">
-                  Pinned
-                </span>
-              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center animate-in fade-in duration-150">

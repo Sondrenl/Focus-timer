@@ -1,32 +1,43 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
-import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
-import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
-import { ActivityInspectionCard } from './ActivityInspectionCard';
-import { ActivityBarRow } from './ActivityBarRow';
+import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
+import { MONTH_NAMES, toDateKey } from '../../utils/dates';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface MonthActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
-const SHORT_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const SHORT_WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+interface MonthWeekData {
+  weekNumber: number;
+  label: string;
+  totalSeconds: number;
+  sessionCount: number;
+  activeDaysCount: number;
+  isCurrentWeek: boolean;
+  days: {
+    dateKey: string;
+    dayNum: number;
+    weekdayIndex: number; // 0=Mon, 6=Sun
+    totalSeconds: number;
+    sessionCount: number;
+    isInMonth: boolean;
+    isToday: boolean;
+  }[];
+}
 
 export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBars }) => {
-  const [displayMode, setDisplayMode] = useState<'calendar' | 'weeks'>('calendar');
-  const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
-  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
+  const todayKey = useMemo(() => toDateKey(new Date()), []);
 
   // Parse Year and Month from the first bar's key (format 'YYYY-MM-DD')
-  const { year, monthIndex, startingDayOfWeek, daysInMonth, monthName } = useMemo(() => {
+  const { year, monthIndex, daysInMonth, monthName } = useMemo(() => {
     if (activityBars.length === 0) {
       const now = new Date();
       return {
         year: now.getFullYear(),
         monthIndex: now.getMonth(),
-        startingDayOfWeek: 0,
         daysInMonth: 30,
         monthName: MONTH_NAMES[now.getMonth()],
       };
@@ -34,15 +45,11 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
 
     const [y, m] = activityBars[0].key.split('-').map(Number);
     const monthIdx = m - 1;
-    const firstDay = new Date(y, monthIdx, 1);
-    // Convert to Monday=0, Tuesday=1, ..., Sunday=6
-    const startDow = (firstDay.getDay() + 6) % 7;
     const totalDays = new Date(y, m, 0).getDate();
 
     return {
       year: y,
       monthIndex: monthIdx,
-      startingDayOfWeek: startDow,
       daysInMonth: totalDays,
       monthName: MONTH_NAMES[monthIdx],
     };
@@ -55,247 +62,232 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
     return map;
   }, [activityBars]);
 
-  // Max focus seconds on any single day for color intensity scaling
-  const maxDaySeconds = useMemo(() => {
-    return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
-  }, [activityBars]);
-
-  // Peak day of the month
-  const peakDay = useMemo(() => {
-    let top: ActivityBarStat | null = null;
-    for (const bar of activityBars) {
-      if (bar.totalSeconds > 0 && (!top || bar.totalSeconds > top.totalSeconds)) {
-        top = bar;
-      }
-    }
-    return top;
-  }, [activityBars]);
-
-  // Active days count & total focus
+  // Total active days in month
   const totalActiveDays = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
   }, [activityBars]);
 
-  // Currently inspected day (hovered/selected or null)
-  const activeKey = hoveredDayKey || selectedDayKey;
-  const inspectedBar = useMemo(() => {
-    if (!activeKey) return null;
-    return dayMap.get(activeKey) || null;
-  }, [activeKey, dayMap]);
+  const totalFocusSeconds = useMemo(() => {
+    return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
+  }, [activityBars]);
 
-  // Group days into Calendar Weeks for the 'weeks' breakdown
-  const weeklyGroups = useMemo(() => {
-    const weeks: {
-      weekIndex: number;
-      label: string;
-      totalSeconds: number;
-      sessionCount: number;
-      activeDays: number;
-      days: ActivityBarStat[];
-    }[] = [];
+  const avgPerActiveDaySec = useMemo(() => {
+    return totalActiveDays > 0 ? Math.round(totalFocusSeconds / totalActiveDays) : 0;
+  }, [totalFocusSeconds, totalActiveDays]);
 
-    let currentWeekDays: ActivityBarStat[] = [];
-    let weekCounter = 1;
+  const consistencyPct = useMemo(() => {
+    return daysInMonth > 0 ? Math.round((totalActiveDays / daysInMonth) * 100) : 0;
+  }, [totalActiveDays, daysInMonth]);
 
+  // Group all days of the month into natural calendar weeks (Monday–Sunday)
+  const weeksData = useMemo<MonthWeekData[]>(() => {
+    if (activityBars.length === 0) return [];
+
+    const weeks: MonthWeekData[] = [];
+    let currentWeekDays: MonthWeekData['days'] = [];
+    let weekIndex = 1;
+
+    // Fill days 1..daysInMonth
     for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
-      const d = new Date(year, monthIndex, dayNum);
-      const dow = (d.getDay() + 6) % 7; // Monday = 0, Sunday = 6
-      const dateKey = toDateKey(d);
-      const bar = dayMap.get(dateKey) || {
-        key: dateKey,
-        label: String(dayNum),
-        totalSeconds: 0,
-        hours: 0,
-        sessionCount: 0,
-      };
+      const dateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      const dateObj = new Date(year, monthIndex, dayNum);
+      const weekdayIndex = (dateObj.getDay() + 6) % 7; // Mon=0 .. Sun=6
+      const bar = dayMap.get(dateKey);
+      const isToday = dateKey === todayKey;
 
-      currentWeekDays.push(bar);
+      // On first day of week or first day of month, pad leading empty days
+      if (dayNum === 1 && weekdayIndex > 0) {
+        for (let pad = 0; pad < weekdayIndex; pad++) {
+          currentWeekDays.push({
+            dateKey: `pad-pre-${pad}`,
+            dayNum: 0,
+            weekdayIndex: pad,
+            totalSeconds: 0,
+            sessionCount: 0,
+            isInMonth: false,
+            isToday: false,
+          });
+        }
+      }
 
-      // End of week on Sunday or last day of month
-      if (dow === 6 || dayNum === daysInMonth) {
-        const startDay = currentWeekDays[0].label;
-        const endDay = currentWeekDays[currentWeekDays.length - 1].label;
-        const sec = currentWeekDays.reduce((acc, item) => acc + item.totalSeconds, 0);
-        const count = currentWeekDays.reduce((acc, item) => acc + item.sessionCount, 0);
-        const active = currentWeekDays.filter((item) => item.totalSeconds > 0).length;
+      currentWeekDays.push({
+        dateKey,
+        dayNum,
+        weekdayIndex,
+        totalSeconds: bar ? bar.totalSeconds : 0,
+        sessionCount: bar ? bar.sessionCount : 0,
+        isInMonth: true,
+        isToday,
+      });
+
+      // Close week on Sunday or end of month
+      if (weekdayIndex === 6 || dayNum === daysInMonth) {
+        // Pad trailing days if end of month didn't finish on Sunday
+        if (dayNum === daysInMonth && weekdayIndex < 6) {
+          for (let pad = weekdayIndex + 1; pad <= 6; pad++) {
+            currentWeekDays.push({
+              dateKey: `pad-post-${pad}`,
+              dayNum: 0,
+              weekdayIndex: pad,
+              totalSeconds: 0,
+              sessionCount: 0,
+              isInMonth: false,
+              isToday: false,
+            });
+          }
+        }
+
+        const inMonthDays = currentWeekDays.filter((d) => d.isInMonth);
+        const firstDayNum = inMonthDays[0]?.dayNum || 1;
+        const lastDayNum = inMonthDays[inMonthDays.length - 1]?.dayNum || daysInMonth;
+        const weekSeconds = inMonthDays.reduce((acc, d) => acc + d.totalSeconds, 0);
+        const weekSessions = inMonthDays.reduce((acc, d) => acc + d.sessionCount, 0);
+        const weekActiveDays = inMonthDays.filter((d) => d.totalSeconds > 0).length;
+        const isCurrentWeek = inMonthDays.some((d) => d.isToday);
 
         weeks.push({
-          weekIndex: weekCounter++,
-          label: startDay === endDay ? `${startDay} ${monthName.slice(0, 3)}` : `${startDay}–${endDay} ${monthName.slice(0, 3)}`,
-          totalSeconds: sec,
-          sessionCount: count,
-          activeDays: active,
+          weekNumber: weekIndex,
+          label: `${firstDayNum} – ${lastDayNum} ${monthName.slice(0, 3)}`,
+          totalSeconds: weekSeconds,
+          sessionCount: weekSessions,
+          activeDaysCount: weekActiveDays,
+          isCurrentWeek,
           days: currentWeekDays,
         });
 
         currentWeekDays = [];
+        weekIndex++;
       }
     }
 
-    return weeks;
-  }, [year, monthIndex, daysInMonth, monthName, dayMap]);
+    return weeks.reverse();
+  }, [activityBars, year, monthIndex, daysInMonth, monthName, dayMap, todayKey]);
 
   const maxWeekSeconds = useMemo(() => {
-    return Math.max(1, ...weeklyGroups.map((w) => w.totalSeconds));
-  }, [weeklyGroups]);
+    return Math.max(1, ...weeksData.map((w) => w.totalSeconds));
+  }, [weeksData]);
 
-  const formatInspectedDate = (dateKey: string) => {
-    const [y, m, d] = dateKey.split('-').map(Number);
-    const dateObj = new Date(y, m - 1, d);
-    const weekday = WEEKDAY_NAMES[dateObj.getDay()];
-    return `${weekday}, ${d} ${MONTH_NAMES[m - 1]}`;
-  };
+  if (totalFocusSeconds === 0) {
+    return (
+      <div className="text-center py-8 text-xs text-md-outline">
+        No focus sessions logged in {monthName}.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Top Toggle & Summary Subheader */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-md-on-surface-variant font-medium">
-          <span className="font-bold text-md-on-surface">{totalActiveDays}</span> of{' '}
-          {daysInMonth} days active in {monthName}
+      {/* Monthly Attendance & Pace Banner */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 text-xs">
+        <div>
+          <span className="text-md-outline block text-[11px]">Monthly Attendance</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {totalActiveDays} of {daysInMonth} days <span className="text-[11px] font-normal text-md-outline">({consistencyPct}%)</span>
+          </span>
         </div>
-
-        {/* Calendar vs Weekly Segmented Toggle */}
-        <div className="inline-flex p-0.5 bg-md-surface-container rounded-xl border border-md-outline-variant/30 text-xs">
-          <button
-            type="button"
-            onClick={() => setDisplayMode('calendar')}
-            className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'calendar'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <CalendarIcon className="w-3.5 h-3.5" />
-            <span>Calendar</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setDisplayMode('weeks')}
-            className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'weeks'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <BarChart2 className="w-3.5 h-3.5" />
-            <span>Weeks</span>
-          </button>
+        <div>
+          <span className="text-md-outline block text-[11px]">Daily Pace</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {avgPerActiveDaySec > 0 ? `${formatCompactDuration(avgPerActiveDaySec)} / active day` : '—'}
+          </span>
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <span className="text-md-outline block text-[11px]">Weekly Average</span>
+          <span className="font-bold text-md-on-surface text-sm">
+            {weeksData.length > 0 ? `${formatCompactDuration(Math.round(totalFocusSeconds / weeksData.length))} / week` : '—'}
+          </span>
         </div>
       </div>
 
-      {displayMode === 'calendar' ? (
-        <div className="flex flex-col gap-2.5">
-          {/* Weekday Header Row */}
-          <div className="grid grid-cols-7 gap-1 sm:gap-2 text-center select-none">
-            {SHORT_WEEKDAYS.map((wd) => (
-              <div
-                key={wd}
-                className="text-[11px] font-bold text-md-on-surface-variant/80 uppercase tracking-wider py-1"
-              >
-                {wd}
+      {/* Weekly Rhythm Breakdown Cards (Zero day shading!) */}
+      <div className="flex flex-col gap-2.5">
+        {weeksData.map((week) => {
+          const widthPct = maxWeekSeconds > 0 ? Math.round((week.totalSeconds / maxWeekSeconds) * 100) : 0;
+
+          return (
+            <div
+              key={`month-week-${week.weekNumber}`}
+              className={clsx(
+                'p-3 sm:p-3.5 rounded-2xl border transition-colors flex flex-col gap-2.5',
+                week.isCurrentWeek
+                  ? 'bg-md-primary/5 border-md-primary/30 ring-1 ring-md-primary/20'
+                  : 'bg-md-surface-container/40 border-md-outline-variant/20 hover:bg-md-surface-container/60'
+              )}
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                {/* Week Label & Date Range */}
+                <div className="flex items-center gap-2.5 min-w-[130px] shrink-0">
+                  <span className="text-xs font-bold text-md-on-surface">
+                    Week {week.weekNumber}
+                  </span>
+                  <span className="text-[11px] font-medium text-md-outline">
+                    {week.label}
+                  </span>
+                  {week.isCurrentWeek && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-md-primary text-white leading-none">
+                      CURRENT
+                    </span>
+                  )}
+                </div>
+
+                {/* Discrete Habit Pips (Mon to Sun) - Instant habit view, zero shading! */}
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  {week.days.map((d) => {
+                    const dayLetter = SHORT_WEEKDAYS[d.weekdayIndex];
+                    if (!d.isInMonth) {
+                      return (
+                        <div
+                          key={d.dateKey}
+                          className="w-6 h-6 rounded-lg opacity-15 flex items-center justify-center text-[10px] text-md-outline"
+                        >
+                          {dayLetter}
+                        </div>
+                      );
+                    }
+
+                    const hasFocus = d.totalSeconds > 0;
+
+                    return (
+                      <div
+                        key={d.dateKey}
+                        title={hasFocus ? `${d.dayNum} ${monthName}: ${formatDurationHoursMins(d.totalSeconds)} (${d.sessionCount} sessions)` : `${d.dayNum} ${monthName}: No focus`}
+                        className={clsx(
+                          'w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all',
+                          hasFocus
+                            ? 'bg-md-primary text-white shadow-xs'
+                            : d.isToday
+                            ? 'border border-md-primary/60 text-md-primary'
+                            : 'bg-md-surface-container-high/80 text-md-outline/60'
+                        )}
+                      >
+                        {dayLetter}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Duration & Session Count on Right */}
+                <div className="text-left sm:text-right flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 min-w-[110px] shrink-0">
+                  <span className="text-xs font-bold tabular-nums text-md-on-surface">
+                    {week.totalSeconds > 0 ? formatDurationHoursMins(week.totalSeconds) : '0m'}
+                  </span>
+                  <span className="text-[10px] text-md-on-surface-variant font-medium">
+                    {week.sessionCount > 0 ? `${week.sessionCount} ${week.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
+                  </span>
+                </div>
               </div>
-            ))}
-          </div>
 
-          {/* 7-Column Calendar Grid */}
-          <div
-            className="grid grid-cols-7 gap-1 sm:gap-2"
-            onMouseLeave={() => setHoveredDayKey(null)}
-          >
-            {/* Empty Offset Days before the 1st of the month */}
-            {Array.from({ length: startingDayOfWeek }).map((_, i) => (
-              <div
-                key={`empty-${i}`}
-                className="aspect-square sm:aspect-auto sm:min-h-[62px] rounded-xl sm:rounded-2xl bg-transparent"
-              />
-            ))}
-
-            {/* Days of the Month */}
-            {Array.from({ length: daysInMonth }).map((_, i) => {
-              const dayNum = i + 1;
-              const dateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-              const bar = dayMap.get(dateKey);
-              const sec = bar ? bar.totalSeconds : 0;
-              const isSelected = selectedDayKey === dateKey;
-
-              return (
-                <button
-                  type="button"
-                  key={dateKey}
-                  onMouseEnter={() => setHoveredDayKey(dateKey)}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSelectedDayKey((prev) => (prev === dateKey ? null : dateKey));
-                  }}
-                  className={clsx(
-                    'aspect-square sm:aspect-auto sm:min-h-[64px] p-1 sm:p-2 rounded-xl sm:rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
-                    getActivityIntensityStyle(sec, maxDaySeconds, isSelected)
-                  )}
-                  aria-label={`${dayNum} ${monthName}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
-                >
-                  {/* Mobile View: Centered date number and activity indicator dot */}
-                  <div className="flex sm:hidden flex-col items-center justify-center">
-                    <span className="text-xs font-bold leading-none">
-                      {dayNum}
-                    </span>
-                    {sec > 0 && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-85 mt-1" />
-                    )}
-                  </div>
-
-                  {/* Desktop View: Top-left date with bottom duration & sessions */}
-                  <div className="hidden sm:flex items-center justify-between w-full">
-                    <span className="text-sm font-bold leading-none">
-                      {dayNum}
-                    </span>
-                  </div>
-
-                  {sec > 0 ? (
-                    <div className="hidden sm:flex flex-col w-full mt-1">
-                      <span className="text-[11px] font-extrabold truncate leading-tight">
-                        {formatDurationHoursMins(sec)}
-                      </span>
-                      {bar && bar.sessionCount > 0 && (
-                        <span className="text-[9px] opacity-75 truncate leading-tight">
-                          {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="hidden sm:block text-[10px] opacity-20">
-                      —
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dynamic Day Inspector Bar */}
-          <ActivityInspectionCard
-            inspectedBar={inspectedBar}
-            peakDay={peakDay}
-            formatInspectedDate={formatInspectedDate}
-          />
-        </div>
-      ) : (
-        /* Weekly Breakdown Mode */
-        <div className="flex flex-col gap-2.5">
-          {weeklyGroups.map((week) => (
-            <ActivityBarRow
-              key={`week-${week.weekIndex}`}
-              label={`Week ${week.weekIndex}`}
-              subLabel={week.label}
-              totalSeconds={week.totalSeconds}
-              sessionCount={week.sessionCount}
-              maxSeconds={maxWeekSeconds}
-            />
-          ))}
-        </div>
-      )}
+              {/* Weekly Volume Bar */}
+              <div className="w-full h-1.5 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(week.totalSeconds > 0 ? 6 : 0, widthPct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };

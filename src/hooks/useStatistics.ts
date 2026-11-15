@@ -161,6 +161,7 @@ export function useStatistics() {
       productiveMetric,
       candidateInsights,
       insightsSignature,
+      filteredSessions,
     };
   }, [
     sessions,
@@ -203,6 +204,7 @@ export function useStatistics() {
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,
+    filteredSessions: stats.filteredSessions,
     insights,
     topInsight,
   };

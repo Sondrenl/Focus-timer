@@ -32,3 +32,17 @@ export function formatDecimalHours(totalSeconds: number): string {
   const hours = totalSeconds / 3600;
   return hours.toFixed(1);
 }
+
+/**
+ * Formats seconds into a compact string suitable for dense mobile tiles (e.g. "45m", "1.5h", "2h")
+ */
+export function formatCompactDuration(totalSeconds: number): string {
+  if (totalSeconds <= 0) return '0m';
+  if (totalSeconds < 3600) {
+    const mins = Math.round(totalSeconds / 60);
+    return `${Math.max(1, mins)}m`;
+  }
+  const hours = totalSeconds / 3600;
+  const formatted = hours.toFixed(1).replace(/\.0$/, '');
+  return `${formatted}h`;
+}

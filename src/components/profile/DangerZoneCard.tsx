@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
 import { AlertTriangle, Trash2, RotateCcw } from 'lucide-react';
 import { CompletedSession } from '../../types/session';
 import { Tag } from '../../types/tag';
@@ -112,17 +113,18 @@ export const DangerZoneCard: React.FC<DangerZoneCardProps> = ({
       </Card>
 
       {/* Danger Zone Confirmation Modal */}
-      {resetModalScope && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-md w-full border border-md-outline-variant/30 shadow-elevation-4 flex flex-col gap-4">
+      <Modal
+        isOpen={!!resetModalScope}
+        onClose={() => setResetModalScope(null)}
+        title={resetModalScope === 'sessions-only' ? 'Clear Focus & Coffee History' : 'Reset All Data'}
+      >
+        {resetModalScope && (
+          <div className="flex flex-col gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-6 h-6" />
+              <div className="w-10 h-10 rounded-2xl bg-md-error/10 text-md-error flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-md-on-surface">
-                  {resetModalScope === 'sessions-only' ? 'Clear Focus & Coffee History?' : 'Factory Reset All Data?'}
-                </h3>
                 <p className="text-xs text-md-error font-medium">This action cannot be undone.</p>
               </div>
             </div>
@@ -177,8 +179,8 @@ export const DangerZoneCard: React.FC<DangerZoneCardProps> = ({
               </Button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </>
   );
 };

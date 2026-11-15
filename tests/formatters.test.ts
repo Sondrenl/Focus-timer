@@ -1,5 +1,4 @@
-import { describe, it, expect } from 'vitest';
-import { formatTime, formatDurationHoursMins, formatDecimalHours } from '../src/utils/formatters';
+import { formatTime, formatDurationHoursMins, formatDecimalHours, formatCompactDuration } from '../src/utils/formatters';
 
 describe('Time and Duration Formatters', () => {
   it('formats remaining seconds into MM:SS correctly', () => {
@@ -22,5 +21,16 @@ describe('Time and Duration Formatters', () => {
     expect(formatDecimalHours(3600)).toBe('1.0');
     expect(formatDecimalHours(5400)).toBe('1.5');
     expect(formatDecimalHours(1800)).toBe('0.5');
+  });
+
+  it('formats compact duration for dense mobile calendar cells', () => {
+    expect(formatCompactDuration(0)).toBe('0m');
+    expect(formatCompactDuration(-10)).toBe('0m');
+    expect(formatCompactDuration(300)).toBe('5m');
+    expect(formatCompactDuration(2700)).toBe('45m');
+    expect(formatCompactDuration(3600)).toBe('1h');
+    expect(formatCompactDuration(5400)).toBe('1.5h');
+    expect(formatCompactDuration(7200)).toBe('2h');
+    expect(formatCompactDuration(8100)).toBe('2.3h');
   });
 });

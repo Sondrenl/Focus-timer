@@ -57,17 +57,21 @@ export class NotificationService {
       if (Notification.permission === 'granted') {
         return true;
       }
-      const permission = await new Promise<NotificationPermission>((resolve) => {
-        try {
-          const maybePromise = Notification.requestPermission((res) => resolve(res));
-          if (maybePromise && typeof maybePromise.then === 'function') {
-            maybePromise.then(resolve).catch(() => resolve(Notification.permission));
+      let result: NotificationPermission;
+      try {
+        // Modern standard: Notification.requestPermission returns a Promise
+        result = await Notification.requestPermission();
+      } catch {
+        // Fallback for older browsers (e.g. legacy Safari <= 15)
+        result = await new Promise<NotificationPermission>((resolve) => {
+          try {
+            Notification.requestPermission((p) => resolve(p));
+          } catch {
+            resolve(Notification.permission);
           }
-        } catch {
-          resolve(Notification.permission);
-        }
-      });
-      return permission === 'granted';
+        });
+      }
+      return result === 'granted';
     } catch {
       return false;
     }

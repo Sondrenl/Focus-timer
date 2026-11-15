@@ -17,11 +17,18 @@ export const Switch: React.FC<SwitchProps> = ({
   description,
   disabled = false,
 }) => {
+  const handleToggle = () => {
+    if (!disabled) {
+      onChange(!checked);
+    }
+  };
+
   return (
-    <label
+    <div
+      onClick={handleToggle}
       className={twMerge(
-        'flex items-center justify-between gap-4 py-2 cursor-pointer select-none',
-        disabled && 'opacity-50 cursor-not-allowed'
+        'flex items-center justify-between gap-4 py-2 select-none',
+        disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
       )}
     >
       {(label || description) && (
@@ -34,8 +41,12 @@ export const Switch: React.FC<SwitchProps> = ({
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-label={label || 'Toggle switch'}
         disabled={disabled}
-        onClick={() => !disabled && onChange(!checked)}
+        onClick={(e) => {
+          e.stopPropagation();
+          handleToggle();
+        }}
         className={twMerge(
           clsx(
             'relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary',
@@ -52,6 +63,6 @@ export const Switch: React.FC<SwitchProps> = ({
           )}
         />
       </button>
-    </label>
+    </div>
   );
 };

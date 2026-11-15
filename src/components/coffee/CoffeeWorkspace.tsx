@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Coffee, Plus, Minus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
@@ -62,9 +62,9 @@ export const CoffeeWorkspace: React.FC = () => {
     return list.sort((a, b) => b.count - a.count);
   }, [cupsForDate, tags]);
 
-  const handleAdd = async () => {
+  const handleAdd = useCallback(async () => {
     await addCoffeeCup(selectedTagId, todayKey);
-  };
+  }, [addCoffeeCup, selectedTagId, todayKey]);
 
   // Find cups logged for today matching the currently selected tag (or untagged if selectedTagId is null)
   const cupsOfSelectedTag = useMemo(() => {
@@ -73,19 +73,40 @@ export const CoffeeWorkspace: React.FC = () => {
 
   const canRemove = cupsOfSelectedTag.length > 0;
 
-  const handleRemove = async () => {
+  const handleRemove = useCallback(async () => {
     if (!canRemove) return;
 
     const targetCup = cupsOfSelectedTag[cupsOfSelectedTag.length - 1];
     if (!targetCup) return;
 
     await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
-  };
+  }, [canRemove, cupsOfSelectedTag, removeCoffeeCup, todayKey]);
+
+  // Keyboard shortcut listener (+ / = to add cup, - to remove cup)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input or textarea
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+        return;
+      }
+
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        handleAdd();
+      } else if (e.key === '-') {
+        e.preventDefault();
+        handleRemove();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleAdd, handleRemove]);
 
   return (
     <div className="w-full max-w-xl mx-auto flex flex-col items-center justify-center py-6 px-4">
       {/* 1. Top Tag Selector for Next Cup */}
-      <div className="w-full flex flex-col items-center mb-5 md:mb-4">
+      <div className="w-full flex flex-col items-center mb-6">
         <CoffeeTagSelector
           selectedTagId={selectedTagId}
           onSelectTagId={setSelectedTagId}
@@ -117,37 +138,39 @@ export const CoffeeWorkspace: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Controls (Minus and Plus Buttons) */}
+      {/* 3. Controls (Minus and Plus Buttons centered on the midpoint between them) */}
       <div className="flex items-center justify-center gap-6 mt-4 mb-2">
-        {/* Left: Minus Button */}
-        <button
-          onClick={handleRemove}
-          disabled={!canRemove}
-          title={
-            !canRemove
-              ? selectedTagId
-                ? `No cups logged with tag "${currentTagName}" to remove`
-                : 'No untagged cups to remove'
-              : `Remove cup (${currentTagName})`
-          }
-          className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
-            !canRemove
-              ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed opacity-50'
-              : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
-          }`}
-          aria-label={
-            !canRemove
-              ? 'No cups available to remove for the selected tag'
-              : `Remove cup of coffee (${currentTagName})`
-          }
-        >
-          <Minus className="w-7 h-7 md:w-6 md:h-6" />
-        </button>
+        {/* Left: Minus Button in matching 80px slot so gap midpoint is dead center */}
+        <div className="w-20 flex items-center justify-end">
+          <button
+            onClick={handleRemove}
+            disabled={!canRemove}
+            title={
+              !canRemove
+                ? selectedTagId
+                  ? `No cups logged with tag "${currentTagName}" to remove`
+                  : 'No untagged cups to remove'
+                : `Remove cup (${currentTagName})`
+            }
+            className={`flex items-center justify-center w-16 h-16 md:w-14 md:h-14 rounded-full transition-all duration-200 active:scale-95 shadow-xs ${
+              !canRemove
+                ? 'bg-md-surface-container text-md-outline/40 cursor-not-allowed opacity-50'
+                : 'bg-md-surface-container-high hover:bg-md-surface-container-highest text-md-on-surface-variant hover:text-md-on-surface'
+            }`}
+            aria-label={
+              !canRemove
+                ? 'No cups available to remove for the selected tag'
+                : `Remove cup of coffee (${currentTagName})`
+            }
+          >
+            <Minus className="w-7 h-7 md:w-6 md:h-6" />
+          </button>
+        </div>
 
-        {/* Center: Add Button (Hero FAB showing next cup tag indicator) */}
+        {/* Add Button (Hero FAB showing next cup tag indicator) */}
         <button
           onClick={handleAdd}
-          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative"
+          className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative shrink-0"
           style={{ backgroundColor: currentTagColor }}
           aria-label={`Add cup of coffee with tag ${currentTagName}`}
           title={`Add cup (${currentTagName})`}
@@ -158,7 +181,7 @@ export const CoffeeWorkspace: React.FC = () => {
 
       {/* Helper Cue directly below plus/minus buttons */}
       <div className="text-[11px] text-md-outline mb-4 select-none text-center">
-        Tapping <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> logs a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
+        Tap <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd> (or press <kbd className="font-mono px-1 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/30 text-md-on-surface">+</kbd>) to log a cup with <span className="font-bold text-md-on-surface">{currentTagName}</span>
       </div>
 
       {/* 4. Visual Cup Tray (Uniform cups logged today - click any cup to select its tag) */}
@@ -174,12 +197,16 @@ export const CoffeeWorkspace: React.FC = () => {
                 key={cup.id}
                 type="button"
                 onClick={() => setSelectedTagId(cup.tagId ?? null)}
-                className="flex items-center justify-center w-8 h-8 md:w-7 md:h-7 rounded-xl transition-all duration-150 hover:scale-110 active:scale-95 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary hover:ring-1 hover:ring-md-outline/30"
-                style={{ backgroundColor: getAlphaColor(cupColor, '25') }}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary rounded-xl group"
                 title={`Cup #${idx + 1}: ${cupName} (Click to select this tag)`}
                 aria-label={`Select tag ${cupName} from Cup #${idx + 1}`}
               >
-                <Coffee className="w-4 h-4" style={{ color: sanitizeHexColor(cupColor) }} />
+                <span
+                  className="flex items-center justify-center w-8 h-8 rounded-xl transition-all duration-150 active:scale-95 [@media(hover:hover)]:group-hover:scale-110 [@media(hover:hover)]:group-hover:ring-1 [@media(hover:hover)]:group-hover:ring-md-outline/30"
+                  style={{ backgroundColor: getAlphaColor(cupColor, '25') }}
+                >
+                  <Coffee className="w-4.5 h-4.5" style={{ color: sanitizeHexColor(cupColor) }} />
+                </span>
               </button>
             );
           })}

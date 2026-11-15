@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
 import { Download, Upload, Check, AlertTriangle, Sparkles } from 'lucide-react';
 import { BackupData } from '../../types/user';
 
@@ -213,10 +214,13 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
       </Card>
 
       {/* Import Confirmation Modal */}
-      {pendingBackup && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-md w-full border border-md-outline-variant/30 shadow-elevation-3 flex flex-col gap-4">
-            <h3 className="text-base font-bold text-md-on-surface">Import Backup Data</h3>
+      <Modal
+        isOpen={!!pendingBackup}
+        onClose={() => setPendingBackup(null)}
+        title="Import Backup Data"
+      >
+        {pendingBackup && (
+          <div className="flex flex-col gap-4">
             <div className="p-3 rounded-2xl bg-md-surface-container text-xs text-md-on-surface-variant flex flex-col gap-1">
               <span>• Sessions to import: {pendingBackup.sessions.length}</span>
               <span>• Tags to import: {pendingBackup.tags.length}</span>
@@ -274,8 +278,8 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
               </Button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </>
   );
 };

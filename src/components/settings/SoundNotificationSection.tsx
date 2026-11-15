@@ -48,7 +48,8 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
   };
 
   const handleTestSound = () => {
-    sound.playChime(settings.soundVolume);
+    sound.prepareForPlayback();
+    sound.playChime(settings.soundVolume || 0.8);
   };
 
   const handleToggleNotifications = async (enable: boolean) => {
@@ -59,26 +60,38 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       return;
     }
 
+    // Immediately enable in user settings
+    updateSettings({ notificationsEnabled: true });
+    onSaved();
+
     const currentPerm = notifications.getPermissionState();
     if (currentPerm === 'granted') {
-      updateSettings({ notificationsEnabled: true });
-      onSaved();
+      showNotifFeedback('Notifications enabled for this device.');
       return;
     }
 
+    if (currentPerm === 'unsupported') {
+      showNotifFeedback('Notifications are not supported in this browser.');
+      return;
+    }
+
+    if (currentPerm === 'denied') {
+      showNotifFeedback('Notifications are blocked in your browser site settings.');
+      return;
+    }
+
+    // Request permission from browser
     const granted = await notifications.requestPermission();
     const updatedPerm = notifications.getPermissionState();
     setPermissionState(updatedPerm);
-    updateSettings({ notificationsEnabled: granted });
 
     if (granted) {
       showNotifFeedback('Notifications enabled for this device.');
     } else if (updatedPerm === 'denied') {
       showNotifFeedback('Notifications are blocked in your browser site settings.');
-    } else if (updatedPerm === 'unsupported') {
-      showNotifFeedback('On iPhone/iPad, use Share → Add to Home Screen to enable notifications.');
+    } else {
+      showNotifFeedback('Notification permission was not granted.');
     }
-    onSaved();
   };
 
   const handleTestNotification = async () => {
@@ -88,21 +101,25 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       return;
     }
 
-    const granted = await notifications.requestPermission();
-    const updatedPerm = notifications.getPermissionState();
-    setPermissionState(updatedPerm);
-
+    let granted = currentPerm === 'granted';
     if (!granted) {
-      showNotifFeedback(
-        updatedPerm === 'denied'
-          ? 'Blocked by browser — allow Notifications for this site in browser settings.'
-          : 'Notification permission was not granted.'
-      );
-      return;
+      granted = await notifications.requestPermission();
+      const updatedPerm = notifications.getPermissionState();
+      setPermissionState(updatedPerm);
+
+      if (!granted) {
+        showNotifFeedback(
+          updatedPerm === 'denied'
+            ? 'Blocked by browser — allow Notifications for this site in browser settings.'
+            : 'Notification permission was not granted.'
+        );
+        return;
+      }
     }
 
     if (!settings.notificationsEnabled) {
       updateSettings({ notificationsEnabled: true });
+      onSaved();
     }
 
     const sent = await notifications.notify(
@@ -164,7 +181,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
       <div className="flex flex-col gap-4">
         {/* Audio Chime */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-md-on-surface">Chime Alert</div>
             <div className="text-xs text-md-on-surface-variant">Play gentle acoustic sound on completion</div>
@@ -172,7 +189,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           <div className="flex items-center gap-2.5 shrink-0">
             <button
               onClick={handleTestSound}
-              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0 flex items-center justify-center"
             >
               Test Chime
             </button>
@@ -187,12 +204,12 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         </div>
 
         {/* Sound Volume Slider */}
-        <div className="flex items-center justify-between gap-4 border-t border-md-outline-variant/15 pt-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-md-on-surface">Chime Volume</div>
             <div className="text-xs text-md-on-surface-variant">Adjust completion bell volume</div>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-3.5 w-full sm:w-auto shrink-0">
             <input
               type="range"
               min="0.1"
@@ -203,18 +220,19 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
                 const val = parseFloat(e.target.value);
                 updateSettings({ soundVolume: Math.round(val * 100) / 100 });
               }}
-              className="w-28 md:w-36 accent-md-primary cursor-pointer"
+              className="flex-1 sm:w-48 md:w-60 h-2.5 rounded-full accent-md-primary cursor-pointer bg-md-surface-container-highest"
+              aria-label="Chime Volume"
             />
-            <span className="text-xs font-semibold text-md-on-surface-variant w-8 text-right">
+            <span className="text-sm font-bold text-md-on-surface w-12 text-right tabular-nums shrink-0">
               {Math.round((settings.soundVolume ?? 0.8) * 100)}%
             </span>
           </div>
         </div>
 
         {/* Desktop / Push Notifications Toggle & Test */}
-        <div className="flex items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <Bell className="w-4 h-4 text-md-on-surface-variant shrink-0" />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
+          <div className="flex items-start sm:items-center gap-2 min-w-0">
+            <Bell className="w-4 h-4 text-md-on-surface-variant shrink-0 mt-0.5 sm:mt-0" />
             <div className="min-w-0">
               <div className="text-sm font-semibold text-md-on-surface">Notifications</div>
               <div className={`text-xs ${notifSubtitle.className}`}>{notifSubtitle.text}</div>
@@ -223,12 +241,12 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           <div className="flex items-center gap-2.5 shrink-0">
             <button
               onClick={handleTestNotification}
-              className="px-3 py-1.5 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors"
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0 flex items-center justify-center"
             >
               Test Alert
             </button>
             <Switch
-              checked={settings.notificationsEnabled && permissionState === 'granted'}
+              checked={Boolean(settings.notificationsEnabled)}
               onChange={handleToggleNotifications}
             />
           </div>

@@ -8,6 +8,12 @@ export interface NextIntervalResult {
   shouldAutoStart: boolean;
 }
 
+export interface PreviousIntervalResult {
+  previousType: SessionType;
+  previousCycle: number;
+  previousDuration: number;
+}
+
 /**
  * Calculates duration in seconds for a given session type according to user preferences.
  */
@@ -67,3 +73,45 @@ export function computeNextInterval(
     shouldAutoStart,
   };
 }
+
+/**
+ * State machine transition logic for stepping backward in the Pomodoro cycle.
+ * - From WORK (cycle 1): previous is LONG_BREAK (cycle settings.longBreakInterval)
+ * - From WORK (cycle N > 1): previous is SHORT_BREAK (cycle N - 1)
+ * - From SHORT_BREAK (cycle N): previous is WORK (cycle N)
+ * - From LONG_BREAK (cycle N): previous is WORK (cycle N)
+ */
+export function computePreviousInterval(
+  currentType: SessionType,
+  currentCycle: number,
+  settings: UserSettings
+): PreviousIntervalResult {
+  let previousType: SessionType;
+  let previousCycle: number;
+
+  if (currentType === 'WORK') {
+    if (currentCycle <= 1) {
+      previousType = 'LONG_BREAK';
+      previousCycle = settings.longBreakInterval;
+    } else {
+      previousType = 'SHORT_BREAK';
+      previousCycle = currentCycle - 1;
+    }
+  } else if (currentType === 'SHORT_BREAK') {
+    previousType = 'WORK';
+    previousCycle = currentCycle;
+  } else {
+    // LONG_BREAK
+    previousType = 'WORK';
+    previousCycle = currentCycle;
+  }
+
+  const previousDuration = getDurationForType(previousType, settings);
+
+  return {
+    previousType,
+    previousCycle,
+    previousDuration,
+  };
+}
+

@@ -44,14 +44,14 @@ export const ActivityBarRow: React.FC<ActivityBarRowProps> = ({
         className
       )}
     >
-      <div className="w-24 sm:w-28 shrink-0 flex flex-col">
+      <div className="w-16 sm:w-28 shrink-0 flex flex-col min-w-0">
         <span className={clsx('text-xs font-bold truncate', isHighlighted ? 'text-md-primary' : 'text-md-on-surface')}>
           {label} {subLabel && <span className="font-normal text-md-outline">{subLabel}</span>}
         </span>
         {badge}
       </div>
 
-      <div className="flex-1 h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
+      <div className="flex-1 min-w-[35%] h-7 bg-md-surface-container-high rounded-xl overflow-hidden flex items-center p-1">
         <div
           className={clsx(
             'h-full rounded-lg transition-all duration-500 ease-out',
@@ -61,7 +61,7 @@ export const ActivityBarRow: React.FC<ActivityBarRowProps> = ({
         />
       </div>
 
-      <div className="w-24 sm:w-28 shrink-0 text-right flex flex-col items-end">
+      <div className="w-16 sm:w-28 shrink-0 text-right flex flex-col items-end min-w-0">
         <span
           className={clsx(
             'text-xs font-bold tabular-nums',
@@ -73,8 +73,9 @@ export const ActivityBarRow: React.FC<ActivityBarRowProps> = ({
         {secondaryText !== undefined ? (
           secondaryText
         ) : sessionCount > 0 ? (
-          <span className="text-[10px] text-md-on-surface-variant">
-            {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
+          <span className="text-[10px] text-md-on-surface-variant truncate max-w-full">
+            <span className="hidden sm:inline">{sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}</span>
+            <span className="sm:hidden">{sessionCount} ses</span>
           </span>
         ) : null}
       </div>

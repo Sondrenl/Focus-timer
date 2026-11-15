@@ -1,22 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
+import { formatCompactDuration } from '../../utils/formatters';
 import { MONTH_NAMES } from '../../utils/dates';
-import { Calendar as CalendarIcon, PieChart } from 'lucide-react';
-import { ActivityInspectionCard } from './ActivityInspectionCard';
-import { ActivityBarRow } from './ActivityBarRow';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface YearActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
 export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars }) => {
-  const [displayMode, setDisplayMode] = useState<'calendar' | 'quarters'>('calendar');
-  const [hoveredMonthKey, setHoveredMonthKey] = useState<string | null>(null);
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
-
   const currentMonthIdx = useMemo(() => new Date().getMonth(), []);
 
   // Ensure 12 months (Jan to Dec)
@@ -43,72 +35,38 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
     });
   }, [activityBars]);
 
-  // Max focus seconds in any single month
   const maxMonthSeconds = useMemo(() => {
     return Math.max(1, ...full12Months.map((b) => b.totalSeconds));
   }, [full12Months]);
 
-  // Peak month
-  const peakMonth = useMemo(() => {
-    let top: ActivityBarStat | null = null;
-    for (const bar of full12Months) {
-      if (bar.totalSeconds > 0 && (!top || bar.totalSeconds > top.totalSeconds)) {
-        top = bar;
-      }
-    }
-    return top;
-  }, [full12Months]);
-
-  // Total active months and total focus
   const activeMonthsCount = useMemo(() => {
     return full12Months.filter((b) => b.totalSeconds > 0).length;
   }, [full12Months]);
 
-  const totalFocusSeconds = useMemo(() => {
-    return full12Months.reduce((acc, b) => acc + b.totalSeconds, 0);
-  }, [full12Months]);
-
-  // Inspected month
-  const activeKey = hoveredMonthKey || selectedMonthKey;
-  const inspectedBar = useMemo(() => {
-    if (!activeKey) return null;
-    return full12Months.find((b) => b.key === activeKey) || null;
-  }, [activeKey, full12Months]);
-
-  const getFullMonthName = (key: string) => {
-    const match = key.match(/month-(\d+)/);
-    const m = match ? parseInt(match[1], 10) : NaN;
-    if (!isNaN(m) && MONTH_NAMES[m]) {
-      return MONTH_NAMES[m];
-    }
-    return key;
-  };
-
-  // Group into 4 Quarters: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec)
+  // Aggregate into 4 quarters: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec)
   const quarters = useMemo(() => {
-    const qData: {
-      quarter: string;
-      label: string;
-      totalSeconds: number;
-      sessionCount: number;
-      activeMonths: number;
-    }[] = [
-      { quarter: 'Q1', label: 'Jan – Mar', totalSeconds: 0, sessionCount: 0, activeMonths: 0 },
-      { quarter: 'Q2', label: 'Apr – Jun', totalSeconds: 0, sessionCount: 0, activeMonths: 0 },
-      { quarter: 'Q3', label: 'Jul – Sep', totalSeconds: 0, sessionCount: 0, activeMonths: 0 },
-      { quarter: 'Q4', label: 'Oct – Dec', totalSeconds: 0, sessionCount: 0, activeMonths: 0 },
+    const qNames = [
+      { name: 'Q1', span: 'Jan – Mar' },
+      { name: 'Q2', span: 'Apr – Jun' },
+      { name: 'Q3', span: 'Jul – Sep' },
+      { name: 'Q4', span: 'Oct – Dec' },
     ];
 
-    full12Months.forEach((bar, idx) => {
-      const qIdx = Math.floor(idx / 3);
-      if (qData[qIdx]) {
-        qData[qIdx].totalSeconds += bar.totalSeconds;
-        qData[qIdx].sessionCount += bar.sessionCount;
-        if (bar.totalSeconds > 0) qData[qIdx].activeMonths += 1;
-      }
-    });
+    return qNames.map((q, qIdx) => {
+      const mStart = qIdx * 3;
+      const mEnd = mStart + 3;
+      const qMonths = full12Months.slice(mStart, mEnd);
+      const totalSec = qMonths.reduce((acc, m) => acc + m.totalSeconds, 0);
+      const totalSes = qMonths.reduce((acc, m) => acc + m.sessionCount, 0);
+      const activeMo = qMonths.filter((m) => m.totalSeconds > 0).length;
 
-    return qData;
+      return {
+        ...q,
+        totalSeconds: totalSec,
+        sessionCount: totalSes,
+        activeMonths: activeMo,
+      };
+    });
   }, [full12Months]);
 
   const maxQuarterSeconds = useMemo(() => {
@@ -116,141 +74,108 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
   }, [quarters]);
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Top Toggle & Summary Subheader */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-md-on-surface-variant font-medium">
+    <div className="flex flex-col gap-5 min-w-0">
+      {/* Non-duplicative summary header */}
+      <div className="flex items-center justify-between text-xs text-md-on-surface-variant font-medium">
+        <span>
           <span className="font-bold text-md-on-surface">{activeMonthsCount}</span> of 12 months active
-          {totalFocusSeconds > 0 && (
-            <span className="hidden sm:inline text-md-outline">
-              {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
-            </span>
-          )}
-        </div>
-
-        {/* Calendar vs Quarters Segmented Toggle */}
-        <div className="inline-flex p-0.5 bg-md-surface-container rounded-xl border border-md-outline-variant/30 text-xs">
-          <button
-            type="button"
-            onClick={() => setDisplayMode('calendar')}
-            className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'calendar'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <CalendarIcon className="w-3.5 h-3.5" />
-            <span>Months</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setDisplayMode('quarters')}
-            className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'quarters'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <PieChart className="w-3.5 h-3.5" />
-            <span>Quarters</span>
-          </button>
-        </div>
+        </span>
       </div>
 
-      {displayMode === 'calendar' ? (
-        <div className="flex flex-col gap-2.5">
-          {/* 12-Month Calendar Grid: 4 cols on desktop, 3 cols on mobile */}
-          <div
-            className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 sm:gap-3"
-            onMouseLeave={() => setHoveredMonthKey(null)}
-          >
-            {full12Months.map((bar, idx) => {
-              const sec = bar.totalSeconds;
-              const isSelected = selectedMonthKey === bar.key;
-              const isCurrent = idx === currentMonthIdx;
+      {/* Quarterly Trajectory (Q1, Q2, Q3, Q4) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        {quarters.map((q) => {
+          const widthPct = maxQuarterSeconds > 0 ? Math.round((q.totalSeconds / maxQuarterSeconds) * 100) : 0;
 
-              return (
-                <button
-                  type="button"
-                  key={bar.key}
-                  onMouseEnter={() => setHoveredMonthKey(bar.key)}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSelectedMonthKey((prev) => (prev === bar.key ? null : bar.key));
-                  }}
+          return (
+            <div
+              key={q.name}
+              className="p-3 rounded-2xl bg-md-surface-container/40 border border-md-outline-variant/20 flex flex-col justify-between gap-2 min-w-0"
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-xs font-bold text-md-on-surface">{q.name}</span>
+                <span className="text-[10px] text-md-outline font-medium truncate">{q.span}</span>
+              </div>
+
+              <div>
+                <div className="text-sm font-extrabold text-md-on-surface tabular-nums">
+                  {q.totalSeconds > 0 ? formatCompactDuration(q.totalSeconds) : '0m'}
+                </div>
+                <div className="text-[10px] text-md-on-surface-variant font-medium">
+                  {q.sessionCount > 0 ? `${q.sessionCount} ${q.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
+                </div>
+              </div>
+
+              {/* Proportional Volume Bar */}
+              <div className="w-full h-1.5 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(q.totalSeconds > 0 ? 8 : 0, widthPct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 12-Month Horizontal Progress Grid (spacious & readable on mobile and desktop) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {full12Months.map((bar, idx) => {
+          const isCurrentMonth = idx === currentMonthIdx;
+          const widthPct = maxMonthSeconds > 0 ? Math.round((bar.totalSeconds / maxMonthSeconds) * 100) : 0;
+
+          return (
+            <div
+              key={bar.key}
+              className={clsx(
+                'px-3 py-2.5 rounded-2xl border flex items-center gap-3 min-w-0',
+                isCurrentMonth
+                  ? 'bg-md-primary/5 border-md-primary/30'
+                  : 'bg-md-surface-container/40 border-md-outline-variant/20'
+              )}
+            >
+              {/* Month Name */}
+              <div className="w-10 shrink-0 flex items-center gap-1">
+                <span
                   className={clsx(
-                    'aspect-auto min-h-[74px] sm:min-h-[88px] p-2 sm:p-3 rounded-2xl border transition-all duration-150 flex flex-col justify-between text-left cursor-pointer group select-none relative',
-                    getActivityIntensityStyle(sec, maxMonthSeconds, isSelected),
-                    isCurrent && !isSelected && 'ring-2 ring-md-primary/30'
+                    'text-xs font-bold uppercase tracking-wider',
+                    isCurrentMonth ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant'
                   )}
-                  aria-label={`${MONTH_NAMES[idx]}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  {/* Top Month Header */}
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs sm:text-sm font-bold leading-none">
-                      <span className="sm:hidden">{bar.label}</span>
-                      <span className="hidden sm:inline">{MONTH_NAMES[idx]}</span>
-                    </span>
-                    {isCurrent && (
-                      <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-md-primary/20 text-md-primary leading-none">
-                        NOW
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Bottom Duration & Session count */}
-                  {sec > 0 ? (
-                    <div className="flex flex-col w-full mt-2">
-                      <span className="text-xs sm:text-sm font-extrabold truncate leading-tight">
-                        {formatDurationHoursMins(sec)}
-                      </span>
-                      {bar.sessionCount > 0 && (
-                        <span className="text-[10px] opacity-75 truncate leading-tight mt-0.5">
-                          {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] opacity-25 mt-2">
-                      —
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dynamic Month Inspector Bar */}
-          <ActivityInspectionCard
-            inspectedBar={inspectedBar}
-            peakDay={peakMonth}
-            formatInspectedDate={getFullMonthName}
-            peakLabel="Peak Month"
-            noDataText="No focus recorded in this month"
-            emptyPrompt="Hover or tap any month to inspect focus duration."
-          />
-        </div>
-      ) : (
-        /* Quarters Mode */
-        <div className="flex flex-col gap-2.5">
-          {quarters.map((q) => (
-            <ActivityBarRow
-              key={q.quarter}
-              label={q.quarter}
-              subLabel={q.label}
-              totalSeconds={q.totalSeconds}
-              maxSeconds={maxQuarterSeconds}
-              secondaryText={
-                <span className="text-[10px] text-md-on-surface-variant">
-                  {q.activeMonths} active {q.activeMonths === 1 ? 'month' : 'months'}
+                  {bar.label}
                 </span>
-              }
-            />
-          ))}
-        </div>
-      )}
+              </div>
+
+              {/* Horizontal Proportional Track */}
+              <div className="flex-1 min-w-0 h-2.5 bg-md-surface-container-high rounded-full overflow-hidden">
+                <div
+                  className={clsx(
+                    'h-full rounded-full transition-[width] duration-300 ease-out',
+                    isCurrentMonth ? 'bg-md-primary' : bar.totalSeconds > 0 ? 'bg-md-primary/75' : 'bg-transparent'
+                  )}
+                  style={{ width: `${bar.totalSeconds > 0 ? Math.max(6, widthPct) : 0}%` }}
+                />
+              </div>
+
+              {/* Duration & Session Count */}
+              <div className="w-[74px] shrink-0 text-right leading-tight">
+                {bar.totalSeconds > 0 ? (
+                  <>
+                    <div className="text-xs font-bold text-md-on-surface tabular-nums">
+                      {formatCompactDuration(bar.totalSeconds)}
+                    </div>
+                    <div className="text-[10px] text-md-on-surface-variant font-medium tabular-nums">
+                      {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
+                    </div>
+                  </>
+                ) : (
+                  <span className="text-xs text-md-outline/40 font-medium">—</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };

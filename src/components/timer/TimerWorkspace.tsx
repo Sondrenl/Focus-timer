@@ -20,9 +20,10 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
     toggleStartPause,
     resetTimer,
     skipInterval,
+    previousInterval,
   } = useTimer();
 
-  // Keyboard shortcut listener (Space = Toggle, R = Reset, S = Skip)
+  // Keyboard shortcut listener (Space = Toggle, ArrowLeft = Back, ArrowRight = Skip, R = Reset)
   // Only active when the Timer tab is actively displayed to the user
   useEffect(() => {
     if (!isActiveView) return;
@@ -36,6 +37,12 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
       if (e.code === 'Space') {
         e.preventDefault();
         toggleStartPause();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        previousInterval();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        skipInterval();
       } else if (e.key === 'r' || e.key === 'R') {
         resetTimer();
       } else if (e.key === 's' || e.key === 'S') {
@@ -45,7 +52,7 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isActiveView, toggleStartPause, resetTimer, skipInterval]);
+  }, [isActiveView, toggleStartPause, resetTimer, skipInterval, previousInterval]);
 
   return (
     <div className="w-full max-w-xl mx-auto flex flex-col items-center justify-center py-6 px-4">
@@ -74,14 +81,16 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
           onToggleStartPause={toggleStartPause}
           onReset={resetTimer}
           onSkip={skipInterval}
+          onPrevious={previousInterval}
         />
       </div>
 
       {/* Helpful keyboard cues (hidden on mobile devices) */}
       <div className="hidden sm:flex items-center gap-4 text-[11px] text-md-outline mt-8 select-none font-mono">
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">Space</kbd> Start/Pause</span>
+        <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">←</kbd> Back</span>
+        <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">→</kbd> Skip</span>
         <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">R</kbd> Reset</span>
-        <span><kbd className="px-1.5 py-0.5 rounded bg-md-surface-container border border-md-outline-variant/40">S</kbd> Skip</span>
       </div>
     </div>
   );

@@ -27,11 +27,19 @@ export const Modal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center pt-3 px-3 pb-4 md:p-4 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-start md:items-center justify-center pt-3 px-3 pb-4 md:p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       {/* Scrim / Backdrop */}
       <div
         className="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
         onClick={onClose}
+        aria-hidden="true"
       />
 
       {/* M3 Dialog Container - anchored near top on mobile so virtual keyboards never cover lower half, centered on desktop */}

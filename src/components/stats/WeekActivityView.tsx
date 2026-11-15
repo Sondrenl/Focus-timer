@@ -1,57 +1,33 @@
 import React, { useState, useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins } from '../../utils/formatters';
+import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
 import { WEEKDAY_NAMES, MONTH_NAMES, toDateKey } from '../../utils/dates';
-import { Calendar as CalendarIcon, BarChart2 } from 'lucide-react';
-import { ActivityInspectionCard } from './ActivityInspectionCard';
-import { ActivityBarRow } from './ActivityBarRow';
 import { clsx } from 'clsx';
-import { getActivityIntensityStyle } from './activityUtils';
 
 interface WeekActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
 export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars }) => {
-  const [displayMode, setDisplayMode] = useState<'calendar' | 'list'>('calendar');
   const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
   const todayKey = useMemo(() => toDateKey(new Date()), []);
 
-  // Map of dateKey -> bar
   const dayMap = useMemo(() => {
     const map = new Map<string, ActivityBarStat>();
     activityBars.forEach((bar) => map.set(bar.key, bar));
     return map;
   }, [activityBars]);
 
-  // Max focus seconds on any single day for intensity scaling
   const maxDaySeconds = useMemo(() => {
     return Math.max(1, ...activityBars.map((b) => b.totalSeconds));
   }, [activityBars]);
 
-  // Peak day of the week
-  const peakDay = useMemo(() => {
-    let top: ActivityBarStat | null = null;
-    for (const bar of activityBars) {
-      if (bar.totalSeconds > 0 && (!top || bar.totalSeconds > top.totalSeconds)) {
-        top = bar;
-      }
-    }
-    return top;
-  }, [activityBars]);
-
-  // Active days count & total focus
   const totalActiveDays = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
   }, [activityBars]);
 
-  const totalFocusSeconds = useMemo(() => {
-    return activityBars.reduce((acc, b) => acc + b.totalSeconds, 0);
-  }, [activityBars]);
-
-  // Currently inspected day (hovered/selected or null)
   const activeKey = hoveredDayKey || selectedDayKey;
   const inspectedBar = useMemo(() => {
     if (!activeKey) return null;
@@ -67,167 +43,121 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Top Toggle & Summary Subheader */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs text-md-on-surface-variant font-medium">
+      {/* Non-duplicative summary header */}
+      <div className="flex items-center justify-between text-xs text-md-on-surface-variant font-medium">
+        <span>
           <span className="font-bold text-md-on-surface">{totalActiveDays}</span> of 7 days active this week
-          {totalFocusSeconds > 0 && (
-            <span className="hidden sm:inline text-md-outline">
-              {' '}• {formatDurationHoursMins(totalFocusSeconds)} total
-            </span>
-          )}
-        </div>
-
-        {/* Calendar vs List Segmented Toggle */}
-        <div className="inline-flex p-0.5 bg-md-surface-container rounded-xl border border-md-outline-variant/30 text-xs">
-          <button
-            type="button"
-            onClick={() => setDisplayMode('calendar')}
-            className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'calendar'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <CalendarIcon className="w-3.5 h-3.5" />
-            <span>Calendar</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setDisplayMode('list')}
-            className={clsx(
-              'px-2.5 py-1 rounded-lg font-semibold transition-all flex items-center gap-1.5',
-              displayMode === 'list'
-                ? 'bg-md-primary-container text-md-on-primary-container shadow-xs'
-                : 'text-md-on-surface-variant hover:text-md-on-surface'
-            )}
-          >
-            <BarChart2 className="w-3.5 h-3.5" />
-            <span>List</span>
-          </button>
-        </div>
+        </span>
       </div>
 
-      {displayMode === 'calendar' ? (
-        <div className="flex flex-col gap-2.5">
-          {/* Weekday Header Row */}
-          <div className="grid grid-cols-7 gap-1.5 sm:gap-2.5 text-center select-none">
-            {activityBars.map((bar) => {
-              const isToday = bar.key === todayKey;
-              return (
+      {/* 7-Day Focus Distribution Bar Chart */}
+      <div
+        className="flex items-end justify-between gap-1.5 sm:gap-3 h-44 sm:h-52 pt-6 pb-2 px-1 sm:px-2 rounded-2xl bg-md-surface-container/30 border border-md-outline-variant/20 select-none"
+        onMouseLeave={() => setHoveredDayKey(null)}
+      >
+        {activityBars.map((bar) => {
+          const isToday = bar.key === todayKey;
+          const isSelected = activeKey === bar.key;
+          const heightPct = maxDaySeconds > 0 ? Math.round((bar.totalSeconds / maxDaySeconds) * 100) : 0;
+
+          return (
+            <button
+              type="button"
+              key={bar.key}
+              onClick={() => {
+                setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key));
+                setHoveredDayKey(null);
+              }}
+              onMouseEnter={() => setHoveredDayKey(bar.key)}
+              className="flex-1 min-w-0 h-full flex flex-col items-center justify-end gap-1.5 p-1 rounded-xl cursor-pointer group focus:outline-none select-none touch-manipulation"
+            >
+              {/* Duration Label above Bar */}
+              <div className="text-[10px] sm:text-xs font-bold tabular-nums min-h-[16px] text-center">
+                {bar.totalSeconds > 0 ? (
+                  <span className={clsx(isSelected ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant')}>
+                    {formatCompactDuration(bar.totalSeconds)}
+                  </span>
+                ) : (
+                  <span className="text-md-outline/30">—</span>
+                )}
+              </div>
+
+              {/* Vertical Bar Track & Filled Progress */}
+              <div
+                className={clsx(
+                  'w-full max-w-[32px] sm:max-w-[44px] flex-1 bg-md-surface-container-high rounded-xl overflow-hidden flex flex-col justify-end p-0.5 border',
+                  isSelected
+                    ? 'border-md-primary ring-1 ring-md-primary/30'
+                    : isToday
+                    ? 'border-md-primary/50'
+                    : 'border-transparent'
+                )}
+              >
                 <div
-                  key={`header-${bar.key}`}
                   className={clsx(
-                    'text-[11px] font-bold uppercase tracking-wider py-1',
-                    isToday ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant/80'
+                    'w-full rounded-lg transition-[height] duration-300 ease-out',
+                    isSelected
+                      ? 'bg-md-primary'
+                      : isToday
+                      ? 'bg-md-primary/90'
+                      : bar.totalSeconds > 0
+                      ? 'bg-md-primary/70'
+                      : 'bg-transparent'
+                  )}
+                  style={{ height: `${bar.totalSeconds > 0 ? Math.max(8, heightPct) : 0}%` }}
+                />
+              </div>
+
+              {/* Day Label & Date at Bottom */}
+              <div className="flex flex-col items-center leading-none gap-0.5 pt-0.5">
+                <span
+                  className={clsx(
+                    'text-[10px] sm:text-xs font-bold uppercase tracking-wider',
+                    isToday ? 'text-md-primary font-extrabold' : 'text-md-on-surface-variant'
                   )}
                 >
-                  <span>{bar.label}</span>
-                  {isToday && <span className="block text-[9px] font-normal lowercase tracking-normal">today</span>}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* 7-Column Calendar Grid */}
-          <div
-            className="grid grid-cols-7 gap-1.5 sm:gap-2.5"
-            onMouseLeave={() => setHoveredDayKey(null)}
-          >
-            {activityBars.map((bar) => {
-              const sec = bar.totalSeconds;
-              const isSelected = selectedDayKey === bar.key;
-              const isToday = bar.key === todayKey;
-
-              return (
-                <button
-                  type="button"
-                  key={bar.key}
-                  onMouseEnter={() => setHoveredDayKey(bar.key)}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setSelectedDayKey((prev) => (prev === bar.key ? null : bar.key));
-                  }}
+                  {bar.label}
+                </span>
+                <span
                   className={clsx(
-                    'aspect-square sm:aspect-auto sm:min-h-[82px] p-1.5 sm:p-2.5 rounded-2xl border transition-all duration-150 flex flex-col items-center justify-center text-center sm:items-start sm:justify-between sm:text-left cursor-pointer group select-none relative',
-                    getActivityIntensityStyle(sec, maxDaySeconds, isSelected),
-                    isToday && !isSelected && 'ring-2 ring-md-primary/30'
+                    'text-[10px] sm:text-[11px] tabular-nums',
+                    isToday ? 'text-md-primary font-bold' : 'text-md-outline'
                   )}
-                  aria-label={`${bar.label} ${bar.subLabel}: ${sec > 0 ? formatDurationHoursMins(sec) : 'No focus'}`}
                 >
-                  {/* Mobile: Centered date number and activity indicator dot */}
-                  <div className="flex sm:hidden flex-col items-center justify-center">
-                    <span className="text-xs font-bold leading-none">
-                      {bar.subLabel}
-                    </span>
-                    {sec > 0 ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-85 mt-1" />
-                    ) : (
-                      <span className="text-[10px] opacity-30 mt-0.5 leading-none">—</span>
-                    )}
-                  </div>
+                  {bar.subLabel}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
 
-                  {/* Desktop: Top date number with today badge */}
-                  <div className="hidden sm:flex items-center justify-between w-full">
-                    <span className="text-sm font-bold leading-none">
-                      {bar.subLabel}
-                    </span>
-                    {isToday && (
-                      <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-md-primary/20 text-md-primary leading-none">
-                        TODAY
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Desktop: Bottom Duration & Session count */}
-                  {sec > 0 ? (
-                    <div className="hidden sm:flex flex-col w-full mt-2">
-                      <span className="text-xs font-extrabold truncate leading-tight">
-                        {formatDurationHoursMins(sec)}
-                      </span>
-                      {bar.sessionCount > 0 && (
-                        <span className="text-[10px] opacity-75 truncate leading-tight mt-0.5">
-                          {bar.sessionCount} {bar.sessionCount === 1 ? 'session' : 'sessions'}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="hidden sm:block text-[11px] opacity-25 mt-2">
-                      —
-                    </div>
-                  )}
-                </button>
-              );
-            })}
+      {/* Minimal Status Inspector */}
+      <div className="min-h-[28px] px-3 py-1.5 rounded-xl bg-md-surface-container/50 border border-md-outline-variant/20 flex items-center justify-between text-xs">
+        {inspectedBar ? (
+          <div className="flex items-center justify-between w-full">
+            <span className="font-bold text-md-on-surface">
+              {formatInspectedDate(inspectedBar.key)}
+            </span>
+            <span className="text-md-on-surface-variant">
+              {inspectedBar.totalSeconds > 0 ? (
+                <>
+                  <strong className="text-md-primary font-bold">
+                    {formatDurationHoursMins(inspectedBar.totalSeconds)}
+                  </strong>{' '}
+                  ({inspectedBar.sessionCount} {inspectedBar.sessionCount === 1 ? 'session' : 'sessions'})
+                </>
+              ) : (
+                <span className="text-md-outline">No focus time logged</span>
+              )}
+            </span>
           </div>
-
-          {/* Dynamic Day Inspector Bar */}
-          <ActivityInspectionCard
-            inspectedBar={inspectedBar}
-            peakDay={peakDay}
-            formatInspectedDate={formatInspectedDate}
-          />
-        </div>
-      ) : (
-        /* List / Bars View Mode */
-        <div className="flex flex-col gap-2.5">
-          {activityBars.map((bar) => {
-            const isToday = bar.key === todayKey;
-            return (
-              <ActivityBarRow
-                key={bar.key}
-                label={`${bar.label} ${bar.subLabel || ''}`.trim()}
-                badge={isToday ? <span className="text-[10px] text-md-primary font-semibold">Today</span> : undefined}
-                totalSeconds={bar.totalSeconds}
-                sessionCount={bar.sessionCount}
-                maxSeconds={maxDaySeconds}
-                isHighlighted={isToday}
-              />
-            );
-          })}
-        </div>
-      )}
+        ) : (
+          <span className="text-md-outline">
+            Tap or hover any day to view details
+          </span>
+        )}
+      </div>
     </div>
   );
 };

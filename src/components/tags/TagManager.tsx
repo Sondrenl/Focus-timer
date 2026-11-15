@@ -3,6 +3,7 @@ import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon } from 'lucide-
 import { useApp } from '../../context/AppContext';
 import { Tag } from '../../types/tag';
 import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
 import { TagFormModal } from './TagFormModal';
 import { clsx } from 'clsx';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
@@ -139,36 +140,40 @@ export const TagManager: React.FC = () => {
                     <>
                       <button
                         onClick={() => handleEdit(tag)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-primary hover:bg-md-surface-container transition-colors shrink-0"
                         title="Edit Tag"
+                        aria-label="Edit Tag"
                       >
-                        <Edit2 className="w-5 h-5 md:w-4 md:h-4" />
+                        <Edit2 className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
 
                       <button
                         onClick={() => archiveTag(tag.id)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors shrink-0"
                         title="Archive Tag (Move to archived list before deleting)"
+                        aria-label="Archive Tag"
                       >
-                        <Archive className="w-5 h-5 md:w-4 md:h-4" />
+                        <Archive className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
                     </>
                   ) : (
                     <>
                       <button
                         onClick={() => unarchiveTag(tag.id)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors shrink-0"
                         title="Restore Tag"
+                        aria-label="Restore Tag"
                       >
-                        <RotateCcw className="w-5 h-5 md:w-4 md:h-4" />
+                        <RotateCcw className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
 
                       <button
                         onClick={() => setDeleteConfirmId(tag.id)}
-                        className="w-11 h-11 md:w-auto md:h-auto md:p-2 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors"
+                        className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-md-error hover:bg-md-error/10 transition-colors shrink-0"
                         title="Delete Tag Permanently"
+                        aria-label="Delete Tag Permanently"
                       >
-                        <Trash2 className="w-5 h-5 md:w-4 md:h-4" />
+                        <Trash2 className="w-5 h-5 md:w-4.5 md:h-4.5" />
                       </button>
                     </>
                   )}
@@ -180,36 +185,37 @@ export const TagManager: React.FC = () => {
       )}
 
       {/* Delete Confirmation Modal */}
-      {deleteConfirmId && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-md-surface-container-lowest p-6 rounded-3xl max-w-sm w-full border border-md-outline-variant/30 shadow-elevation-3">
-            <h3 className="text-base font-bold text-md-on-surface mb-2">Delete Tag Permanently?</h3>
-            <p className="text-xs text-md-on-surface-variant mb-5 leading-relaxed">
-              This will permanently delete this tag. Completed sessions associated with this tag will become "Unassigned".
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="text"
-                size="sm"
-                onClick={() => setDeleteConfirmId(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="filled"
-                size="sm"
-                className="bg-md-error text-white hover:bg-red-700"
-                onClick={async () => {
-                  await deleteTag(deleteConfirmId);
-                  setDeleteConfirmId(null);
-                }}
-              >
-                Delete Tag
-              </Button>
-            </div>
-          </div>
+      <Modal
+        isOpen={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        title="Delete Tag"
+      >
+        <p className="text-xs text-md-on-surface-variant mb-5 leading-relaxed">
+          This will permanently delete this tag. Completed sessions associated with this tag will become "Unassigned".
+        </p>
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="text"
+            size="sm"
+            onClick={() => setDeleteConfirmId(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="filled"
+            size="sm"
+            className="bg-md-error text-white hover:bg-red-700"
+            onClick={async () => {
+              if (deleteConfirmId) {
+                await deleteTag(deleteConfirmId);
+                setDeleteConfirmId(null);
+              }
+            }}
+          >
+            Delete Tag
+          </Button>
         </div>
-      )}
+      </Modal>
 
       {/* Create / Edit Tag Modal */}
       <TagFormModal

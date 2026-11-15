@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { computeNextInterval, getDurationForType } from '../src/utils/timerTransitions';
+import {
+  computeNextInterval,
+  computePreviousInterval,
+  getDurationForType,
+} from '../src/utils/timerTransitions';
 import { UserSettings } from '../src/types/settings';
 
 const mockSettings: UserSettings = {
@@ -78,4 +82,45 @@ describe('Timer State Machine - Interval Transitions', () => {
     const fromWork = computeNextInterval('WORK', 2, autoSettings);
     expect(fromWork.shouldAutoStart).toBe(false);
   });
+
+  describe('computePreviousInterval', () => {
+    it('transitions from WORK (cycle 1) to LONG_BREAK (cycle longBreakInterval)', () => {
+      const prev = computePreviousInterval('WORK', 1, mockSettings);
+      expect(prev.previousType).toBe('LONG_BREAK');
+      expect(prev.previousCycle).toBe(4); // mockSettings.longBreakInterval = 4
+      expect(prev.previousDuration).toBe(20 * 60);
+    });
+
+    it('transitions from WORK (cycle N > 1) to SHORT_BREAK (cycle N - 1)', () => {
+      const prevCycle2 = computePreviousInterval('WORK', 2, mockSettings);
+      expect(prevCycle2.previousType).toBe('SHORT_BREAK');
+      expect(prevCycle2.previousCycle).toBe(1);
+      expect(prevCycle2.previousDuration).toBe(5 * 60);
+
+      const prevCycle4 = computePreviousInterval('WORK', 4, mockSettings);
+      expect(prevCycle4.previousType).toBe('SHORT_BREAK');
+      expect(prevCycle4.previousCycle).toBe(3);
+      expect(prevCycle4.previousDuration).toBe(5 * 60);
+    });
+
+    it('transitions from SHORT_BREAK (cycle N) to WORK (cycle N)', () => {
+      const prevBreak1 = computePreviousInterval('SHORT_BREAK', 1, mockSettings);
+      expect(prevBreak1.previousType).toBe('WORK');
+      expect(prevBreak1.previousCycle).toBe(1);
+      expect(prevBreak1.previousDuration).toBe(25 * 60);
+
+      const prevBreak3 = computePreviousInterval('SHORT_BREAK', 3, mockSettings);
+      expect(prevBreak3.previousType).toBe('WORK');
+      expect(prevBreak3.previousCycle).toBe(3);
+      expect(prevBreak3.previousDuration).toBe(25 * 60);
+    });
+
+    it('transitions from LONG_BREAK (cycle N) to WORK (cycle N)', () => {
+      const prevLongBreak = computePreviousInterval('LONG_BREAK', 4, mockSettings);
+      expect(prevLongBreak.previousType).toBe('WORK');
+      expect(prevLongBreak.previousCycle).toBe(4);
+      expect(prevLongBreak.previousDuration).toBe(25 * 60);
+    });
+  });
 });
+
