@@ -2,7 +2,8 @@ import React, { useMemo } from 'react';
 import { CompletedSession } from '../../types/session';
 import { ActivityBarStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
-import { Sunrise, Sun, Sunset, Moon } from 'lucide-react';
+import { computeDayTimeRangeBreakdown, DayTimeRangeId } from '../../utils/stats/dayTimeRanges';
+import { Sunrise, Sun, CloudSun, Sunset, Moon } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface DayActivityViewProps {
@@ -10,131 +11,62 @@ interface DayActivityViewProps {
   activityBars?: ActivityBarStat[];
 }
 
-interface TimeQuadrant {
-  id: 'morning' | 'afternoon' | 'evening' | 'night';
-  title: string;
-  timeRange: string;
-  icon: React.ComponentType<{ className?: string }>;
-  iconColor: string;
-  badgeBg: string;
-  totalSeconds: number;
-  sessionCount: number;
+const RANGE_META: Record<
+  DayTimeRangeId,
+  {
+    icon: React.ComponentType<{ className?: string }>;
+    iconColor: string;
+    badgeBg: string;
+  }
+> = {
+  morning: {
+    icon: Sunrise,
+    iconColor: 'text-amber-500',
+    badgeBg: 'bg-amber-500/10 border-amber-500/20',
+  },
+  midday: {
+    icon: Sun,
+    iconColor: 'text-yellow-600',
+    badgeBg: 'bg-yellow-500/10 border-yellow-500/20',
+  },
+  afternoon: {
+    icon: CloudSun,
+    iconColor: 'text-orange-500',
+    badgeBg: 'bg-orange-500/10 border-orange-500/20',
+  },
+  evening: {
+    icon: Sunset,
+    iconColor: 'text-indigo-500',
+    badgeBg: 'bg-indigo-500/10 border-indigo-500/20',
+  },
+  night: {
+    icon: Moon,
+    iconColor: 'text-purple-500',
+    badgeBg: 'bg-purple-500/10 border-purple-500/20',
+  },
+};
+
+function formatBucketDuration(totalSeconds: number): string {
+  if (totalSeconds <= 0) return '0m';
+  const formatted = formatDurationHoursMins(totalSeconds);
+  return formatted === '0m' ? '<1m' : formatted;
 }
 
 export const DayActivityView: React.FC<DayActivityViewProps> = ({
   sessions = [],
   activityBars = [],
 }) => {
-  // Filter to work/focus sessions
-  const workSessions = useMemo(() => {
-    return sessions
-      .filter((s) => s.sessionType === 'WORK')
-      .sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
-  }, [sessions]);
-
-  // Aggregate focus time and sessions into 4 natural daily quadrants
-  const quadrants = useMemo<TimeQuadrant[]>(() => {
-    let morningSec = 0;
-    let morningCount = 0;
-    let afternoonSec = 0;
-    let afternoonCount = 0;
-    let eveningSec = 0;
-    let eveningCount = 0;
-    let nightSec = 0;
-    let nightCount = 0;
-
-    if (workSessions.length > 0) {
-      workSessions.forEach((s) => {
-        const d = new Date(s.completedAt);
-        const hour = d.getHours();
-        if (hour >= 6 && hour < 12) {
-          morningSec += s.durationSeconds;
-          morningCount += 1;
-        } else if (hour >= 12 && hour < 17) {
-          afternoonSec += s.durationSeconds;
-          afternoonCount += 1;
-        } else if (hour >= 17 && hour < 22) {
-          eveningSec += s.durationSeconds;
-          eveningCount += 1;
-        } else {
-          nightSec += s.durationSeconds;
-          nightCount += 1;
-        }
-      });
-    } else if (activityBars.length > 0) {
-      // Fallback from hourly activityBars if direct session objects aren't available
-      activityBars.forEach((bar) => {
-        const match = bar.key.match(/hour-(\d+)/) || bar.label.match(/^(\d+):/);
-        const h = match ? parseInt(match[1], 10) : NaN;
-        if (!isNaN(h)) {
-          if (h >= 6 && h < 12) {
-            morningSec += bar.totalSeconds;
-            morningCount += bar.sessionCount;
-          } else if (h >= 12 && h < 17) {
-            afternoonSec += bar.totalSeconds;
-            afternoonCount += bar.sessionCount;
-          } else if (h >= 17 && h < 22) {
-            eveningSec += bar.totalSeconds;
-            eveningCount += bar.sessionCount;
-          } else {
-            nightSec += bar.totalSeconds;
-            nightCount += bar.sessionCount;
-          }
-        }
-      });
-    }
-
-    return [
-      {
-        id: 'morning',
-        title: 'Morning',
-        timeRange: '06:00 – 12:00',
-        icon: Sunrise,
-        iconColor: 'text-amber-500',
-        badgeBg: 'bg-amber-500/10 border-amber-500/20',
-        totalSeconds: morningSec,
-        sessionCount: morningCount,
-      },
-      {
-        id: 'afternoon',
-        title: 'Afternoon',
-        timeRange: '12:00 – 17:00',
-        icon: Sun,
-        iconColor: 'text-orange-500',
-        badgeBg: 'bg-orange-500/10 border-orange-500/20',
-        totalSeconds: afternoonSec,
-        sessionCount: afternoonCount,
-      },
-      {
-        id: 'evening',
-        title: 'Evening',
-        timeRange: '17:00 – 22:00',
-        icon: Sunset,
-        iconColor: 'text-indigo-500',
-        badgeBg: 'bg-indigo-500/10 border-indigo-500/20',
-        totalSeconds: eveningSec,
-        sessionCount: eveningCount,
-      },
-      {
-        id: 'night',
-        title: 'Night',
-        timeRange: '22:00 – 06:00',
-        icon: Moon,
-        iconColor: 'text-purple-500',
-        badgeBg: 'bg-purple-500/10 border-purple-500/20',
-        totalSeconds: nightSec,
-        sessionCount: nightCount,
-      },
-    ];
-  }, [workSessions, activityBars]);
+  const ranges = useMemo(() => {
+    return computeDayTimeRangeBreakdown(sessions, activityBars);
+  }, [sessions, activityBars]);
 
   const totalDaySeconds = useMemo(() => {
-    return quadrants.reduce((acc, q) => acc + q.totalSeconds, 0);
-  }, [quadrants]);
+    return ranges.reduce((acc, r) => acc + r.totalSeconds, 0);
+  }, [ranges]);
 
-  const maxQuadrantSeconds = useMemo(() => {
-    return Math.max(1, ...quadrants.map((q) => q.totalSeconds));
-  }, [quadrants]);
+  const maxRangeSeconds = useMemo(() => {
+    return Math.max(1, ...ranges.map((r) => r.totalSeconds));
+  }, [ranges]);
 
   if (totalDaySeconds === 0) {
     return (
@@ -145,55 +77,66 @@ export const DayActivityView: React.FC<DayActivityViewProps> = ({
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {quadrants.map((q) => {
-        const Icon = q.icon;
-        const pct = maxQuadrantSeconds > 0 ? Math.round((q.totalSeconds / maxQuadrantSeconds) * 100) : 0;
-        const shareOfTotal = totalDaySeconds > 0 ? Math.round((q.totalSeconds / totalDaySeconds) * 100) : 0;
+    <div className="flex flex-col gap-2.5 min-w-0">
+      {ranges.map((r) => {
+        const meta = RANGE_META[r.id];
+        const Icon = meta.icon;
+        const pct = maxRangeSeconds > 0 ? Math.round((r.totalSeconds / maxRangeSeconds) * 100) : 0;
+        const shareOfTotal = totalDaySeconds > 0 ? Math.round((r.totalSeconds / totalDaySeconds) * 100) : 0;
 
         return (
           <div
-            key={q.id}
-            className="p-3.5 sm:p-4 rounded-2xl border border-md-outline-variant/30 bg-md-surface-container/40 flex flex-col justify-between gap-3"
+            key={r.id}
+            className="p-3 sm:p-3.5 rounded-2xl border border-md-outline-variant/25 bg-md-surface-container/40 flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-4 min-w-0"
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5">
-                <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center border shrink-0', q.badgeBg)}>
-                  <Icon className={clsx('w-5 h-5', q.iconColor)} />
+            {/* Header / Left label */}
+            <div className="flex items-center justify-between gap-2 sm:w-48 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center border shrink-0', meta.badgeBg)}>
+                  <Icon className={clsx('w-5 h-5', meta.iconColor)} />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="text-xs font-bold text-md-on-surface">
-                    {q.title}
+                    {r.title}
                   </div>
-                  <div className="text-[11px] text-md-outline font-medium">
-                    {q.timeRange}
+                  <div className="text-[11px] text-md-outline font-medium tabular-nums">
+                    {r.timeRange}
                   </div>
                 </div>
               </div>
 
-              <div className="text-right">
-                <div className={clsx('text-xs font-bold tabular-nums', q.totalSeconds > 0 ? 'text-md-on-surface' : 'text-md-outline/60')}>
-                  {q.totalSeconds > 0 ? formatDurationHoursMins(q.totalSeconds) : '0m'}
-                </div>
-                <div className="text-[10px] text-md-on-surface-variant font-medium">
-                  {q.sessionCount > 0 ? `${q.sessionCount} ${q.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
-                </div>
+              {/* Mobile duration */}
+              <div
+                className={clsx(
+                  'sm:hidden text-xs font-bold tabular-nums shrink-0',
+                  r.totalSeconds > 0 ? 'text-md-on-surface' : 'text-md-outline/50'
+                )}
+              >
+                {formatBucketDuration(r.totalSeconds)}
               </div>
             </div>
 
-            {/* Intensity Progress Bar */}
-            <div className="w-full flex items-center gap-2">
-              <div className="flex-1 h-2 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
+            {/* Proportional Bar & Share % */}
+            <div className="flex-1 min-w-0 flex items-center gap-2.5">
+              <div className="flex-1 min-w-0 h-2 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
-                  style={{ width: `${Math.max(q.totalSeconds > 0 ? 8 : 0, pct)}%` }}
+                  className="h-full rounded-full bg-md-primary transition-[width] duration-300 ease-out"
+                  style={{ width: `${r.totalSeconds > 0 ? Math.max(6, pct) : 0}%` }}
                 />
               </div>
-              {shareOfTotal > 0 && (
-                <span className="text-[10px] font-bold text-md-outline tabular-nums shrink-0 w-8 text-right">
-                  {shareOfTotal}%
-                </span>
+              <span className="text-[10px] font-bold text-md-outline tabular-nums shrink-0 w-8 text-right">
+                {shareOfTotal > 0 ? `${shareOfTotal}%` : '—'}
+              </span>
+            </div>
+
+            {/* Desktop duration */}
+            <div
+              className={clsx(
+                'hidden sm:block w-16 text-right text-xs font-bold tabular-nums shrink-0',
+                r.totalSeconds > 0 ? 'text-md-on-surface' : 'text-md-outline/50'
               )}
+            >
+              {formatBucketDuration(r.totalSeconds)}
             </div>
           </div>
         );
