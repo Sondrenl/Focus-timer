@@ -137,7 +137,7 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
       }
     }
 
-    return weeks;
+    return weeks.reverse();
   }, [activityBars, todayKey]);
 
   const maxWeekSeconds = useMemo(() => {

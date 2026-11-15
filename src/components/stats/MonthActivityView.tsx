@@ -160,7 +160,7 @@ export const MonthActivityView: React.FC<MonthActivityViewProps> = ({ activityBa
       }
     }
 
-    return weeks;
+    return weeks.reverse();
   }, [activityBars, year, monthIndex, daysInMonth, monthName, dayMap, todayKey]);
 
   const maxWeekSeconds = useMemo(() => {
