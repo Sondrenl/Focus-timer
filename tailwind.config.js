@@ -52,6 +52,7 @@ export default {
       },
       fontFamily: {
         sans: ['"Roboto Flex"', '"Roboto"', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['"Droid Sans Mono"', 'monospace'],
       },
       boxShadow: {
         'xs': '0px 1px 2px rgba(0, 0, 0, 0.03)',

@@ -67,7 +67,7 @@ export const StatisticsView: React.FC = () => {
     <div className="w-full max-w-4xl mx-auto py-6 px-4 flex flex-col gap-6 min-w-0">
       {/* View Header */}
       <div>
-        <h2 className="text-2xl font-bold text-md-on-surface">Statistics & Insights</h2>
+        <h2 className="text-2xl font-bold text-md-on-surface">Statistics</h2>
       </div>
 
       {auth.isTokenExpired && (
