@@ -292,6 +292,177 @@ export const reset = mutation({
   },
 });
 
+export const complete = mutation({
+  args: {
+    completedTimerRunId: v.optional(v.union(v.string(), v.null())),
+    nextSessionType: v.union(
+      v.literal("WORK"),
+      v.literal("SHORT_BREAK"),
+      v.literal("LONG_BREAK")
+    ),
+    nextDurationSeconds: v.number(),
+    nextCurrentCycle: v.number(),
+    autoStartNext: v.optional(v.boolean()),
+    nextTimerRunId: v.optional(v.union(v.string(), v.null())),
+    tagId: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const user = await requireUser(ctx, true);
+    if (!Number.isFinite(args.nextDurationSeconds) || args.nextDurationSeconds < 1 || args.nextDurationSeconds > 86400) {
+      throw new Error("nextDurationSeconds must be between 1 and 86400.");
+    }
+    if (!Number.isFinite(args.nextCurrentCycle) || args.nextCurrentCycle < 1 || args.nextCurrentCycle > 100) {
+      throw new Error("nextCurrentCycle must be between 1 and 100.");
+    }
+    if (args.nextTimerRunId && (args.nextTimerRunId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(args.nextTimerRunId))) {
+      throw new Error("Invalid nextTimerRunId format.");
+    }
+    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
+      throw new Error("Invalid tagId format.");
+    }
+
+    const existing = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+
+    if (!existing) {
+      return null;
+    }
+
+    const nowMs = Date.now();
+    const settings = user.settings ?? DEFAULT_SETTINGS;
+    const sanitizedTagId = args.tagId !== undefined ? (args.tagId || undefined) : existing.tagId;
+    const shouldAutoStart = Boolean(args.autoStartNext && args.nextTimerRunId);
+
+    // Case 1: Server onTimerCompleted has NOT run yet — client beat it cleanly.
+    if (
+      existing.status === "RUNNING" &&
+      (!args.completedTimerRunId || !existing.timerRunId || existing.timerRunId === args.completedTimerRunId)
+    ) {
+      // Guard against premature completion calls more than 5s before targetEndTime
+      if (existing.targetEndTime && nowMs < existing.targetEndTime - 5000) {
+        return existing;
+      }
+
+      await cancelScheduledJob(ctx, existing.scheduledCompletionId);
+
+      const completedAtMs =
+        existing.targetEndTime && existing.targetEndTime < nowMs
+          ? existing.targetEndTime
+          : nowMs;
+      const completedAtIso = new Date(completedAtMs).toISOString();
+
+      // Record completed session if not already recorded within ±45s
+      const recent = await ctx.db
+        .query("sessions")
+        .withIndex("by_user_completed", (q) =>
+          q
+            .eq("userId", user._id)
+            .gte("completedAt", new Date(completedAtMs - 45000).toISOString())
+        )
+        .collect();
+
+      const alreadyRecorded = recent.some(
+        (s) =>
+          s.sessionType === existing.sessionType &&
+          Math.abs(Date.parse(s.completedAt) - completedAtMs) <= 45000
+      );
+      if (!alreadyRecorded) {
+        await ctx.db.insert("sessions", {
+          userId: user._id,
+          tagId: existing.tagId,
+          sessionType: existing.sessionType,
+          durationSeconds: existing.totalSeconds,
+          completedAt: completedAtIso,
+        });
+      }
+
+      let nextScheduledCompletionId: Id<"_scheduled_functions"> | undefined;
+      let nextTargetEndTime: number | undefined;
+      let nextTimerRunId: string | undefined;
+
+      if (shouldAutoStart && args.nextTimerRunId) {
+        nextTimerRunId = args.nextTimerRunId;
+        nextTargetEndTime = nowMs + args.nextDurationSeconds * 1000;
+        nextScheduledCompletionId = await ctx.scheduler.runAfter(
+          args.nextDurationSeconds * 1000,
+          internal.timer.onTimerCompleted,
+          {
+            userId: user._id,
+            timerRunId: nextTimerRunId,
+          }
+        );
+      }
+
+      const nextPayload = {
+        sessionType: args.nextSessionType,
+        status: shouldAutoStart ? ("RUNNING" as const) : ("IDLE" as const),
+        remainingSeconds: args.nextDurationSeconds,
+        totalSeconds: args.nextDurationSeconds,
+        targetEndTime: nextTargetEndTime,
+        currentCycle: args.nextCurrentCycle,
+        tagId: sanitizedTagId,
+        timerRunId: nextTimerRunId,
+        scheduledCompletionId: nextScheduledCompletionId,
+        updatedAtMs: nowMs,
+      };
+
+      await ctx.db.patch(existing._id, nextPayload);
+
+      // Dispatch push notification for the completed run (unless already >2m stale)
+      const withinPushFreshnessWindow =
+        !existing.targetEndTime || nowMs - existing.targetEndTime <= 120_000;
+      if (settings.notificationsEnabled !== false && withinPushFreshnessWindow) {
+        await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
+          userId: user._id,
+          sessionType: existing.sessionType,
+          timerRunId: existing.timerRunId || args.completedTimerRunId || `run-${nowMs}`,
+          completedAtMs: nowMs,
+        });
+      }
+
+      return nextPayload;
+    }
+
+    // Case 2: onTimerCompleted ALREADY ran on the server (so push was already scheduled).
+    // If autoStartNext is enabled and the server just transitioned to IDLE, start the next run.
+    if (
+      existing.status === "IDLE" &&
+      shouldAutoStart &&
+      args.nextTimerRunId &&
+      nowMs - existing.updatedAtMs < 15_000
+    ) {
+      const nextTargetEndTime = nowMs + args.nextDurationSeconds * 1000;
+      const nextScheduledCompletionId = await ctx.scheduler.runAfter(
+        args.nextDurationSeconds * 1000,
+        internal.timer.onTimerCompleted,
+        {
+          userId: user._id,
+          timerRunId: args.nextTimerRunId,
+        }
+      );
+
+      const runningPayload = {
+        sessionType: args.nextSessionType,
+        status: "RUNNING" as const,
+        remainingSeconds: args.nextDurationSeconds,
+        totalSeconds: args.nextDurationSeconds,
+        targetEndTime: nextTargetEndTime,
+        currentCycle: args.nextCurrentCycle,
+        tagId: sanitizedTagId,
+        timerRunId: args.nextTimerRunId,
+        scheduledCompletionId: nextScheduledCompletionId,
+        updatedAtMs: nowMs,
+      };
+      await ctx.db.patch(existing._id, runningPayload);
+      return runningPayload;
+    }
+
+    return existing;
+  },
+});
+
 export const updatePresence = mutation({
   args: {
     isMobile: v.boolean(),

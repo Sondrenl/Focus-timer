@@ -128,6 +128,28 @@ export const useTimerCloudSync = ({
     [isConvexConfigured, localUpdatedAtRef, lastLocalActionWallMsRef, isAuthenticatedRef]
   );
 
+  const publishTimerCompletion = useCallback(
+    (payload: RemoteTimerState, completedTimerRunId?: string | null) => {
+      localUpdatedAtRef.current = payload.updatedAtMs;
+      broadcastTimerState(payload);
+
+      if (isConvexConfigured && isAuthenticatedRef.current) {
+        convexTimerMutationsRef.current
+          .completeTimer({
+            completedTimerRunId: completedTimerRunId || undefined,
+            nextSessionType: payload.sessionType,
+            nextDurationSeconds: payload.totalSeconds,
+            nextCurrentCycle: payload.currentCycle,
+            autoStartNext: payload.status === 'RUNNING',
+            nextTimerRunId: payload.timerRunId || undefined,
+            tagId: payload.activeTagId || undefined,
+          })
+          .catch(console.warn);
+      }
+    },
+    [isConvexConfigured, localUpdatedAtRef, isAuthenticatedRef]
+  );
+
   const reportPresence = useCallback(
     (isVisible: boolean) => {
       if (!isConvexConfigured || !isAuthenticatedRef.current) return;
@@ -458,6 +480,7 @@ export const useTimerCloudSync = ({
 
   return {
     publishLocalTimerState,
+    publishTimerCompletion,
     reportPresence,
     applyRemoteState,
     isInitialMountDoneRef,

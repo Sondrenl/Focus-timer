@@ -151,6 +151,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const {
     publishLocalTimerState,
+    publishTimerCompletion,
     reportPresence,
     applyRemoteState,
     isInitialMountDoneRef,
@@ -334,17 +335,20 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setStatus('RUNNING');
         setRemainingSeconds(nextDuration);
 
-        publishLocalTimerState({
-          sessionType: nextType,
-          status: 'RUNNING',
-          remainingSeconds: nextDuration,
-          totalSeconds: nextDuration,
-          targetEndTime: now + nextDuration * 1000,
-          currentCycle: nextCycle,
-          activeTagId: activeTagIdRef.current,
-          timerRunId: newRunId,
-          updatedAtMs: now,
-        });
+        publishTimerCompletion(
+          {
+            sessionType: nextType,
+            status: 'RUNNING',
+            remainingSeconds: nextDuration,
+            totalSeconds: nextDuration,
+            targetEndTime: now + nextDuration * 1000,
+            currentCycle: nextCycle,
+            activeTagId: activeTagIdRef.current,
+            timerRunId: newRunId,
+            updatedAtMs: now,
+          },
+          currentRunId
+        );
 
         syncScheduledNotification();
       } else {
@@ -354,24 +358,27 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setStatus('IDLE');
         setRemainingSeconds(nextDuration);
 
-        publishLocalTimerState({
-          sessionType: nextType,
-          status: 'IDLE',
-          remainingSeconds: nextDuration,
-          totalSeconds: nextDuration,
-          targetEndTime: null,
-          currentCycle: nextCycle,
-          activeTagId: activeTagIdRef.current,
-          timerRunId: null,
-          updatedAtMs: now,
-        });
+        publishTimerCompletion(
+          {
+            sessionType: nextType,
+            status: 'IDLE',
+            remainingSeconds: nextDuration,
+            totalSeconds: nextDuration,
+            targetEndTime: null,
+            currentCycle: nextCycle,
+            activeTagId: activeTagIdRef.current,
+            timerRunId: null,
+            updatedAtMs: now,
+          },
+          currentRunId
+        );
       }
     },
     [
       recordSession,
       sound,
       notifications,
-      publishLocalTimerState,
+      publishTimerCompletion,
       syncScheduledNotification,
       dispatchCompletionAlert,
       triggerCompletionConfetti,

@@ -172,10 +172,9 @@ describe("Web Push Backend & Arbitration", () => {
     expect(scheduledRes).toEqual({ scheduled: true, delayMs: 5000, deviceCount: 1 });
   });
 
-  it("applies multi-device arbitration to mobile Web Push targets", () => {
+  it("delivers mobile Web Push even when a desktop window is left open/visible so watch & break alerts are never swallowed", () => {
     const now = 1_000_000;
 
-    // Suppress mobile push while desktop tab is actively open & visible
     expect(
       shouldSendPushToDevice({
         isMobileSub: true,
@@ -188,39 +187,8 @@ describe("Web Push Backend & Arbitration", () => {
         },
         nowMs: now,
       })
-    ).toBe(false);
-
-    // Send mobile push if desktop is backgrounded / lid closed
-    expect(
-      shouldSendPushToDevice({
-        isMobileSub: true,
-        peerPresence: {
-          desktopActive: true,
-          desktopVisible: false,
-          mobileActive: true,
-          mobileVisible: false,
-          lastSeenMs: now - 10_000,
-        },
-        nowMs: now,
-      })
     ).toBe(true);
 
-    // Send mobile push if desktop presence heartbeat expired (>90s)
-    expect(
-      shouldSendPushToDevice({
-        isMobileSub: true,
-        peerPresence: {
-          desktopActive: true,
-          desktopVisible: true,
-          mobileActive: true,
-          mobileVisible: false,
-          lastSeenMs: now - 120_000,
-        },
-        nowMs: now,
-      })
-    ).toBe(true);
-
-    // Always allow desktop push
     expect(
       shouldSendPushToDevice({
         isMobileSub: false,
@@ -234,5 +202,107 @@ describe("Web Push Backend & Arbitration", () => {
         nowMs: now,
       })
     ).toBe(true);
+  });
+
+  it("records session, advances break->work, and schedules push when client api.timer.complete beats onTimerCompleted", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createTestUser(t);
+
+    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+
+    // Insert an expired RUNNING break whose server onTimerCompleted hasn't run yet
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "SHORT_BREAK",
+        status: "RUNNING",
+        remainingSeconds: 300,
+        totalSeconds: 300,
+        targetEndTime: now - 500,
+        currentCycle: 1,
+        timerRunId: "run-break-1",
+        updatedAtMs: now - 300_500,
+      });
+    });
+
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "run-break-1",
+      nextSessionType: "WORK",
+      nextDurationSeconds: 1500,
+      nextCurrentCycle: 2,
+      autoStartNext: false,
+    });
+
+    const activeAfter = await asUser.query(api.timer.getActive, {});
+    expect(activeAfter?.status).toBe("IDLE");
+    expect(activeAfter?.sessionType).toBe("WORK");
+    expect(activeAfter?.currentCycle).toBe(2);
+
+    const sessions = await asUser.query(api.sessions.list, {});
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].sessionType).toBe("SHORT_BREAK");
+
+    // Verify sendTimerCompletionPush was scheduled in _scheduled_functions
+    const scheduled = await t.run(async (ctx) => {
+      return await ctx.db.system.query("_scheduled_functions").collect();
+    });
+    expect(
+      scheduled.some((job) => job.name.includes("sendTimerCompletionPush"))
+    ).toBe(true);
+  });
+
+  it("does not prematurely complete a running timer or double-schedule when onTimerCompleted already transitioned to IDLE", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createTestUser(t);
+    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+
+    // 1. Timer still has 60s left -> premature complete should be ignored
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "SHORT_BREAK",
+        status: "RUNNING",
+        remainingSeconds: 60,
+        totalSeconds: 300,
+        targetEndTime: now + 60_000,
+        currentCycle: 1,
+        timerRunId: "run-break-early",
+        updatedAtMs: now,
+      });
+    });
+
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "run-break-early",
+      nextSessionType: "WORK",
+      nextDurationSeconds: 1500,
+      nextCurrentCycle: 2,
+      autoStartNext: false,
+    });
+
+    const stillRunning = await asUser.query(api.timer.getActive, {});
+    expect(stillRunning?.status).toBe("RUNNING");
+    expect(stillRunning?.sessionType).toBe("SHORT_BREAK");
+
+    // 2. If server onTimerCompleted already transitioned to IDLE, calling complete afterwards is a safe no-op
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-break-early",
+    });
+
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "run-break-early",
+      nextSessionType: "WORK",
+      nextDurationSeconds: 1500,
+      nextCurrentCycle: 2,
+      autoStartNext: false,
+    });
+
+    const scheduledAfter = await t.run(async (ctx) => {
+      return await ctx.db.system.query("_scheduled_functions").collect();
+    });
+    const pushJobs = scheduledAfter.filter((j) => j.name.includes("sendTimerCompletionPush"));
+    expect(pushJobs).toHaveLength(1);
   });
 });

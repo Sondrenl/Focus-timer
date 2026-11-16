@@ -15,8 +15,8 @@ export function isSubscriptionMobile(sub: { isMobile?: boolean; userAgent?: stri
 
 export function shouldSendPushToDevice({
   isMobileSub,
-  peerPresence,
-  nowMs = Date.now(),
+  peerPresence: _peerPresence,
+  nowMs: _nowMs = Date.now(),
 }: {
   isMobileSub: boolean;
   peerPresence: {
@@ -28,16 +28,10 @@ export function shouldSendPushToDevice({
   } | null;
   nowMs?: number;
 }): boolean {
-  if (!isMobileSub) {
-    return true;
-  }
-  if (!peerPresence) return true;
-  const isPeerFresh = nowMs - peerPresence.lastSeenMs < PRESENCE_TTL_MS;
-  if (!isPeerFresh) return true;
-  if (peerPresence.mobileVisible) return true;
-  if (peerPresence.desktopActive && peerPresence.desktopVisible) {
-    return false;
-  }
+  // Always deliver Web Push to subscribed devices when notifications are enabled.
+  // Leaving a desktop browser window open/unminimized would otherwise suppress mobile & watch alerts
+  // during breaks away from the desk or short timers. Same-device foreground duplicates are handled by sw.js.
+  void isMobileSub;
   return true;
 }
 
