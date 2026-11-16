@@ -1,8 +1,45 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
 
 export const MAX_PUSH_DEVICES_PER_USER = 10;
+export const PRESENCE_TTL_MS = 90_000;
+
+export function isSubscriptionMobile(sub: { isMobile?: boolean; userAgent?: string }): boolean {
+  if (typeof sub.isMobile === "boolean") {
+    return sub.isMobile;
+  }
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(sub.userAgent || "");
+}
+
+export function shouldSendPushToDevice({
+  isMobileSub,
+  peerPresence,
+  nowMs = Date.now(),
+}: {
+  isMobileSub: boolean;
+  peerPresence: {
+    desktopActive: boolean;
+    desktopVisible: boolean;
+    mobileActive: boolean;
+    mobileVisible: boolean;
+    lastSeenMs: number;
+  } | null;
+  nowMs?: number;
+}): boolean {
+  if (!isMobileSub) {
+    return true;
+  }
+  if (!peerPresence) return true;
+  const isPeerFresh = nowMs - peerPresence.lastSeenMs < PRESENCE_TTL_MS;
+  if (!isPeerFresh) return true;
+  if (peerPresence.mobileVisible) return true;
+  if (peerPresence.desktopActive && peerPresence.desktopVisible) {
+    return false;
+  }
+  return true;
+}
 
 export const ALLOWED_PUSH_DOMAINS = [
   "fcm.googleapis.com",
@@ -11,6 +48,46 @@ export const ALLOWED_PUSH_DOMAINS = [
   "notify.windows.com",
   "web.push.apple.com",
 ];
+
+function decodeBase64UrlToBytes(b64u: string): Uint8Array {
+  const b64 = b64u.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4 || 4)) % 4), "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function encodeBytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function deriveVapidPublicKeyFromPrivateJwk(rawPrivateJwk: string | undefined): string | null {
+  if (!rawPrivateJwk) return null;
+  try {
+    const parsed = JSON.parse(rawPrivateJwk) as { kty?: string; crv?: string; x?: string; y?: string };
+    if (parsed.kty === "EC" && parsed.crv === "P-256" && parsed.x && parsed.y) {
+      const x = decodeBase64UrlToBytes(parsed.x);
+      const y = decodeBase64UrlToBytes(parsed.y);
+      if (x.length === 32 && y.length === 32) {
+        const uncompressed = new Uint8Array(65);
+        uncompressed[0] = 0x04;
+        uncompressed.set(x, 1);
+        uncompressed.set(y, 33);
+        return encodeBytesToBase64Url(uncompressed);
+      }
+    }
+  } catch {
+    // Ignore invalid JSON
+  }
+  return null;
+}
 
 function validateEndpoint(endpoint: string): void {
   if (!endpoint || endpoint.length > 2048) {
@@ -57,6 +134,15 @@ function validatePushKey(key: string, name: string): void {
   }
 }
 
+export const getVapidPublicKey = query({
+  args: {},
+  handler: async () => {
+    const explicit = process.env.VAPID_PUBLIC_KEY?.trim();
+    if (explicit) return explicit;
+    return deriveVapidPublicKeyFromPrivateJwk(process.env.VAPID_PRIVATE_KEY);
+  },
+});
+
 export const register = mutation({
   args: {
     deviceId: v.string(),
@@ -64,6 +150,7 @@ export const register = mutation({
     p256dh: v.string(),
     auth: v.string(),
     userAgent: v.optional(v.string()),
+    isMobile: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
@@ -88,6 +175,7 @@ export const register = mutation({
         p256dh: args.p256dh,
         auth: args.auth,
         userAgent: sanitizedUserAgent,
+        isMobile: args.isMobile ?? existing.isMobile,
         updatedAt: now,
       });
       return existing._id;
@@ -113,6 +201,7 @@ export const register = mutation({
         p256dh: args.p256dh,
         auth: args.auth,
         userAgent: sanitizedUserAgent,
+        isMobile: args.isMobile,
         updatedAt: now,
       });
     }
@@ -154,3 +243,68 @@ export const listSubscriptions = query({
       .take(MAX_PUSH_DEVICES_PER_USER);
   },
 });
+
+export const getPushDispatchContext = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return { notificationsEnabled: false, subscriptions: [], peerPresence: null };
+    }
+
+    const notificationsEnabled = user.settings?.notificationsEnabled ?? false;
+    const subscriptions = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
+      .take(MAX_PUSH_DEVICES_PER_USER);
+
+    const activeTimer = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .first();
+
+    return {
+      notificationsEnabled,
+      subscriptions,
+      peerPresence: activeTimer?.peerPresence ?? null,
+    };
+  },
+});
+
+export const deleteSubscriptionById = internalMutation({
+  args: { id: v.id("push_subscriptions") },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.id);
+    if (existing) {
+      await ctx.db.delete(args.id);
+      return true;
+    }
+    return false;
+  },
+});
+
+export const scheduleTestPush = mutation({
+  args: {
+    delayMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    const subs = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_user_device", (q) => q.eq("userId", user._id))
+      .take(MAX_PUSH_DEVICES_PER_USER);
+
+    if (subs.length === 0) {
+      return { scheduled: false, reason: "no_subscriptions" as const };
+    }
+
+    const clampedDelay = Math.max(0, Math.min(30_000, Math.round(args.delayMs ?? 5000)));
+    await ctx.scheduler.runAfter(clampedDelay, internal.pushActions.sendTestPush, {
+      userId: user._id,
+      scheduledAtMs: Date.now(),
+    });
+    return { scheduled: true, delayMs: clampedDelay, deviceCount: subs.length };
+  },
+});
+
+

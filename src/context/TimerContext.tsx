@@ -292,11 +292,16 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         triggerCompletionConfetti();
       }
 
+      const completedTimestampMs =
+        targetEndTimeRef.current !== null && targetEndTimeRef.current < Date.now()
+          ? targetEndTimeRef.current
+          : Date.now();
+
       void recordSession({
         tagId: activeTagIdRef.current,
         sessionType: completedType,
         durationSeconds: elapsedSeconds,
-        completedAt: new Date().toISOString(),
+        completedAt: new Date(completedTimestampMs).toISOString(),
       });
 
       const completionDayKey = getLogicalDayKey(new Date());

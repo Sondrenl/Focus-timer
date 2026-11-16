@@ -7,6 +7,7 @@ import { SoundService } from '../../services/audio/SoundService';
 import {
   NotificationService,
   NotificationPermissionStatus,
+  PushSubscriptionStatus,
 } from '../../services/notification/NotificationService';
 
 interface SoundNotificationSectionProps {
@@ -15,6 +16,10 @@ interface SoundNotificationSectionProps {
   sound: SoundService;
   notifications: NotificationService;
   onSaved: () => void;
+  pushStatus?: PushSubscriptionStatus;
+  isPushAuthenticated?: boolean;
+  onSyncPush?: () => Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }>;
+  onScheduleTestPush?: () => Promise<{ scheduled: boolean; reason?: string }>;
 }
 
 export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> = ({
@@ -23,11 +28,16 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
   sound,
   notifications,
   onSaved,
+  pushStatus = 'unsubscribed',
+  isPushAuthenticated = false,
+  onSyncPush,
+  onScheduleTestPush,
 }) => {
   const [permissionState, setPermissionState] = useState<NotificationPermissionStatus>(() =>
     notifications.getPermissionState()
   );
   const [notifFeedback, setNotifFeedback] = useState<string | null>(null);
+  const [isSchedulingTestPush, setIsSchedulingTestPush] = useState(false);
 
   useEffect(() => {
     const refreshPermission = () => {
@@ -44,7 +54,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
   const showNotifFeedback = (msg: string) => {
     setNotifFeedback(msg);
-    setTimeout(() => setNotifFeedback(null), 4000);
+    setTimeout(() => setNotifFeedback(null), 5000);
   };
 
   const handleTestSound = () => {
@@ -66,7 +76,16 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
     const currentPerm = notifications.getPermissionState();
     if (currentPerm === 'granted') {
-      showNotifFeedback('Notifications enabled for this device.');
+      if (isPushAuthenticated && onSyncPush) {
+        const res = await onSyncPush();
+        showNotifFeedback(
+          res.ok
+            ? 'Notifications & background lock-screen push enabled.'
+            : 'Notifications enabled for this device.'
+        );
+      } else {
+        showNotifFeedback('Notifications enabled for this device.');
+      }
       return;
     }
 
@@ -86,6 +105,9 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
     setPermissionState(updatedPerm);
 
     if (granted) {
+      if (isPushAuthenticated && onSyncPush) {
+        await onSyncPush();
+      }
       showNotifFeedback('Notifications enabled for this device.');
     } else if (updatedPerm === 'denied') {
       showNotifFeedback('Notifications are blocked in your browser site settings.');
@@ -122,12 +144,36 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       onSaved();
     }
 
+    if (isPushAuthenticated && onSyncPush) {
+      void onSyncPush();
+    }
+
     const sent = await notifications.notify(
       'Pomodor — Focus session complete',
       'Your focus timer has finished. Time for a break.',
       true
     );
     showNotifFeedback(sent ? 'Sample timer alert sent!' : 'Could not dispatch alert — check OS notification settings.');
+  };
+
+  const handleDelayedPushTest = async () => {
+    if (!onScheduleTestPush || isSchedulingTestPush) return;
+    setIsSchedulingTestPush(true);
+    try {
+      if (onSyncPush) {
+        await onSyncPush();
+      }
+      const res = await onScheduleTestPush();
+      if (res.scheduled) {
+        showNotifFeedback('Push scheduled in 5s — lock your phone screen now to test lock-screen & watch alerts.');
+      } else {
+        showNotifFeedback('Background push subscription not ready yet.');
+      }
+    } catch {
+      showNotifFeedback('Could not schedule background test push.');
+    } finally {
+      setIsSchedulingTestPush(false);
+    }
   };
 
   const getNotificationSubtitle = (): { text: string; className: string } => {
@@ -147,6 +193,24 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       };
     }
     if (permissionState === 'granted' && settings.notificationsEnabled) {
+      if (isPushAuthenticated && pushStatus === 'active') {
+        return {
+          text: 'Background Web Push active — delivers on locked screens & watches',
+          className: 'text-emerald-600 dark:text-emerald-400',
+        };
+      }
+      if (!isPushAuthenticated) {
+        return {
+          text: 'Foreground alerts active — sign in for reliable background lock-screen push',
+          className: 'text-emerald-600 dark:text-emerald-400',
+        };
+      }
+      if (pushStatus === 'unconfigured') {
+        return {
+          text: 'Permission granted — waiting for server push configuration',
+          className: 'text-amber-600 dark:text-amber-400',
+        };
+      }
       return {
         text: 'Permission granted — alerts active on this device',
         className: 'text-emerald-600 dark:text-emerald-400',
@@ -238,7 +302,20 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
               <div className={`text-xs ${notifSubtitle.className}`}>{notifSubtitle.text}</div>
             </div>
           </div>
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {isPushAuthenticated &&
+              permissionState === 'granted' &&
+              settings.notificationsEnabled &&
+              onScheduleTestPush && (
+                <button
+                  onClick={handleDelayedPushTest}
+                  disabled={isSchedulingTestPush}
+                  className="min-h-[44px] px-3.5 py-2 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-secondary transition-colors shrink-0 flex items-center justify-center disabled:opacity-60"
+                  title="Send a server Web Push after 5 seconds so you can lock your phone to verify lock-screen and watch alerts"
+                >
+                  {isSchedulingTestPush ? 'Scheduling…' : 'Test Lock-Screen (5s)'}
+                </button>
+              )}
             <button
               onClick={handleTestNotification}
               className="min-h-[44px] px-3.5 py-2 rounded-xl bg-md-surface-container hover:bg-md-surface-container-high text-xs font-semibold text-md-primary transition-colors shrink-0 flex items-center justify-center"

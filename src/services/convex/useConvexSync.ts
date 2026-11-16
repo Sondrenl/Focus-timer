@@ -22,6 +22,11 @@ export function useConvexSync(isAuthenticated: boolean) {
     shouldQuery ? {} : 'skip'
   );
 
+  const vapidPublicKey = useQuery(
+    api.push.getVapidPublicKey,
+    shouldQuery ? {} : 'skip'
+  );
+
   // Mutations
   const updateProfileMutation = useMutation(api.users.updateProfile);
   const updateSettingsMutation = useMutation(api.users.updateSettings);
@@ -35,6 +40,9 @@ export function useConvexSync(isAuthenticated: boolean) {
   const removeCupMutation = useMutation(api.coffee.removeCup);
   const clearCoffeeMutation = useMutation(api.coffee.clear);
   const importBackupMutation = useMutation(api.migrations.importBackup);
+  const registerPushSubscriptionMutation = useMutation(api.push.register);
+  const unregisterPushSubscriptionMutation = useMutation(api.push.unregister);
+  const scheduleTestPushMutation = useMutation(api.push.scheduleTestPush);
 
   const setAuthToken = useCallback((token: string | null) => {
     if (!isConvexConfigured) return;
@@ -106,6 +114,9 @@ export function useConvexSync(isAuthenticated: boolean) {
       removeCup: wrapMutation(removeCupMutation, 'removeCup'),
       clearCoffee: wrapMutation(clearCoffeeMutation, 'clearCoffee'),
       importBackup: wrapMutation(importBackupMutation, 'importBackup'),
+      registerPushSubscription: wrapMutation(registerPushSubscriptionMutation, 'registerPushSubscription'),
+      unregisterPushSubscription: wrapMutation(unregisterPushSubscriptionMutation, 'unregisterPushSubscription'),
+      scheduleTestPush: wrapMutation(scheduleTestPushMutation, 'scheduleTestPush'),
     }),
     [
       updateProfileMutation,
@@ -120,6 +131,9 @@ export function useConvexSync(isAuthenticated: boolean) {
       removeCupMutation,
       clearCoffeeMutation,
       importBackupMutation,
+      registerPushSubscriptionMutation,
+      unregisterPushSubscriptionMutation,
+      scheduleTestPushMutation,
       wrapMutation,
     ]
   );
@@ -129,6 +143,7 @@ export function useConvexSync(isAuthenticated: boolean) {
     convexUser,
     convexCoffee,
     convexSessions,
+    vapidPublicKey,
     setAuthToken,
     mutations,
   };

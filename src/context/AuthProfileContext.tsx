@@ -4,9 +4,13 @@ import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { UserProfile, DEFAULT_PROFILE, AuthState } from '../types/user';
 import { parseGoogleJwt, buildProfileFromJwt } from '../services/auth/AuthService';
 import { SoundService } from '../services/audio/SoundService';
-import { NotificationService } from '../services/notification/NotificationService';
+import {
+  NotificationService,
+  PushSubscriptionStatus,
+} from '../services/notification/NotificationService';
 import { subscribeReset } from '../services/timer/TimerBroadcast';
 import { useConvexSync } from '../services/convex/useConvexSync';
+import { DEVICE_ID } from './timer/timerPersistence';
 import {
   authService,
   profileRepository,
@@ -45,6 +49,8 @@ export interface AuthProfileContextValue {
   sound: SoundService;
   notifications: NotificationService;
   convexSync: ReturnType<typeof useConvexSync>;
+  pushStatus: PushSubscriptionStatus;
+  syncPushSubscription: () => Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }>;
 }
 
 const AuthProfileContext = createContext<AuthProfileContextValue | null>(null);
@@ -53,6 +59,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState());
+  const [pushStatus, setPushStatus] = useState<PushSubscriptionStatus>(() =>
+    notificationService.getPushStatus()
+  );
 
   const settingsRef = useRef<UserSettings>(settings);
   settingsRef.current = settings;
@@ -70,7 +79,13 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const isEffectiveAuthenticated = isConvexAuthAuthenticated || auth.isAuthenticated;
 
   const convexSync = useConvexSync(isEffectiveAuthenticated);
-  const { isConvexConfigured, convexUser, setAuthToken, mutations: convexMutations } = convexSync;
+  const {
+    isConvexConfigured,
+    convexUser,
+    vapidPublicKey,
+    setAuthToken,
+    mutations: convexMutations,
+  } = convexSync;
 
   const scheduleTokenRefresh = useCallback((expSeconds?: number) => {
     if (tokenRefreshTimerRef.current) {
@@ -108,6 +123,13 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       clearTimeout(tokenRefreshTimerRef.current);
       tokenRefreshTimerRef.current = null;
     }
+    if (isConvexConfigured) {
+      await notificationService.unsubscribePush(() =>
+        convexMutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+      );
+    } else {
+      await notificationService.unsubscribePush();
+    }
     authService.logout();
     notificationService.setAuthToken(null);
     if (isConvexConfigured) {
@@ -135,7 +157,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     profileRef.current = cleanedProfile;
     await profileRepository.save(cleanedProfile);
     setProfile(cleanedProfile);
-  }, [isConvexConfigured, convexSignOut, setAuthToken]);
+  }, [isConvexConfigured, convexSignOut, setAuthToken, convexMutations]);
 
   const loginWithGoogle = useCallback(
     async (idToken: string): Promise<void> => {
@@ -491,6 +513,72 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return defaultSettings;
   }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);
 
+  // Track push status updates emitted by NotificationService
+  useEffect(() => {
+    setPushStatus(notificationService.getPushStatus());
+    return notificationService.subscribePushStatus(setPushStatus);
+  }, []);
+
+  const syncPushSubscription = useCallback(async () => {
+    if (!isConvexConfigured || !isEffectiveAuthenticated) {
+      return { ok: false, status: notificationService.getPushStatus(), reason: 'Unauthenticated' };
+    }
+    if (!settingsRef.current.notificationsEnabled) {
+      return { ok: false, status: 'unsubscribed' as PushSubscriptionStatus, reason: 'Notifications disabled' };
+    }
+    return notificationService.syncPushSubscription({
+      vapidPublicKey,
+      deviceId: DEVICE_ID,
+      registerFn: convexMutations.registerPushSubscription,
+    });
+  }, [isConvexConfigured, isEffectiveAuthenticated, vapidPublicKey, convexMutations]);
+
+  // Automatically register/refresh Web Push subscription when authenticated and notifications are enabled
+  useEffect(() => {
+    if (!isConvexConfigured || !isEffectiveAuthenticated) return;
+    if (!settings.notificationsEnabled || !vapidPublicKey) return;
+    if (!notificationService.hasPermission()) return;
+
+    void notificationService.syncPushSubscription({
+      vapidPublicKey,
+      deviceId: DEVICE_ID,
+      registerFn: convexMutations.registerPushSubscription,
+    });
+  }, [
+    isConvexConfigured,
+    isEffectiveAuthenticated,
+    settings.notificationsEnabled,
+    vapidPublicKey,
+    convexMutations,
+  ]);
+
+  // Re-sync push subscription if user returns from OS Settings after granting notification permission
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleReturn = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (
+        isConvexConfigured &&
+        isEffectiveAuthenticated &&
+        settingsRef.current.notificationsEnabled &&
+        vapidPublicKey &&
+        notificationService.hasPermission()
+      ) {
+        void notificationService.syncPushSubscription({
+          vapidPublicKey,
+          deviceId: DEVICE_ID,
+          registerFn: convexMutations.registerPushSubscription,
+        });
+      }
+    };
+    window.addEventListener('focus', handleReturn);
+    document.addEventListener('visibilitychange', handleReturn);
+    return () => {
+      window.removeEventListener('focus', handleReturn);
+      document.removeEventListener('visibilitychange', handleReturn);
+    };
+  }, [isConvexConfigured, isEffectiveAuthenticated, vapidPublicKey, convexMutations]);
+
   const value = useMemo<AuthProfileContextValue>(
     () => ({
       auth,
@@ -507,6 +595,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       sound: soundService,
       notifications: notificationService,
       convexSync,
+      pushStatus,
+      syncPushSubscription,
     }),
     [
       auth,
@@ -521,6 +611,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       updateSettings,
       resetSettingsToDefaults,
       convexSync,
+      pushStatus,
+      syncPushSubscription,
     ]
   );
 

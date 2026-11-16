@@ -8,6 +8,7 @@ import { wakeLockService } from '../../services/screen/WakeLockService';
 import { useConvexTimer } from '../../services/convex/useConvexTimer';
 import { IS_MOBILE } from './timerPersistence';
 import { getLogicalDayKey } from '../../utils/newDayCheck';
+import { evaluateDeviceAlert } from '../../utils/arbitration';
 
 interface UseTimerCloudSyncParams {
   isAuthenticated: boolean;
@@ -209,13 +210,22 @@ export const useTimerCloudSync = ({
       const now = authService.getServerNow();
 
       // Trigger completion alert when remote signals completion or advances to next interval at end time
+      // Never fire alerts if completion happened >60s ago (e.g. waking up from OS Doze/sleep).
+      const STALE_ALERT_CUTOFF_MS = 60_000;
+      const targetPassedRecently =
+        targetEndTimeRef.current !== null &&
+        now >= targetEndTimeRef.current - 5000 &&
+        now - targetEndTimeRef.current <= STALE_ALERT_CUTOFF_MS;
+      const remoteCompletedRecently =
+        remote.status === 'COMPLETED' &&
+        nowMs - remote.updatedAtMs <= STALE_ALERT_CUTOFF_MS;
+
       if (
         statusRef.current === 'RUNNING' &&
-        (remote.status === 'COMPLETED' ||
+        (remoteCompletedRecently ||
           (remote.status === 'IDLE' &&
             remote.sessionType !== sessionTypeRef.current &&
-            targetEndTimeRef.current !== null &&
-            now >= targetEndTimeRef.current - 5000))
+            targetPassedRecently))
       ) {
         const completedType = sessionTypeRef.current;
         const completedRunId =
@@ -253,10 +263,17 @@ export const useTimerCloudSync = ({
           lastTickWallMsRef.current = Date.now();
 
           if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
+            const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+            const shouldAlert = evaluateDeviceAlert({
+              isMobile: IS_MOBILE,
+              isVisible,
+              peer: peerPresenceRef.current,
+              type: remote.sessionType,
+            });
             notifications.scheduleTimerNotification(
               Date.now() + diffSec * 1000,
               remote.sessionType,
-              true,
+              shouldAlert,
               remote.timerRunId
             );
           } else {

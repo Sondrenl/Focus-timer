@@ -35,7 +35,18 @@ function sanitizeDecimalInput(raw: string): string {
 }
 
 export const SettingsView: React.FC = () => {
-  const { settings, updateSettings, profile, updateProfile, sound, notifications } = useApp();
+  const {
+    settings,
+    updateSettings,
+    profile,
+    updateProfile,
+    sound,
+    notifications,
+    pushStatus,
+    syncPushSubscription,
+    isEffectiveAuthenticated,
+    convexSync,
+  } = useApp();
   const [savedToast, setSavedToast] = useState(false);
 
   // Focus tracking to prevent draft inputs from snapping back or clobbering while actively typing
@@ -254,6 +265,10 @@ export const SettingsView: React.FC = () => {
         sound={sound}
         notifications={notifications}
         onSaved={showSaved}
+        pushStatus={pushStatus}
+        isPushAuthenticated={convexSync.isConvexConfigured && isEffectiveAuthenticated}
+        onSyncPush={syncPushSubscription}
+        onScheduleTestPush={() => convexSync.mutations.scheduleTestPush({ delayMs: 5000 })}
       />
     </div>
   );

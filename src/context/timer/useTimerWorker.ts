@@ -119,7 +119,8 @@ export const useTimerWorker = ({
     const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
     if (diffSec <= 0) {
-      handleCompleteRef.current();
+      const expiredLongAgo = diffMs < -60_000;
+      handleCompleteRef.current(expiredLongAgo);
       return;
     }
 
@@ -189,7 +190,8 @@ export const useTimerWorker = ({
         const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
         if (diffSec <= 0) {
-          handleCompleteRef.current();
+          const expiredLongAgo = diffMs < -60_000;
+          handleCompleteRef.current(expiredLongAgo);
           return;
         }
 

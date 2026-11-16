@@ -431,6 +431,15 @@ export const onTimerCompleted = internalMutation({
       scheduledCompletionId: undefined,
       updatedAtMs: nowMs,
     });
+
+    if (settings.notificationsEnabled !== false) {
+      await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
+        userId: args.userId,
+        sessionType: timer.sessionType,
+        timerRunId: args.timerRunId,
+        completedAtMs: nowMs,
+      });
+    }
   },
 });
 
