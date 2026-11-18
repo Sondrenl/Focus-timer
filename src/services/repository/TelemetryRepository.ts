@@ -36,6 +36,7 @@ export interface ITelemetryRepository {
   saveEvents(events: MlEvent[]): Promise<void>;
   getActiveDraft(): Promise<ActiveAttemptDraft | null>;
   saveActiveDraft(draft: ActiveAttemptDraft | null): Promise<void>;
+  discardAttempt(attemptId: string): Promise<void>;
   clearTagReferences(tagId: string): Promise<void>;
   clear(): Promise<void>;
 }
@@ -177,6 +178,50 @@ export class TelemetryRepository implements ITelemetryRepository {
         this.storage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
       } else {
         this.storage.setItem(ACTIVE_DRAFT_STORAGE_KEY, draft);
+      }
+    });
+  }
+
+  async discardAttempt(attemptId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const attempts = await this.getAttempts();
+      const filteredAttempts = attempts.filter(
+        (a) => !(a.attemptId === attemptId && a.status === 'in_progress')
+      );
+      if (filteredAttempts.length !== attempts.length) {
+        this.safeSetArray(ATTEMPTS_STORAGE_KEY, filteredAttempts, MAX_LOCAL_ATTEMPTS);
+      }
+
+      const lifecycleTypes = new Set([
+        'session_started',
+        'session_paused',
+        'session_resumed',
+        'tag_changed',
+      ]);
+      const events = await this.getEvents();
+      let eventsChanged = false;
+      const cleanedEvents: MlEvent[] = [];
+      for (const evt of events) {
+        if (evt.attemptId === attemptId) {
+          if (lifecycleTypes.has(evt.eventType)) {
+            eventsChanged = true;
+            continue;
+          }
+          if (evt.attemptId !== null) {
+            eventsChanged = true;
+            cleanedEvents.push({ ...evt, attemptId: null });
+            continue;
+          }
+        }
+        cleanedEvents.push(evt);
+      }
+      if (eventsChanged) {
+        this.safeSetArray(EVENTS_STORAGE_KEY, cleanedEvents, MAX_LOCAL_EVENTS);
+      }
+
+      const draft = await this.getActiveDraft();
+      if (draft?.attempt.attemptId === attemptId) {
+        this.storage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
       }
     });
   }

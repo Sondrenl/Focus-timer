@@ -964,21 +964,23 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       nextCycle = 1;
     }
 
-    void telemetryTracker.onSessionFinalized({
-      attemptId: skippedRunId,
-      outcome: 'skipped',
-      sessionType: skippedFromType,
-      plannedDurationSeconds: skippedTotal,
-      remainingSecondsAtEnd: currentRemaining,
-      cycleIndex: skippedCycle,
-      tagId: activeTagIdRef.current,
-      settings: settingsRef.current,
-      dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-      coffeeCups: coffeeCupsRef.current,
-      wasStarted,
-      targetEndTimeMs: skippedTargetEnd,
-      toSessionType: nextType,
-    });
+    if (wasStarted) {
+      void telemetryTracker.onSessionFinalized({
+        attemptId: skippedRunId,
+        outcome: 'skipped',
+        sessionType: skippedFromType,
+        plannedDurationSeconds: skippedTotal,
+        remainingSecondsAtEnd: currentRemaining,
+        cycleIndex: skippedCycle,
+        tagId: activeTagIdRef.current,
+        settings: settingsRef.current,
+        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+        coffeeCups: coffeeCupsRef.current,
+        wasStarted: true,
+        targetEndTimeMs: skippedTargetEnd,
+        toSessionType: nextType,
+      });
+    }
 
     const nextDuration = getDurationForType(nextType);
     targetEndTimeRef.current = null;

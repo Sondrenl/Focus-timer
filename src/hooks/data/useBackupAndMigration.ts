@@ -186,6 +186,10 @@ export function useBackupAndMigration({
             });
           }
         },
+        discardAttempt: (attemptId) =>
+          convexMutations.discardTelemetryAttempt
+            ? convexMutations.discardTelemetryAttempt({ attemptId })
+            : Promise.resolve(false),
       });
     } else {
       telemetryTracker.setCloudSink(null);

@@ -103,6 +103,17 @@ export function computeCoffeeContextAt(
   };
 }
 
+/**
+ * Minimum active elapsed seconds required before an aborted run (skip/reset/switch)
+ * is recorded in ML telemetry.
+ * - Intervals > 2 minutes: 30 seconds cutoff.
+ * - Intervals <= 2 minutes: 1/4 of plannedDurationSeconds (e.g. 120s -> 30s, 60s -> 15s).
+ */
+export function getMinimumAbortTelemetrySeconds(plannedDurationSeconds: number): number {
+  const safePlanned = Math.max(1, plannedDurationSeconds);
+  return safePlanned <= 120 ? safePlanned / 4 : 30;
+}
+
 export interface PriorAttemptContextMetrics {
   timeSincePreviousAttemptSeconds: number | null;
   previousAttemptType: SessionAttempt['sessionType'] | null;
@@ -130,7 +141,7 @@ export function computePriorAttemptContext(
   let skipsToday = 0;
 
   for (const att of attempts) {
-    if (att.status === 'in_progress') continue;
+    if (att.status === 'in_progress' || !att.wasStarted) continue;
 
     if (att.localDate === localDate) {
       if (att.sessionType === 'WORK' && att.status === 'completed') {

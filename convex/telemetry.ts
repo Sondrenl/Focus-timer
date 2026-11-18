@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
 import {
+  ID_REGEX,
   sessionAttemptInputFields,
   sessionAttemptReturnValidator,
   mlEventInputValidator,
@@ -157,6 +158,69 @@ export const recordEvents = mutation({
     }
 
     return { insertedCount, skippedCount };
+  },
+});
+
+export const discardAttempt = mutation({
+  args: {
+    attemptId: v.string(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    if (!ID_REGEX.test(args.attemptId)) {
+      throw new Error("Invalid attemptId format.");
+    }
+
+    const existing = await ctx.db
+      .query("session_attempts")
+      .withIndex("by_user_attempt", (q) =>
+        q.eq("userId", user._id).eq("attemptId", args.attemptId)
+      )
+      .first();
+
+    // Never discard an already-finalized attempt
+    if (existing && existing.status !== "in_progress") {
+      return false;
+    }
+
+    if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+
+    // Delete deterministic session_started event directly via index
+    const startEvt = await ctx.db
+      .query("ml_events")
+      .withIndex("by_user_event", (q) =>
+        q.eq("userId", user._id).eq("eventId", `evt-start-${args.attemptId}`)
+      )
+      .first();
+    if (startEvt) {
+      await ctx.db.delete(startEvt._id);
+    }
+
+    // Clean up any recent pause/resume/tag_changed events (or unlink coffee_logged) within a bounded scan
+    const recentEvents = await ctx.db
+      .query("ml_events")
+      .withIndex("by_user_timestamp", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .take(25);
+
+    for (const evt of recentEvents) {
+      if (evt.attemptId !== args.attemptId) continue;
+      if (
+        evt.eventType === "session_started" ||
+        evt.eventType === "session_paused" ||
+        evt.eventType === "session_resumed" ||
+        evt.eventType === "tag_changed"
+      ) {
+        await ctx.db.delete(evt._id);
+      } else {
+        await ctx.db.patch(evt._id, { attemptId: undefined });
+      }
+    }
+
+    return true;
   },
 });
 

@@ -6,6 +6,7 @@ import {
   buildSettingsSnapshot,
   computeCoffeeContextAt,
   computePriorAttemptContext,
+  getMinimumAbortTelemetrySeconds,
 } from '../src/utils/telemetryContext';
 import { TelemetryRepository } from '../src/services/repository/TelemetryRepository';
 import { TelemetryTracker } from '../src/services/telemetry/TelemetryTracker';
@@ -139,7 +140,7 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
             updatedAtMs: baseMs - 1500_000,
           },
           {
-            attemptId: 'a2',
+            attemptId: 'a2-idle-nav',
             sessionType: 'SHORT_BREAK',
             status: 'skipped',
             wasStarted: false,
@@ -148,6 +149,48 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
             remainingSecondsAtEnd: 300,
             completionRatio: 0,
             startedAt: null,
+            endedAt: new Date(baseMs - 600_000).toISOString(),
+            utcOffsetMinutes: 0,
+            localDate: '2026-11-18',
+            localHour: 9,
+            localMinuteOfDay: 590,
+            localDayOfWeek: 3,
+            cycleIndex: 1,
+            longBreakInterval: 4,
+            autoStarted: false,
+            initialTagId: null,
+            tagId: null,
+            tagChangedMidRun: false,
+            pauseCount: 0,
+            totalPausedSeconds: 0,
+            pauseIntervals: [],
+            timeSincePreviousAttemptSeconds: 900,
+            previousAttemptType: 'WORK',
+            previousAttemptOutcome: 'completed',
+            workSessionsCompletedToday: 1,
+            workActiveSecondsToday: 1500,
+            skipsToday: 0,
+            coffeeCupsTodayAtStart: 0,
+            minutesSinceLastCoffeeAtStart: null,
+            coffeeLoggedDuringRun: 0,
+            dailyGoalMinutes: 120,
+            settingsSnapshot: buildSettingsSnapshot(DEFAULT_SETTINGS),
+            deviceClass: 'desktop',
+            tabBackgroundedCount: 0,
+            completionLatencySeconds: null,
+            source: 'client',
+            updatedAtMs: baseMs - 600_000,
+          },
+          {
+            attemptId: 'a3-started-skip',
+            sessionType: 'SHORT_BREAK',
+            status: 'skipped',
+            wasStarted: true,
+            plannedDurationSeconds: 300,
+            actualActiveSeconds: 20,
+            remainingSecondsAtEnd: 280,
+            completionRatio: 0.0667,
+            startedAt: new Date(baseMs - 320_000).toISOString(),
             endedAt: new Date(baseMs - 300_000).toISOString(),
             utcOffsetMinutes: 0,
             localDate: '2026-11-18',
@@ -326,10 +369,10 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
       expect(syncedEventTypes).toContain('session_completed');
     });
 
-    it('records idle skips, mid-run skips, resets, switches, and orphaned draft abandonment', async () => {
+    it('ignores IDLE navigation (wasStarted: false) and records mid-run skips, resets, switches, and orphaned draft abandonment', async () => {
       const baseMs = new Date(2026, 10, 18, 12, 0, 0).getTime();
 
-      // 1. Idle skip (SHORT_BREAK -> WORK without ever starting)
+      // 1. IDLE navigation (pressing back/forth without starting) -> must NOT record
       await tracker.onSessionFinalized({
         attemptId: null,
         outcome: 'skipped',
@@ -345,6 +388,38 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         toSessionType: 'WORK',
         nowMs: baseMs,
       });
+      expect(tracker.getExportDataSync().sessionAttempts).toHaveLength(0);
+      expect(tracker.getExportDataSync().events).toHaveLength(0);
+
+      // 1b. Started mid-run skip (start -> skip after 30s) -> DOES record
+      await tracker.onSessionStarted({
+        attemptId: 'run-skip-1',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        cycleIndex: 1,
+        tagId: null,
+        autoStarted: false,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: baseMs + 1505_000,
+        nowMs: baseMs + 5_000,
+      });
+      await tracker.onSessionFinalized({
+        attemptId: 'run-skip-1',
+        outcome: 'skipped',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        remainingSecondsAtEnd: 1470,
+        cycleIndex: 1,
+        tagId: null,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        wasStarted: true,
+        toSessionType: 'SHORT_BREAK',
+        nowMs: baseMs + 35_000,
+      });
 
       // 2. Start & reset
       await tracker.onSessionStarted({
@@ -357,8 +432,8 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         settings: DEFAULT_SETTINGS,
         dailyGoalMinutes: 120,
         coffeeCups: [],
-        targetEndTimeMs: baseMs + 1510_000,
-        nowMs: baseMs + 10_000,
+        targetEndTimeMs: baseMs + 1550_000,
+        nowMs: baseMs + 50_000,
       });
       await tracker.onSessionFinalized({
         attemptId: 'run-reset-1',
@@ -423,13 +498,152 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
 
       const data = await tracker.getExportData();
       expect(data.sessionAttempts).toHaveLength(4);
-      expect(data.sessionAttempts[0].wasStarted).toBe(false);
+      expect(data.sessionAttempts[0].wasStarted).toBe(true);
       expect(data.sessionAttempts[0].status).toBe('skipped');
       expect(data.sessionAttempts[1].status).toBe('reset');
       expect(data.sessionAttempts[2].status).toBe('switched');
       expect(data.sessionAttempts[2].pauseCount).toBe(0);
       expect(data.sessionAttempts[3].status).toBe('abandoned_stale');
       expect(data.events.some((e) => e.eventType === 'session_abandoned_stale')).toBe(true);
+    });
+
+    it('discards skips and resets below the minimum duration cutoff (30s default, 1/4 for <=2m intervals)', async () => {
+      expect(getMinimumAbortTelemetrySeconds(1500)).toBe(30);
+      expect(getMinimumAbortTelemetrySeconds(121)).toBe(30);
+      expect(getMinimumAbortTelemetrySeconds(120)).toBe(30);
+      expect(getMinimumAbortTelemetrySeconds(60)).toBe(15);
+      expect(getMinimumAbortTelemetrySeconds(40)).toBe(10);
+
+      const discardedIds: string[] = [];
+      tracker.setCloudSink({
+        upsertAttempt: async () => {},
+        recordEvents: async () => {},
+        discardAttempt: async (id) => {
+          discardedIds.push(id);
+        },
+      });
+
+      const baseMs = new Date(2026, 10, 18, 13, 0, 0).getTime();
+
+      // 1. 25m interval skipped after 5s (< 30s) -> discarded, coffee preserved with null attemptId
+      await tracker.onSessionStarted({
+        attemptId: 'short-skip-25m',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        autoStarted: false,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: baseMs + 1500_000,
+        nowMs: baseMs,
+      });
+      await tracker.onCoffeeLogged({
+        cup: {
+          id: 'cup-during-short',
+          date: '2026-11-18',
+          tagId: 'tag-1',
+          createdAt: new Date(baseMs + 2_000).toISOString(),
+        },
+        allCupsAfterAdd: [
+          {
+            id: 'cup-during-short',
+            date: '2026-11-18',
+            tagId: 'tag-1',
+            createdAt: new Date(baseMs + 2_000).toISOString(),
+          },
+        ],
+        timerStatus: 'RUNNING',
+        activeSessionType: 'WORK',
+        nowMs: baseMs + 2_000,
+      });
+      await tracker.onSessionFinalized({
+        attemptId: 'short-skip-25m',
+        outcome: 'skipped',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        remainingSecondsAtEnd: 1495,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        wasStarted: true,
+        toSessionType: 'SHORT_BREAK',
+        nowMs: baseMs + 5_000,
+      });
+
+      // 2. 1m interval reset after 14s (< 15s quarter cutoff) -> discarded
+      await tracker.onSessionStarted({
+        attemptId: 'short-reset-1m',
+        sessionType: 'SHORT_BREAK',
+        plannedDurationSeconds: 60,
+        cycleIndex: 1,
+        tagId: null,
+        autoStarted: false,
+        settings: { ...DEFAULT_SETTINGS, shortBreakDurationMinutes: 1 },
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: baseMs + 70_000,
+        nowMs: baseMs + 10_000,
+      });
+      await tracker.onSessionFinalized({
+        attemptId: 'short-reset-1m',
+        outcome: 'reset',
+        sessionType: 'SHORT_BREAK',
+        plannedDurationSeconds: 60,
+        remainingSecondsAtEnd: 46,
+        cycleIndex: 1,
+        tagId: null,
+        settings: { ...DEFAULT_SETTINGS, shortBreakDurationMinutes: 1 },
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        wasStarted: true,
+        nowMs: baseMs + 24_000,
+      });
+
+      expect(discardedIds).toEqual(['short-skip-25m', 'short-reset-1m']);
+      expect(tracker.getExportDataSync().sessionAttempts).toHaveLength(0);
+      expect(tracker.getExportDataSync().events.map((e) => e.eventType)).toEqual([
+        'coffee_logged',
+      ]);
+      expect(tracker.getExportDataSync().events[0].attemptId).toBeNull();
+
+      // 3. 1m interval skipped at exactly 15s (>= 15s quarter cutoff) -> recorded
+      await tracker.onSessionStarted({
+        attemptId: 'valid-skip-1m',
+        sessionType: 'SHORT_BREAK',
+        plannedDurationSeconds: 60,
+        cycleIndex: 1,
+        tagId: null,
+        autoStarted: false,
+        settings: { ...DEFAULT_SETTINGS, shortBreakDurationMinutes: 1 },
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: baseMs + 90_000,
+        nowMs: baseMs + 30_000,
+      });
+      await tracker.onSessionFinalized({
+        attemptId: 'valid-skip-1m',
+        outcome: 'skipped',
+        sessionType: 'SHORT_BREAK',
+        plannedDurationSeconds: 60,
+        remainingSecondsAtEnd: 45,
+        cycleIndex: 1,
+        tagId: null,
+        settings: { ...DEFAULT_SETTINGS, shortBreakDurationMinutes: 1 },
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        wasStarted: true,
+        toSessionType: 'WORK',
+        nowMs: baseMs + 45_000,
+      });
+
+      const exported = tracker.getExportDataSync();
+      expect(exported.sessionAttempts).toHaveLength(1);
+      expect(exported.sessionAttempts[0].attemptId).toBe('valid-skip-1m');
+      expect(exported.sessionAttempts[0].status).toBe('skipped');
     });
 
     it('records settings_changed, daily_goal_changed, coffee_removed, tag cleanup, import/export, and clearAll without cookies', async () => {

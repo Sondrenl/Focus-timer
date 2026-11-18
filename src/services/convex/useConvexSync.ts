@@ -42,6 +42,7 @@ export function useConvexSync(isAuthenticated: boolean) {
   const importBackupMutation = useMutation(api.migrations.importBackup);
   const upsertAttemptMutation = useMutation(api.telemetry.upsertAttempt);
   const recordTelemetryEventsMutation = useMutation(api.telemetry.recordEvents);
+  const discardTelemetryAttemptMutation = useMutation(api.telemetry.discardAttempt);
   const clearTelemetryMutation = useMutation(api.telemetry.clear);
   const registerPushSubscriptionMutation = useMutation(api.push.register);
   const unregisterPushSubscriptionMutation = useMutation(api.push.unregister);
@@ -145,6 +146,7 @@ export function useConvexSync(isAuthenticated: boolean) {
       importBackup: wrapMutation(importBackupMutation, 'importBackup'),
       upsertAttempt: wrapMutation(upsertAttemptMutation, 'upsertAttempt'),
       recordTelemetryEvents: wrapMutation(recordTelemetryEventsMutation, 'recordTelemetryEvents'),
+      discardTelemetryAttempt: wrapMutation(discardTelemetryAttemptMutation, 'discardTelemetryAttempt'),
       clearTelemetry: wrapMutation(clearTelemetryMutation, 'clearTelemetry'),
       registerPushSubscription: wrapMutation(registerPushSubscriptionMutation, 'registerPushSubscription'),
       unregisterPushSubscription: wrapMutation(unregisterPushSubscriptionMutation, 'unregisterPushSubscription'),
@@ -165,6 +167,7 @@ export function useConvexSync(isAuthenticated: boolean) {
       importBackupMutation,
       upsertAttemptMutation,
       recordTelemetryEventsMutation,
+      discardTelemetryAttemptMutation,
       clearTelemetryMutation,
       registerPushSubscriptionMutation,
       unregisterPushSubscriptionMutation,

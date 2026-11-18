@@ -551,4 +551,80 @@ describe("Passive ML Telemetry Convex Backend", () => {
     const evt2 = events?.find((e) => e.eventId === "imported-evt-2");
     expect(evt2?.tagId).toBe("ext-tag");
   });
+
+  it("discards in_progress short attempts and their lifecycle events while protecting finalized attempts and coffee events", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    const otherUserId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+      email: "other-discard@example.com",
+      sub: "google-other-discard",
+      name: "Other User",
+    });
+    const asOtherUser = t.withIdentity({
+      subject: `${otherUserId}|session-other`,
+      email: "other-discard@example.com",
+      name: "Other User",
+    });
+
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({ attemptId: "short-run-1", status: "in_progress" })
+    );
+    await asUser.mutation(api.telemetry.recordEvents, {
+      events: [
+        makeSampleEvent({
+          eventId: "evt-start-short-run-1",
+          eventType: "session_started",
+          attemptId: "short-run-1",
+        }),
+        makeSampleEvent({
+          eventId: "evt-pause-short-run-1",
+          eventType: "session_paused",
+          attemptId: "short-run-1",
+          timestampMs: 1700000005000,
+        }),
+        makeSampleEvent({
+          eventId: "evt-coffee-during-short",
+          eventType: "coffee_logged",
+          attemptId: "short-run-1",
+          cupId: "cup-short-1",
+          cupDate: "2026-11-18",
+          cupIndexToday: 1,
+          timestampMs: 1700000006000,
+        }),
+      ],
+    });
+
+    // Another user cannot discard asUser's attempt
+    await asOtherUser.mutation(api.telemetry.discardAttempt, { attemptId: "short-run-1" });
+    expect(await asUser.query(api.telemetry.listAttempts, {})).toHaveLength(1);
+
+    // Owner discards in_progress attempt
+    const discarded = await asUser.mutation(api.telemetry.discardAttempt, {
+      attemptId: "short-run-1",
+    });
+    expect(discarded).toBe(true);
+    expect(await asUser.query(api.telemetry.listAttempts, {})).toEqual([]);
+
+    const remainingEvents = await asUser.query(api.telemetry.listEvents, {});
+    expect(remainingEvents).toHaveLength(1);
+    expect(remainingEvents?.[0].eventId).toBe("evt-coffee-during-short");
+    expect(remainingEvents?.[0].attemptId).toBeNull();
+
+    // Finalized attempts cannot be discarded
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "final-run-1",
+        status: "completed",
+        endedAt: "2026-11-18T10:25:00.000Z",
+      })
+    );
+    const discardFinalized = await asUser.mutation(api.telemetry.discardAttempt, {
+      attemptId: "final-run-1",
+    });
+    expect(discardFinalized).toBe(false);
+    expect(await asUser.query(api.telemetry.listAttempts, {})).toHaveLength(1);
+  });
 });

@@ -19,11 +19,13 @@ import {
   computeCoffeeContextAt,
   computePriorAttemptContext,
   getDeviceClass,
+  getMinimumAbortTelemetrySeconds,
 } from '../../utils/telemetryContext';
 
 export interface TelemetryCloudSink {
   upsertAttempt: (attempt: SessionAttempt) => Promise<unknown>;
   recordEvents: (events: MlEvent[]) => Promise<unknown>;
+  discardAttempt?: (attemptId: string) => Promise<unknown>;
 }
 
 function generateId(prefix: string): string {
@@ -383,6 +385,7 @@ export class TelemetryTracker {
     toSessionType?: SessionType | null;
     nowMs?: number;
   }): Promise<void> {
+    if (!params.wasStarted) return;
     return this.enqueue(async () => {
       const nowMs = params.nowMs ?? Date.now();
       const timeCtx = buildLocalTimeContext(nowMs);
@@ -537,6 +540,25 @@ export class TelemetryTracker {
           source: 'client',
           updatedAtMs: nowMs,
         };
+      }
+
+      const isAbortOutcome =
+        params.outcome === 'skipped' ||
+        params.outcome === 'reset' ||
+        params.outcome === 'switched';
+      const minAbortSeconds = getMinimumAbortTelemetrySeconds(plannedSec);
+
+      if (isAbortOutcome && finalizedAttempt.actualActiveSeconds < minAbortSeconds) {
+        this.activeDraft = null;
+        this.draftLoaded = true;
+        await this.repo.saveActiveDraft(null);
+        await this.repo.discardAttempt(resolvedAttemptId);
+        if (this.cloudSink?.discardAttempt) {
+          this.cloudSink.discardAttempt(resolvedAttemptId).catch((err) => {
+            console.warn('[Telemetry] Failed to discard short attempt from cloud:', err);
+          });
+        }
+        return;
       }
 
       this.activeDraft = null;
