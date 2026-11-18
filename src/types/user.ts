@@ -2,6 +2,7 @@ import { Tag } from './tag';
 import { CompletedSession } from './session';
 import { UserSettings } from './settings';
 import { CoffeeCup } from './coffee';
+import { MlTelemetryExport } from './telemetry';
 
 /**
  * User Profile data model for focus tracking, goals, and optional cloud sync
@@ -66,4 +67,5 @@ export interface BackupData {
   tags: Tag[];
   sessions: CompletedSession[];
   coffeeCups?: CoffeeCup[];
+  mlTelemetry?: MlTelemetryExport;
 }

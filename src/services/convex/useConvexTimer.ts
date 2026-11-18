@@ -3,8 +3,8 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { isConvexConfigured } from './ConvexClient';
 
-export function useConvexTimer(isAuthenticated: boolean) {
-  const shouldQuery = isConvexConfigured && isAuthenticated;
+export function useConvexTimer(isAuthenticated: boolean, isAuthReady: boolean = true) {
+  const shouldQuery = isConvexConfigured && isAuthenticated && isAuthReady;
 
   const remoteTimer = useQuery(
     api.timer.getActive,

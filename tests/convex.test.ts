@@ -289,4 +289,147 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     const coffee = await asUser.query(api.coffee.list, {});
     expect(coffee?.[0]?.tagId).toBe("tag-study");
   });
+
+  it("refuses stale timer.reset when onlyIfNotRunning, expectedTimerRunId, or expectedUpdatedAtMs guards fail", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // Phone starts focus session
+    const started = await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      remainingSeconds: 1500,
+      totalSeconds: 1500,
+      currentCycle: 2,
+      tagId: "tag-study",
+      timerRunId: "phone-focus-run-2",
+    });
+
+    // Stale laptop mount / new-day reset with onlyIfNotRunning must NOT overwrite the phone's RUNNING focus timer
+    await asUser.mutation(api.timer.reset, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+      onlyIfNotRunning: true,
+    });
+
+    let active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("RUNNING");
+    expect(active?.currentCycle).toBe(2);
+    expect(active?.timerRunId).toBe("phone-focus-run-2");
+
+    // Stale >15m overdue self-heal for an older run ID must NOT overwrite the newer phone run
+    await asUser.mutation(api.timer.reset, {
+      sessionType: "SHORT_BREAK",
+      durationSeconds: 300,
+      currentCycle: 1,
+      expectedTimerRunId: "old-laptop-break-run-1",
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("RUNNING");
+    expect(active?.timerRunId).toBe("phone-focus-run-2");
+
+    // Stale reset with older expectedUpdatedAtMs must NOT overwrite newer state
+    await asUser.mutation(api.timer.reset, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+      expectedUpdatedAtMs: started.updatedAtMs - 10_000,
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("RUNNING");
+    expect(active?.timerRunId).toBe("phone-focus-run-2");
+
+    // Explicit user reset without guards still resets normally
+    await asUser.mutation(api.timer.reset, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("IDLE");
+    expect(active?.currentCycle).toBe(1);
+    expect(active?.timerRunId).toBeNull();
+  });
+
+  it("rejects run-less complete calls against tagged runs and allows Case 2 autoStartNext within 120s", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    // Phone starts a tagged WORK run
+    await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      remainingSeconds: 1500,
+      totalSeconds: 1500,
+      currentCycle: 2,
+      tagId: "tag-study",
+      timerRunId: "run-work-2",
+    });
+
+    // Stale device without matching timerRunId cannot complete the active run
+    await asUser.mutation(api.timer.complete, {
+      nextSessionType: "SHORT_BREAK",
+      nextDurationSeconds: 300,
+      nextCurrentCycle: 2,
+      autoStartNext: false,
+    });
+
+    let active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("RUNNING");
+    expect(active?.timerRunId).toBe("run-work-2");
+
+    // Simulate server onTimerCompleted finishing SHORT_BREAK 45s ago (auto-advanced to WORK cycle 2 IDLE)
+    const fortyFiveSecondsAgo = Date.now() - 45_000;
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          sessionType: "WORK",
+          status: "IDLE",
+          remainingSeconds: 1500,
+          totalSeconds: 1500,
+          targetEndTime: undefined,
+          currentCycle: 2,
+          timerRunId: undefined,
+          updatedAtMs: fortyFiveSecondsAgo,
+        });
+      }
+    });
+
+    // Mismatched nextSessionType/cycle should NOT auto-start Case 2
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "break-run-1",
+      nextSessionType: "SHORT_BREAK",
+      nextDurationSeconds: 300,
+      nextCurrentCycle: 2,
+      autoStartNext: true,
+      nextTimerRunId: "wrong-next-run",
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("IDLE");
+
+    // Matching Case 2 autoStartNext within 120s transitions WORK cycle 2 to RUNNING
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "break-run-1",
+      nextSessionType: "WORK",
+      nextDurationSeconds: 1500,
+      nextCurrentCycle: 2,
+      autoStartNext: true,
+      nextTimerRunId: "auto-work-run-2",
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("RUNNING");
+    expect(active?.sessionType).toBe("WORK");
+    expect(active?.currentCycle).toBe(2);
+    expect(active?.timerRunId).toBe("auto-work-run-2");
+  });
 });

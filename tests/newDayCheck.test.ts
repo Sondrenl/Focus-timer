@@ -289,9 +289,46 @@ describe('New Day Check Utilities', () => {
       expect(loaded.status).toBe('IDLE');
       expect(loaded.remainingSeconds).toBe(25 * 60);
       expect(loaded.totalSeconds).toBe(25 * 60);
+      expect(loaded.updatedAtMs).toBe(0);
 
       // Verify lastResetDayKey was stamped to today
       expect(store.get('focus_timer_last_day_reset_v1')).toBe('2026-11-07');
+    });
+
+    it('sets updatedAtMs to 0 on empty fallback and >15m overdue local timers so remote state wins', async () => {
+      const now = new Date(2026, 10, 7, 14, 0, 0).getTime();
+      vi.setSystemTime(now);
+      store.set('focus_timer_last_day_reset_v1', '2026-11-07');
+
+      const { loadInitialTimerState } = await import('../src/context/timer/timerPersistence');
+
+      // 1. Empty storage fallback
+      const emptyLoaded = loadInitialTimerState(25);
+      expect(emptyLoaded.status).toBe('IDLE');
+      expect(emptyLoaded.updatedAtMs).toBe(0);
+
+      // 2. Stale running timer that expired >15m ago while laptop was off
+      store.set(
+        'timer_state_v1',
+        JSON.stringify({
+          sessionType: 'WORK',
+          status: 'RUNNING',
+          currentCycle: 1,
+          remainingSeconds: 1200,
+          totalSeconds: 1500,
+          targetEndTime: now - 2 * 60 * 60 * 1000,
+          timerRunId: 'old-laptop-run',
+          updatedAtMs: now - 2 * 60 * 60 * 1000,
+          activeTagId: null,
+          deviceId: 'dev-1',
+          tabId: 'tab-1',
+          lastActiveAtMs: now - 2 * 60 * 60 * 1000,
+        })
+      );
+      const staleLoaded = loadInitialTimerState(25);
+      expect(staleLoaded.status).toBe('IDLE');
+      expect(staleLoaded.timerRunId).toBeNull();
+      expect(staleLoaded.updatedAtMs).toBe(0);
     });
 
     it('preserves cycle when all-nighter is active (session within last hour)', async () => {

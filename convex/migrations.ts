@@ -1,7 +1,13 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import { requireUser } from "./authHelper";
-import { sanitizeTagColor, MAX_TAG_NAME_LENGTH } from "./tags";
+import { sanitizeTagColor, MAX_TAG_NAME_LENGTH, MAX_TAGS_PER_USER } from "./tags";
+import {
+  sessionAttemptInputValidator,
+  mlEventInputValidator,
+  validateAndNormalizeAttempt,
+  validateAndNormalizeEvent,
+} from "./telemetryValidators";
 
 export const importBackup = mutation({
   args: {
@@ -39,7 +45,17 @@ export const importBackup = mutation({
         })
       )
     ),
+    mlTelemetry: v.optional(
+      v.object({
+        schemaVersion: v.number(),
+        sessionAttempts: v.array(sessionAttemptInputValidator),
+        events: v.array(mlEventInputValidator),
+      })
+    ),
   },
+  returns: v.object({
+    success: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     if (args.tags.length > 100) {
@@ -50,6 +66,22 @@ export const importBackup = mutation({
     }
     if ((args.coffeeCups ?? []).length > 10000) {
       throw new Error("Cannot import more than 10,000 coffee cups in a single backup.");
+    }
+    if (args.mlTelemetry) {
+      if (
+        !Number.isFinite(args.mlTelemetry.schemaVersion) ||
+        args.mlTelemetry.schemaVersion < 1
+      ) {
+        throw new Error("Invalid mlTelemetry.schemaVersion.");
+      }
+      if (args.mlTelemetry.sessionAttempts.length > 1000) {
+        throw new Error(
+          "Cannot import more than 1,000 session attempts in a single backup."
+        );
+      }
+      if (args.mlTelemetry.events.length > 2000) {
+        throw new Error("Cannot import more than 2,000 ML events in a single backup.");
+      }
     }
 
     const now = new Date().toISOString();
@@ -88,6 +120,23 @@ export const importBackup = mutation({
         .collect();
       for (const c of existingCups) {
         await ctx.db.delete(c._id);
+      }
+
+      // 2b. Clear existing passive ML telemetry (bounded)
+      const existingAttempts = await ctx.db
+        .query("session_attempts")
+        .withIndex("by_user_attempt", (q) => q.eq("userId", user._id))
+        .take(4096);
+      for (const a of existingAttempts) {
+        await ctx.db.delete(a._id);
+      }
+
+      const existingEvents = await ctx.db
+        .query("ml_events")
+        .withIndex("by_user_event", (q) => q.eq("userId", user._id))
+        .take(4096);
+      for (const e of existingEvents) {
+        await ctx.db.delete(e._id);
       }
 
       // 3. Format and replace tags, keeping track of valid/remapped tag IDs
@@ -143,6 +192,42 @@ export const importBackup = mutation({
         });
       }
 
+      // 6. Ingest ML telemetry if supplied
+      if (args.mlTelemetry) {
+        const seenAttemptIds = new Set<string>();
+        for (const rawAttempt of args.mlTelemetry.sessionAttempts) {
+          if (isSampleId(rawAttempt.attemptId) || seenAttemptIds.has(rawAttempt.attemptId)) {
+            continue;
+          }
+          const parsed = validateAndNormalizeAttempt(rawAttempt);
+          if (!parsed.ok) continue;
+          seenAttemptIds.add(parsed.value.attemptId);
+          await ctx.db.insert("session_attempts", {
+            userId: user._id,
+            ...parsed.value,
+            initialTagId: resolveTagId(parsed.value.initialTagId),
+            tagId: resolveTagId(parsed.value.tagId),
+          });
+        }
+
+        const seenEventIds = new Set<string>();
+        for (const rawEvent of args.mlTelemetry.events) {
+          if (isSampleId(rawEvent.eventId) || seenEventIds.has(rawEvent.eventId)) {
+            continue;
+          }
+          const parsed = validateAndNormalizeEvent(rawEvent);
+          if (!parsed.ok) continue;
+          seenEventIds.add(parsed.value.eventId);
+          await ctx.db.insert("ml_events", {
+            userId: user._id,
+            ...parsed.value,
+            tagId: resolveTagId(parsed.value.tagId),
+            fromTagId: resolveTagId(parsed.value.fromTagId),
+            toTagId: resolveTagId(parsed.value.toTagId),
+          });
+        }
+      }
+
       return { success: true };
     }
 
@@ -189,6 +274,10 @@ export const importBackup = mutation({
       }
     }
 
+    if (mergedTags.length > MAX_TAGS_PER_USER) {
+      throw new Error(`Cannot exceed maximum limit of ${MAX_TAGS_PER_USER} tags.`);
+    }
+
     if (mergedTags.length !== existingTags.length) {
       await ctx.db.patch(user._id, { tags: mergedTags });
     }
@@ -203,7 +292,7 @@ export const importBackup = mutation({
     const existingSessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .collect();
+      .take(10000);
     const existingSessionKeys = new Set(
       existingSessions.map((s) => `${s.sessionType}-${s.completedAt}`)
     );
@@ -247,7 +336,7 @@ export const importBackup = mutation({
       const existingCups = await ctx.db
         .query("coffee_cups")
         .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-        .collect();
+        .take(10000);
       const existingCupKeys = new Set(
         existingCups.map((c) => `${c.date}-${c.createdAt}`)
       );
@@ -262,6 +351,62 @@ export const importBackup = mutation({
             date: cup.date,
             tagId: resolveMergedTagId(cup.tagId),
             createdAt: cupCreatedAt,
+          });
+        }
+      }
+    }
+
+    // 4. Ingest ML telemetry if supplied, deduplicating by attemptId / eventId
+    if (args.mlTelemetry) {
+      const seenAttemptIds = new Set<string>();
+      for (const rawAttempt of args.mlTelemetry.sessionAttempts) {
+        if (isSampleId(rawAttempt.attemptId) || seenAttemptIds.has(rawAttempt.attemptId)) {
+          continue;
+        }
+        const parsed = validateAndNormalizeAttempt(rawAttempt);
+        if (!parsed.ok) continue;
+        seenAttemptIds.add(parsed.value.attemptId);
+
+        const existing = await ctx.db
+          .query("session_attempts")
+          .withIndex("by_user_attempt", (q) =>
+            q.eq("userId", user._id).eq("attemptId", parsed.value.attemptId)
+          )
+          .first();
+
+        if (!existing) {
+          await ctx.db.insert("session_attempts", {
+            userId: user._id,
+            ...parsed.value,
+            initialTagId: resolveMergedTagId(parsed.value.initialTagId),
+            tagId: resolveMergedTagId(parsed.value.tagId),
+          });
+        }
+      }
+
+      const seenEventIds = new Set<string>();
+      for (const rawEvent of args.mlTelemetry.events) {
+        if (isSampleId(rawEvent.eventId) || seenEventIds.has(rawEvent.eventId)) {
+          continue;
+        }
+        const parsed = validateAndNormalizeEvent(rawEvent);
+        if (!parsed.ok) continue;
+        seenEventIds.add(parsed.value.eventId);
+
+        const existing = await ctx.db
+          .query("ml_events")
+          .withIndex("by_user_event", (q) =>
+            q.eq("userId", user._id).eq("eventId", parsed.value.eventId)
+          )
+          .first();
+
+        if (!existing) {
+          await ctx.db.insert("ml_events", {
+            userId: user._id,
+            ...parsed.value,
+            tagId: resolveMergedTagId(parsed.value.tagId),
+            fromTagId: resolveMergedTagId(parsed.value.fromTagId),
+            toTagId: resolveMergedTagId(parsed.value.toTagId),
           });
         }
       }

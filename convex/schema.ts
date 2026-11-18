@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
+import { sessionAttemptDbFields, mlEventDbFields } from "./telemetryValidators";
 
 export default defineSchema({
   ...authTables,
@@ -99,7 +100,9 @@ export default defineSchema({
     ),
     durationSeconds: v.number(),
     completedAt: v.string(), // Lexicographically sortable ISO-8601 string
-  }).index("by_user_completed", ["userId", "completedAt"]),
+  })
+    .index("by_user_completed", ["userId", "completedAt"])
+    .index("by_user_tag", ["userId", "tagId"]),
 
   // 4. Coffee Log: Individual timestamped cups
   // Compound index on ["userId", "date"] covers both userId-only queries and date queries
@@ -108,7 +111,9 @@ export default defineSchema({
     tagId: v.optional(v.string()),
     date: v.string(), // "YYYY-MM-DD"
     createdAt: v.string(), // ISO-8601
-  }).index("by_user_date", ["userId", "date"]),
+  })
+    .index("by_user_date", ["userId", "date"])
+    .index("by_user_tag", ["userId", "tagId"]),
 
   // 5. Multi-Device Push Subscriptions (For background lock-screen notifications)
   // Compound index on ["userId", "deviceId"] covers both userId-only queries and specific device lookups
@@ -122,4 +127,25 @@ export default defineSchema({
     isMobile: v.optional(v.boolean()),
     updatedAt: v.string(),
   }).index("by_user_device", ["userId", "deviceId"]),
+
+  // 6. Passive ML Telemetry: Run-level session attempts
+  session_attempts: defineTable({
+    userId: v.id("users"),
+    ...sessionAttemptDbFields,
+  })
+    .index("by_user_attempt", ["userId", "attemptId"])
+    .index("by_user_ended", ["userId", "endedAt"])
+    .index("by_user_local_date", ["userId", "localDate"])
+    .index("by_user_tag", ["userId", "tagId"])
+    .index("by_user_initial_tag", ["userId", "initialTagId"]),
+
+  // 7. Passive ML Telemetry: Granular timestamped behavioral events
+  ml_events: defineTable({
+    userId: v.id("users"),
+    ...mlEventDbFields,
+  })
+    .index("by_user_event", ["userId", "eventId"])
+    .index("by_user_timestamp", ["userId", "timestampMs"])
+    .index("by_user_local_date", ["userId", "localDate"]),
 });
+

@@ -11,6 +11,7 @@ import {
   tagRepository,
   sessionRepository,
   coffeeRepository,
+  telemetryTracker,
 } from '../../context/services';
 import { useAuthProfile } from '../../context/AuthProfileContext';
 
@@ -230,6 +231,8 @@ export function useTagsData({
       await coffeeRepository.saveAll(updatedCoffee);
       setCoffeeCups(updatedCoffee);
       broadcastCoffeeCups(updatedCoffee);
+
+      await telemetryTracker.clearTagReferences(id);
 
       const updatedTags = await tagRepository.getAll();
       setTags(updatedTags);

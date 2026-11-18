@@ -16,10 +16,93 @@ import {
   tagRepository,
   sessionRepository,
   coffeeRepository,
+  telemetryTracker,
 } from '../../context/services';
+import {
+  MlEvent,
+  MlTelemetryExport,
+  SessionAttempt,
+} from '../../types/telemetry';
 import { useAuthProfile } from '../../context/AuthProfileContext';
 
 const BACKUP_CHUNK_SIZE = 400;
+const TELEMETRY_ATTEMPT_CHUNK_SIZE = 400;
+const TELEMETRY_EVENT_CHUNK_SIZE = 800;
+
+function sanitizeMlTelemetryForImport(
+  raw: unknown,
+  resolveTagId: (rawTagId?: string | null) => string | null
+): MlTelemetryExport | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const rawAttempts = Array.isArray(obj.sessionAttempts) ? obj.sessionAttempts : [];
+  const rawEvents = Array.isArray(obj.events) ? obj.events : [];
+
+  const validSessionTypes = new Set(['WORK', 'SHORT_BREAK', 'LONG_BREAK']);
+  const validStatuses = new Set([
+    'in_progress',
+    'completed',
+    'skipped',
+    'reset',
+    'switched',
+    'abandoned_stale',
+  ]);
+
+  const sessionAttempts: SessionAttempt[] = rawAttempts
+    .filter((a: any) => {
+      if (!a || typeof a !== 'object') return false;
+      if (isSampleSessionId(a.attemptId)) return false;
+      return (
+        typeof a.attemptId === 'string' &&
+        a.attemptId.length > 0 &&
+        validSessionTypes.has(a.sessionType) &&
+        validStatuses.has(a.status) &&
+        typeof a.plannedDurationSeconds === 'number' &&
+        Number.isFinite(a.plannedDurationSeconds) &&
+        typeof a.localDate === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(a.localDate) &&
+        a.settingsSnapshot &&
+        typeof a.settingsSnapshot === 'object'
+      );
+    })
+    .map((a: any) => ({
+      ...a,
+      initialTagId: resolveTagId(a.initialTagId),
+      tagId: resolveTagId(a.tagId),
+      pauseIntervals: Array.isArray(a.pauseIntervals) ? a.pauseIntervals.slice(0, 50) : [],
+    }));
+
+  const events: MlEvent[] = rawEvents
+    .filter((e: any) => {
+      if (!e || typeof e !== 'object') return false;
+      if (isSampleSessionId(e.eventId)) return false;
+      return (
+        typeof e.eventId === 'string' &&
+        e.eventId.length > 0 &&
+        typeof e.eventType === 'string' &&
+        typeof e.timestamp === 'string' &&
+        typeof e.timestampMs === 'number' &&
+        Number.isFinite(e.timestampMs) &&
+        typeof e.localDate === 'string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(e.localDate)
+      );
+    })
+    .map((e: any) => ({
+      ...e,
+      tagId: e.tagId !== undefined ? resolveTagId(e.tagId) : null,
+      fromTagId: e.fromTagId !== undefined ? resolveTagId(e.fromTagId) : null,
+      toTagId: e.toTagId !== undefined ? resolveTagId(e.toTagId) : null,
+    }));
+
+  return {
+    schemaVersion:
+      typeof obj.schemaVersion === 'number' && Number.isFinite(obj.schemaVersion)
+        ? obj.schemaVersion
+        : 1,
+    sessionAttempts,
+    events,
+  };
+}
 
 interface UseBackupAndMigrationParams {
   isEffectiveAuthenticated: boolean;
@@ -79,10 +162,38 @@ export function useBackupAndMigration({
     convexUser,
     convexCoffee,
     convexSessions,
+    fetchTelemetryAttempts,
+    fetchTelemetryEvents,
     mutations: convexMutations,
   } = convexSync;
 
   const hasMigratedToCloudRef = useRef<boolean>(false);
+
+  // Bind passive ML telemetry cloud sink when authenticated and Convex is configured
+  useEffect(() => {
+    if (
+      isConvexConfigured &&
+      isEffectiveAuthenticated &&
+      convexMutations?.upsertAttempt &&
+      convexMutations?.recordTelemetryEvents
+    ) {
+      telemetryTracker.setCloudSink({
+        upsertAttempt: (attempt) => convexMutations.upsertAttempt(attempt),
+        recordEvents: async (events) => {
+          for (let i = 0; i < events.length; i += 100) {
+            await convexMutations.recordTelemetryEvents({
+              events: events.slice(i, i + 100),
+            });
+          }
+        },
+      });
+    } else {
+      telemetryTracker.setCloudSink(null);
+    }
+    return () => {
+      telemetryTracker.setCloudSink(null);
+    };
+  }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);
 
   // Helper to send backup payloads to Convex in bounded chunks (<= 400 items per mutation)
   const syncBackupToConvexChunked = useCallback(
@@ -101,16 +212,25 @@ export function useBackupAndMigration({
         date: string;
         tagId?: string | null;
         createdAt?: string;
-      }>
+      }>,
+      mlTelemetryToSync?: MlTelemetryExport
     ) => {
       // Never sync sample or seed data to Convex
       const cleanSessions = sessionsToSync.filter((s) => !isSampleSessionId(s.id));
       const cleanCups = cupsToSync.filter((c) => !isSampleSessionId(c.id));
+      const cleanAttempts = (mlTelemetryToSync?.sessionAttempts ?? []).filter(
+        (a) => !isSampleSessionId(a.attemptId)
+      );
+      const cleanEvents = (mlTelemetryToSync?.events ?? []).filter(
+        (e) => !isSampleSessionId(e.eventId)
+      );
 
       const maxChunks = Math.max(
         1,
         Math.ceil(cleanSessions.length / BACKUP_CHUNK_SIZE),
-        Math.ceil(cleanCups.length / BACKUP_CHUNK_SIZE)
+        Math.ceil(cleanCups.length / BACKUP_CHUNK_SIZE),
+        Math.ceil(cleanAttempts.length / TELEMETRY_ATTEMPT_CHUNK_SIZE),
+        Math.ceil(cleanEvents.length / TELEMETRY_EVENT_CHUNK_SIZE)
       );
 
       for (let i = 0; i < maxChunks; i++) {
@@ -123,12 +243,31 @@ export function useBackupAndMigration({
           i * BACKUP_CHUNK_SIZE,
           (i + 1) * BACKUP_CHUNK_SIZE
         );
+        const attemptSlice = cleanAttempts.slice(
+          i * TELEMETRY_ATTEMPT_CHUNK_SIZE,
+          (i + 1) * TELEMETRY_ATTEMPT_CHUNK_SIZE
+        );
+        const eventSlice = cleanEvents.slice(
+          i * TELEMETRY_EVENT_CHUNK_SIZE,
+          (i + 1) * TELEMETRY_EVENT_CHUNK_SIZE
+        );
+
+        const hasMlSlice = attemptSlice.length > 0 || eventSlice.length > 0;
 
         await convexMutations.importBackup({
           mode: chunkMode,
           tags: i === 0 ? tagsToSync : [],
           sessions: sessionSlice,
           coffeeCups: cupSlice,
+          ...(hasMlSlice
+            ? {
+                mlTelemetry: {
+                  schemaVersion: mlTelemetryToSync?.schemaVersion ?? 1,
+                  sessionAttempts: attemptSlice,
+                  events: eventSlice,
+                },
+              }
+            : {}),
         });
       }
     },
@@ -152,10 +291,11 @@ export function useBackupAndMigration({
     (async () => {
       try {
         // First purge any dev sample sessions from local storage before inspecting local data
-        const [localSessions, localCoffee, localTags] = await Promise.all([
+        const [localSessions, localCoffee, localTags, localTelemetry] = await Promise.all([
           sessionRepository.purgeSampleSessions(),
           coffeeRepository.getAll(),
           tagRepository.getAll(),
+          telemetryTracker.getExportData(),
         ]);
 
         const remoteSessionTimes = Array.isArray(convexSessions)
@@ -216,7 +356,44 @@ export function useBackupAndMigration({
           return undefined;
         };
 
-        if (missingSessions.length > 0 || missingCups.length > 0 || missingTags.length > 0) {
+        // Fetch cloud telemetry on-demand to compute missing local vs remote items
+        const [remoteAttemptsRaw, remoteEventsRaw] = await Promise.all([
+          fetchTelemetryAttempts ? fetchTelemetryAttempts(5000) : Promise.resolve(null),
+          fetchTelemetryEvents ? fetchTelemetryEvents(5000) : Promise.resolve(null),
+        ]);
+        const remoteAttempts = Array.isArray(remoteAttemptsRaw)
+          ? (remoteAttemptsRaw as SessionAttempt[])
+          : [];
+        const remoteEvents = Array.isArray(remoteEventsRaw)
+          ? (remoteEventsRaw as MlEvent[])
+          : [];
+
+        const remoteAttemptIds = new Set(remoteAttempts.map((a) => a.attemptId));
+        const remoteEventIds = new Set(remoteEvents.map((e) => e.eventId));
+
+        const missingAttempts = localTelemetry.sessionAttempts
+          .filter((a) => !isSampleSessionId(a.attemptId) && !remoteAttemptIds.has(a.attemptId))
+          .map((a) => ({
+            ...a,
+            initialTagId: resolveMigratedTagId(a.initialTagId) ?? null,
+            tagId: resolveMigratedTagId(a.tagId) ?? null,
+          }));
+        const missingEvents = localTelemetry.events
+          .filter((e) => !isSampleSessionId(e.eventId) && !remoteEventIds.has(e.eventId))
+          .map((e) => ({
+            ...e,
+            tagId: resolveMigratedTagId(e.tagId) ?? null,
+            fromTagId: resolveMigratedTagId(e.fromTagId) ?? null,
+            toTagId: resolveMigratedTagId(e.toTagId) ?? null,
+          }));
+
+        if (
+          missingSessions.length > 0 ||
+          missingCups.length > 0 ||
+          missingTags.length > 0 ||
+          missingAttempts.length > 0 ||
+          missingEvents.length > 0
+        ) {
           await syncBackupToConvexChunked(
             'merge',
             localTags.map((t) => ({
@@ -237,7 +414,26 @@ export function useBackupAndMigration({
               date: c.date,
               tagId: resolveMigratedTagId(c.tagId),
               createdAt: c.createdAt,
-            }))
+            })),
+            missingAttempts.length > 0 || missingEvents.length > 0
+              ? {
+                  schemaVersion: 1,
+                  sessionAttempts: missingAttempts,
+                  events: missingEvents,
+                }
+              : undefined
+          );
+        }
+
+        // Hydrate local store with any cloud telemetry from other devices
+        if (remoteAttempts.length > 0 || remoteEvents.length > 0) {
+          await telemetryTracker.importTelemetry(
+            {
+              schemaVersion: 1,
+              sessionAttempts: remoteAttempts,
+              events: remoteEvents,
+            },
+            'merge'
           );
         }
       } catch (err) {
@@ -250,6 +446,8 @@ export function useBackupAndMigration({
     convexUser,
     convexSessions,
     convexCoffee,
+    fetchTelemetryAttempts,
+    fetchTelemetryEvents,
     syncBackupToConvexChunked,
   ]);
 
@@ -262,6 +460,12 @@ export function useBackupAndMigration({
     const sortedCoffee = [...coffeeCups].sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
+    const rawTelemetry = telemetryTracker.getExportDataSync();
+    const mlTelemetry: MlTelemetryExport = {
+      schemaVersion: rawTelemetry.schemaVersion,
+      sessionAttempts: rawTelemetry.sessionAttempts.filter((a) => !isSampleSessionId(a.attemptId)),
+      events: rawTelemetry.events.filter((e) => !isSampleSessionId(e.eventId)),
+    };
     return {
       version: '3.0.3',
       exportedAt: new Date().toISOString(),
@@ -270,6 +474,7 @@ export function useBackupAndMigration({
       sessions: sortedSessions,
       coffeeCups: sortedCoffee,
       settings,
+      mlTelemetry,
     };
   }, [sessions, coffeeCups, profile, tags, settings]);
 
@@ -375,6 +580,7 @@ export function useBackupAndMigration({
       let finalTags: Tag[] = [];
       let finalSessions: CompletedSession[] = [];
       let finalCoffee: CoffeeCup[] = [];
+      let finalMlTelemetry: MlTelemetryExport | undefined;
       let sessionsAdded = 0;
       let tagsAdded = 0;
       let coffeeAdded = 0;
@@ -400,6 +606,13 @@ export function useBackupAndMigration({
         await tagRepository.saveAll(finalTags);
         await sessionRepository.saveAll(finalSessions);
         await coffeeRepository.saveAll(finalCoffee);
+
+        finalMlTelemetry = sanitizeMlTelemetryForImport(data.mlTelemetry, resolveReplaceTagId);
+        if (finalMlTelemetry) {
+          await telemetryTracker.importTelemetry(finalMlTelemetry, 'replace');
+        } else {
+          await telemetryTracker.clearAll();
+        }
 
         setTags(finalTags);
         setSessions(finalSessions);
@@ -506,6 +719,14 @@ export function useBackupAndMigration({
         await coffeeRepository.saveAll(finalCoffee);
         setCoffeeCups(finalCoffee);
         broadcastCoffeeCups(finalCoffee);
+
+        finalMlTelemetry = sanitizeMlTelemetryForImport(data.mlTelemetry, resolveMergeTagId);
+        if (
+          finalMlTelemetry &&
+          (finalMlTelemetry.sessionAttempts.length > 0 || finalMlTelemetry.events.length > 0)
+        ) {
+          await telemetryTracker.importTelemetry(finalMlTelemetry, 'merge');
+        }
       }
 
       if (data.settings && typeof data.settings === 'object') {
@@ -588,7 +809,8 @@ export function useBackupAndMigration({
             date: c.date,
             tagId: c.tagId || undefined,
             createdAt: c.createdAt,
-          }))
+          })),
+          finalMlTelemetry
         ).catch(console.warn);
       }
 
@@ -620,6 +842,7 @@ export function useBackupAndMigration({
       if (scope === 'sessions-only') {
         await sessionRepository.clear();
         await coffeeRepository.clear();
+        await telemetryTracker.clearAll();
         setSessions([]);
         setCoffeeCups([]);
         broadcastCoffeeCups([]);
@@ -627,10 +850,12 @@ export function useBackupAndMigration({
         if (isConvexConfigured && isEffectiveAuthenticated) {
           convexMutations.clearSessions({}).catch(console.warn);
           convexMutations.clearCoffee({}).catch(console.warn);
+          convexMutations.clearTelemetry?.({}).catch(console.warn);
         }
       } else {
         await sessionRepository.clear();
         await coffeeRepository.clear();
+        await telemetryTracker.clearAll();
         const defaultTags = await tagRepository.resetToDefaults();
         await resetSettingsToDefaults();
         await resetProfileToDefaults();
@@ -647,6 +872,7 @@ export function useBackupAndMigration({
         if (isConvexConfigured && isEffectiveAuthenticated) {
           convexMutations.clearSessions({}).catch(console.warn);
           convexMutations.clearCoffee({}).catch(console.warn);
+          convexMutations.clearTelemetry?.({}).catch(console.warn);
           convexMutations.resetTags({}).catch(console.warn);
         }
       }

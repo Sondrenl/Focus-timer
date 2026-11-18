@@ -17,6 +17,7 @@ import {
   settingsRepository,
   soundService,
   notificationService,
+  telemetryTracker,
 } from './services';
 
 function pickConvexSettings(s: Partial<UserSettings>) {
@@ -37,6 +38,8 @@ function pickConvexSettings(s: Partial<UserSettings>) {
 export interface AuthProfileContextValue {
   auth: AuthState;
   isEffectiveAuthenticated: boolean;
+  isConvexAuthAuthenticated: boolean;
+  isConvexAuthLoading: boolean;
   loginWithGoogle: (idToken: string) => Promise<void>;
   logout: () => Promise<void>;
   syncWithCloud: (force?: boolean) => Promise<void>;
@@ -73,7 +76,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const lastLocalProfileEditMsRef = useRef<number>(0);
   const tokenRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { isAuthenticated: isConvexAuthAuthenticated } = useConvexAuth();
+  const { isAuthenticated: isConvexAuthAuthenticated, isLoading: isConvexAuthLoading } = useConvexAuth();
   const { signIn: convexSignIn, signOut: convexSignOut } = useAuthActions();
 
   const isEffectiveAuthenticated = isConvexAuthAuthenticated || auth.isAuthenticated;
@@ -130,6 +133,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     } else {
       await notificationService.unsubscribePush();
     }
+    const hadConvexSession = authService.hasConvexAuthSession();
     authService.logout();
     notificationService.setAuthToken(null);
     if (isConvexConfigured) {
@@ -138,7 +142,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       } catch (err) {
         console.warn('Convex signOut error', err);
       }
-      setAuthToken(null);
+      if (!hadConvexSession) {
+        setAuthToken(null);
+      }
     }
     setAuth({
       isAuthenticated: false,
@@ -172,10 +178,15 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         authService.saveAuthSession(idToken, user);
 
         if (isConvexConfigured) {
+          let convexSignedIn = false;
           try {
-            await convexSignIn('google-id-token', { token: idToken });
+            const res = await convexSignIn('google-id-token', { token: idToken });
+            convexSignedIn = Boolean(res?.signingIn) || authService.hasConvexAuthSession();
           } catch (convexErr) {
             console.warn('Convex sign-in error:', convexErr);
+          }
+          if (!convexSignedIn && !authService.hasConvexAuthSession()) {
+            setAuthToken(idToken);
           }
         }
 
@@ -245,7 +256,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (!isExpired) {
           if (storedToken) {
             notificationService.setAuthToken(storedToken);
-            setAuthToken(storedToken);
+            if (!hasConvexSession) {
+              setAuthToken(storedToken);
+            }
           }
           setAuth({
             isAuthenticated: true,
@@ -448,10 +461,18 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const updateProfile = useCallback(
     async (newProfile: Partial<UserProfile>): Promise<void> => {
       lastLocalProfileEditMsRef.current = Date.now();
+      const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
       const merged = { ...profileRef.current, ...newProfile };
       profileRef.current = merged;
       setProfile(merged);
       await profileRepository.save(merged);
+
+      if (merged.dailyGoalMinutes !== previousGoalMinutes) {
+        void telemetryTracker.onDailyGoalChanged({
+          previousGoalMinutes,
+          newGoalMinutes: merged.dailyGoalMinutes,
+        });
+      }
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations
@@ -468,9 +489,16 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const resetProfileToDefaults = useCallback(async (): Promise<UserProfile> => {
     lastLocalProfileEditMsRef.current = Date.now();
+    const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
     const defaultProfile = await profileRepository.resetToDefaults();
     profileRef.current = defaultProfile;
     setProfile(defaultProfile);
+    if (defaultProfile.dailyGoalMinutes !== previousGoalMinutes) {
+      void telemetryTracker.onDailyGoalChanged({
+        previousGoalMinutes,
+        newGoalMinutes: defaultProfile.dailyGoalMinutes,
+      });
+    }
     if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations
         .updateProfile({
@@ -486,6 +514,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const updateSettings = useCallback(
     async (newValues: Partial<UserSettings>): Promise<void> => {
       lastLocalSettingsEditMsRef.current = Date.now();
+      const previousSettings = settingsRef.current;
       const cleanValues = pickConvexSettings(newValues);
       const definedValues = Object.fromEntries(
         Object.entries(cleanValues).filter(([_, v]) => v !== undefined)
@@ -494,6 +523,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       settingsRef.current = merged;
       setSettings(merged);
       await settingsRepository.save(merged);
+
+      void telemetryTracker.onSettingsChanged({
+        previousSettings,
+        newSettings: merged,
+      });
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations.updateSettings(cleanValues).catch(console.warn);
@@ -504,9 +538,16 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const resetSettingsToDefaults = useCallback(async (): Promise<UserSettings> => {
     lastLocalSettingsEditMsRef.current = Date.now();
+    const previousSettings = settingsRef.current;
     const defaultSettings = await settingsRepository.resetToDefaults();
     settingsRef.current = defaultSettings;
     setSettings(defaultSettings);
+
+    void telemetryTracker.onSettingsChanged({
+      previousSettings,
+      newSettings: defaultSettings,
+    });
+
     if (isConvexConfigured && isEffectiveAuthenticated) {
       convexMutations.updateSettings(pickConvexSettings(defaultSettings)).catch(console.warn);
     }
@@ -583,6 +624,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     () => ({
       auth,
       isEffectiveAuthenticated,
+      isConvexAuthAuthenticated,
+      isConvexAuthLoading,
       loginWithGoogle,
       logout,
       syncWithCloud,
@@ -601,6 +644,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [
       auth,
       isEffectiveAuthenticated,
+      isConvexAuthAuthenticated,
+      isConvexAuthLoading,
       loginWithGoogle,
       logout,
       syncWithCloud,

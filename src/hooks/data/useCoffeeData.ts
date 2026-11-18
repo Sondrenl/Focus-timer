@@ -6,8 +6,30 @@ import {
   subscribeReset,
 } from '../../services/timer/TimerBroadcast';
 import { toDateKey } from '../../utils/dates';
-import { coffeeRepository } from '../../context/services';
+import { coffeeRepository, telemetryTracker } from '../../context/services';
 import { useAuthProfile } from '../../context/AuthProfileContext';
+import { TIMER_STORAGE_KEY } from '../../context/timer/timerPersistence';
+import { SessionType, TimerStatus } from '../../types/timer';
+
+function readActiveTimerContext(): {
+  status: TimerStatus | null;
+  sessionType: SessionType | null;
+} {
+  if (typeof window === 'undefined') {
+    return { status: null, sessionType: null };
+  }
+  try {
+    const raw = localStorage.getItem(TIMER_STORAGE_KEY);
+    if (!raw) return { status: null, sessionType: null };
+    const parsed = JSON.parse(raw);
+    return {
+      status: parsed?.status ?? null,
+      sessionType: parsed?.sessionType ?? null,
+    };
+  } catch {
+    return { status: null, sessionType: null };
+  }
+}
 
 interface UseCoffeeDataParams {
   isEffectiveAuthenticated: boolean;
@@ -107,6 +129,14 @@ export function useCoffeeData({
       setCoffeeCups(sortedUpdated);
       broadcastCoffeeCups(sortedUpdated);
 
+      const activeTimer = readActiveTimerContext();
+      void telemetryTracker.onCoffeeLogged({
+        cup: created,
+        allCupsAfterAdd: sortedUpdated,
+        timerStatus: activeTimer.status,
+        activeSessionType: activeTimer.sessionType,
+      });
+
       if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations
           .addCup({
@@ -151,6 +181,8 @@ export function useCoffeeData({
         );
         setCoffeeCups(sortedUpdated);
         broadcastCoffeeCups(sortedUpdated);
+
+        void telemetryTracker.onCoffeeRemoved(removedCup);
 
         if (isConvexConfigured && isEffectiveAuthenticated) {
           convexMutations

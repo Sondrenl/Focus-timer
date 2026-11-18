@@ -60,7 +60,7 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     totalSeconds: defaultSec,
     targetEndTime: null,
     timerRunId: null,
-    updatedAtMs: Date.now(),
+    updatedAtMs: 0,
     activeTagId: null,
     deviceId: DEVICE_ID,
     tabId: TAB_ID,
@@ -94,6 +94,7 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
           parsed.targetEndTime = null;
           parsed.timerRunId = null;
           parsed.remainingSeconds = parsed.totalSeconds;
+          parsed.updatedAtMs = 0;
         } else {
           // Expired while closed, preserve state so mount effect can record and alert
           return {
@@ -133,7 +134,7 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
         totalSeconds: defaultSec,
         targetEndTime: null,
         timerRunId: null,
-        updatedAtMs: Date.now(),
+        updatedAtMs: 0,
       };
       saveTimerState(resetState);
       return resetState;

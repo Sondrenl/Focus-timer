@@ -232,6 +232,9 @@ export const reset = mutation({
     durationSeconds: v.number(),
     currentCycle: v.number(),
     tagId: v.optional(v.union(v.string(), v.null())),
+    onlyIfNotRunning: v.optional(v.boolean()),
+    expectedTimerRunId: v.optional(v.string()),
+    expectedUpdatedAtMs: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
@@ -244,12 +247,36 @@ export const reset = mutation({
     if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
       throw new Error("Invalid tagId format.");
     }
+    if (
+      args.expectedTimerRunId &&
+      (args.expectedTimerRunId.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(args.expectedTimerRunId))
+    ) {
+      throw new Error("Invalid expectedTimerRunId format.");
+    }
+    if (args.expectedUpdatedAtMs !== undefined && !Number.isFinite(args.expectedUpdatedAtMs)) {
+      throw new Error("Invalid expectedUpdatedAtMs.");
+    }
     const sanitizedTagId = args.tagId || undefined;
 
     const existing = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .first();
+
+    // Prevent stale/background resets from clobbering an active or newer timer
+    if (args.onlyIfNotRunning && existing && existing.status === "RUNNING") {
+      return existing;
+    }
+    if (args.expectedTimerRunId !== undefined && existing?.timerRunId !== args.expectedTimerRunId) {
+      return existing ?? null;
+    }
+    if (
+      args.expectedUpdatedAtMs !== undefined &&
+      existing &&
+      existing.updatedAtMs > args.expectedUpdatedAtMs
+    ) {
+      return existing;
+    }
 
     // Capacity optimization: skip redundant patch if already IDLE with identical parameters
     if (
@@ -338,7 +365,7 @@ export const complete = mutation({
     // Case 1: Server onTimerCompleted has NOT run yet — client beat it cleanly.
     if (
       existing.status === "RUNNING" &&
-      (!args.completedTimerRunId || !existing.timerRunId || existing.timerRunId === args.completedTimerRunId)
+      (!existing.timerRunId || existing.timerRunId === args.completedTimerRunId)
     ) {
       // Guard against premature completion calls more than 5s before targetEndTime
       if (existing.targetEndTime && nowMs < existing.targetEndTime - 5000) {
@@ -360,8 +387,9 @@ export const complete = mutation({
           q
             .eq("userId", user._id)
             .gte("completedAt", new Date(completedAtMs - 45000).toISOString())
+            .lte("completedAt", new Date(completedAtMs + 45000).toISOString())
         )
-        .collect();
+        .take(50);
 
       const alreadyRecorded = recent.some(
         (s) =>
@@ -426,12 +454,14 @@ export const complete = mutation({
     }
 
     // Case 2: onTimerCompleted ALREADY ran on the server (so push was already scheduled).
-    // If autoStartNext is enabled and the server just transitioned to IDLE, start the next run.
+    // If autoStartNext is enabled and the server just transitioned to IDLE for this interval, start the next run.
     if (
       existing.status === "IDLE" &&
       shouldAutoStart &&
       args.nextTimerRunId &&
-      nowMs - existing.updatedAtMs < 15_000
+      existing.sessionType === args.nextSessionType &&
+      existing.currentCycle === args.nextCurrentCycle &&
+      nowMs - existing.updatedAtMs < 120_000
     ) {
       const nextTargetEndTime = nowMs + args.nextDurationSeconds * 1000;
       const nextScheduledCompletionId = await ctx.scheduler.runAfter(
@@ -524,7 +554,8 @@ export const onTimerCompleted = internalMutation({
     userId: v.id("users"),
     timerRunId: v.string(),
   },
-  handler: async (ctx, args): Promise<any> => {
+  returns: v.null(),
+  handler: async (ctx, args) => {
     const timer = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
@@ -532,7 +563,7 @@ export const onTimerCompleted = internalMutation({
 
     // Verify this is still the active run
     if (!timer || timer.timerRunId !== args.timerRunId || timer.status !== "RUNNING") {
-      return;
+      return null;
     }
 
     const nowMs = Date.now();
@@ -545,8 +576,9 @@ export const onTimerCompleted = internalMutation({
         q
           .eq("userId", args.userId)
           .gte("completedAt", new Date(nowMs - 45000).toISOString())
+          .lte("completedAt", new Date(nowMs + 45000).toISOString())
       )
-      .collect();
+      .take(50);
 
     const alreadyRecorded = recent.some((s) => s.sessionType === timer.sessionType);
     if (!alreadyRecorded) {
@@ -557,6 +589,87 @@ export const onTimerCompleted = internalMutation({
         durationSeconds: timer.totalSeconds,
         completedAt: nowIso,
       });
+    }
+
+    // 1b. Reconcile passive ML telemetry attempt & record server completion event
+    if (timer.timerRunId) {
+      const existingAttempt = await ctx.db
+        .query("session_attempts")
+        .withIndex("by_user_attempt", (q) =>
+          q.eq("userId", args.userId).eq("attemptId", args.timerRunId)
+        )
+        .first();
+
+      const completionLatencySeconds = timer.targetEndTime
+        ? Math.max(0, Math.round((nowMs - timer.targetEndTime) / 1000))
+        : 0;
+      const actualActiveSeconds =
+        existingAttempt?.plannedDurationSeconds || timer.totalSeconds;
+
+      if (existingAttempt && existingAttempt.status === "in_progress") {
+        await ctx.db.patch(existingAttempt._id, {
+          status: "completed",
+          endedAt: nowIso,
+          actualActiveSeconds,
+          remainingSecondsAtEnd: 0,
+          completionRatio: 1,
+          completionLatencySeconds,
+          source: "server_scheduled",
+          updatedAtMs: nowMs,
+        });
+      }
+
+      const serverEventId = `srv-comp-${args.timerRunId}`;
+      const clientEventId = `evt-comp-${args.timerRunId}`;
+      const [existingServerEvent, existingClientEvent] = await Promise.all([
+        ctx.db
+          .query("ml_events")
+          .withIndex("by_user_event", (q) =>
+            q.eq("userId", args.userId).eq("eventId", serverEventId)
+          )
+          .first(),
+        ctx.db
+          .query("ml_events")
+          .withIndex("by_user_event", (q) =>
+            q.eq("userId", args.userId).eq("eventId", clientEventId)
+          )
+          .first(),
+      ]);
+
+      if (!existingServerEvent && !existingClientEvent) {
+        const utcOffsetMinutes = existingAttempt?.utcOffsetMinutes ?? 0;
+        const ianaTimezone = existingAttempt?.ianaTimezone;
+        const deviceClass = existingAttempt?.deviceClass ?? "desktop";
+        const localMs = nowMs + utcOffsetMinutes * 60_000;
+        const localDateObj = new Date(localMs);
+        const localDate = localDateObj.toISOString().slice(0, 10);
+        const localHour = localDateObj.getUTCHours();
+        const localMinuteOfDay = localHour * 60 + localDateObj.getUTCMinutes();
+        const localDayOfWeek = localDateObj.getUTCDay();
+
+        await ctx.db.insert("ml_events", {
+          userId: args.userId,
+          eventId: serverEventId,
+          eventType: "session_completed",
+          timestamp: nowIso,
+          timestampMs: nowMs,
+          utcOffsetMinutes,
+          ...(ianaTimezone !== undefined ? { ianaTimezone } : {}),
+          localDate,
+          localHour,
+          localMinuteOfDay,
+          localDayOfWeek,
+          deviceClass,
+          attemptId: args.timerRunId,
+          sessionType: timer.sessionType,
+          tagId: timer.tagId,
+          plannedDurationSeconds:
+            existingAttempt?.plannedDurationSeconds ?? timer.totalSeconds,
+          elapsedActiveSeconds: actualActiveSeconds,
+          remainingSeconds: 0,
+          source: "server_scheduled",
+        });
+      }
     }
 
     // 2. Advance active_timers to the next interval in IDLE status
@@ -611,6 +724,8 @@ export const onTimerCompleted = internalMutation({
         completedAtMs: nowMs,
       });
     }
+
+    return null;
   },
 });
 
@@ -622,6 +737,9 @@ export const onTimerCompleted = internalMutation({
  */
 export const cleanupStaleTimers = internalMutation({
   args: {},
+  returns: v.object({
+    cleanedCount: v.number(),
+  }),
   handler: async (ctx) => {
     const nowMs = Date.now();
     const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -653,6 +771,68 @@ export const cleanupStaleTimers = internalMutation({
       }
 
       if (needsReset) {
+        if (timer.timerRunId) {
+          const runId = timer.timerRunId;
+          const existingAttempt = await ctx.db
+            .query("session_attempts")
+            .withIndex("by_user_attempt", (q) =>
+              q.eq("userId", timer.userId).eq("attemptId", runId)
+            )
+            .first();
+
+          if (existingAttempt && existingAttempt.status === "in_progress") {
+            const nowIso = new Date(nowMs).toISOString();
+            await ctx.db.patch(existingAttempt._id, {
+              status: "abandoned_stale",
+              endedAt: nowIso,
+              source: "server_scheduled",
+              updatedAtMs: nowMs,
+            });
+
+            const abandonedEventId = `srv-abandoned-${runId}`;
+            const existingAbandonedEvent = await ctx.db
+              .query("ml_events")
+              .withIndex("by_user_event", (q) =>
+                q.eq("userId", timer.userId).eq("eventId", abandonedEventId)
+              )
+              .first();
+
+            if (!existingAbandonedEvent) {
+              const utcOffsetMinutes = existingAttempt.utcOffsetMinutes ?? 0;
+              const localMs = nowMs + utcOffsetMinutes * 60_000;
+              const localDateObj = new Date(localMs);
+              const localDate = localDateObj.toISOString().slice(0, 10);
+              const localHour = localDateObj.getUTCHours();
+              const localMinuteOfDay = localHour * 60 + localDateObj.getUTCMinutes();
+              const localDayOfWeek = localDateObj.getUTCDay();
+
+              await ctx.db.insert("ml_events", {
+                userId: timer.userId,
+                eventId: abandonedEventId,
+                eventType: "session_abandoned_stale",
+                timestamp: nowIso,
+                timestampMs: nowMs,
+                utcOffsetMinutes,
+                ...(existingAttempt.ianaTimezone !== undefined
+                  ? { ianaTimezone: existingAttempt.ianaTimezone }
+                  : {}),
+                localDate,
+                localHour,
+                localMinuteOfDay,
+                localDayOfWeek,
+                deviceClass: existingAttempt.deviceClass ?? "desktop",
+                attemptId: runId,
+                sessionType: existingAttempt.sessionType,
+                tagId: existingAttempt.tagId,
+                plannedDurationSeconds: existingAttempt.plannedDurationSeconds,
+                elapsedActiveSeconds: existingAttempt.actualActiveSeconds,
+                remainingSeconds: existingAttempt.remainingSecondsAtEnd,
+                source: "server_scheduled",
+              });
+            }
+          }
+        }
+
         const user = await ctx.db.get(timer.userId);
         const settings = user?.settings ?? DEFAULT_SETTINGS;
         const dur = Math.max(1, Math.round(settings.workDurationMinutes * 60));
@@ -684,4 +864,3 @@ export const cleanupStaleTimers = internalMutation({
     return { cleanedCount };
   },
 });
-

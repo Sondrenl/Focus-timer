@@ -126,6 +126,7 @@ export const remove = mutation({
   args: {
     id: v.string(),
   },
+  returns: v.boolean(),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
@@ -140,21 +141,19 @@ export const remove = mutation({
       });
     }
 
-    // Clear orphaned tagId references in sessions, coffee_cups, and active_timers
+    // Clear orphaned tagId references in sessions, coffee_cups, active_timers, and session_attempts using indexes
     const sessionsWithTag = await ctx.db
       .query("sessions")
-      .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .filter((q) => q.eq(q.field("tagId"), args.id))
-      .collect();
+      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
+      .take(4096);
     for (const s of sessionsWithTag) {
       await ctx.db.patch(s._id, { tagId: undefined });
     }
 
     const cupsWithTag = await ctx.db
       .query("coffee_cups")
-      .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-      .filter((q) => q.eq(q.field("tagId"), args.id))
-      .collect();
+      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
+      .take(4096);
     for (const c of cupsWithTag) {
       await ctx.db.patch(c._id, { tagId: undefined });
     }
@@ -167,12 +166,40 @@ export const remove = mutation({
       await ctx.db.patch(activeTimer._id, { tagId: undefined });
     }
 
+    const attemptsWithTag = await ctx.db
+      .query("session_attempts")
+      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
+      .take(4096);
+    for (const a of attemptsWithTag) {
+      await ctx.db.patch(a._id, { tagId: undefined });
+    }
+
+    const attemptsWithInitialTag = await ctx.db
+      .query("session_attempts")
+      .withIndex("by_user_initial_tag", (q) =>
+        q.eq("userId", user._id).eq("initialTagId", args.id)
+      )
+      .take(4096);
+    for (const a of attemptsWithInitialTag) {
+      await ctx.db.patch(a._id, { initialTagId: undefined });
+    }
+
     return true;
   },
 });
 
 export const resetToDefaults = mutation({
   args: {},
+  returns: v.array(
+    v.object({
+      id: v.string(),
+      name: v.string(),
+      color: v.string(),
+      isArchived: v.boolean(),
+      createdAt: v.string(),
+      updatedAt: v.optional(v.string()),
+    })
+  ),
   handler: async (ctx) => {
     const user = await requireUser(ctx);
     const defaultTagIds = new Set(DEFAULT_TAGS.map((t) => t.id));
@@ -184,7 +211,7 @@ export const resetToDefaults = mutation({
     const userSessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .collect();
+      .take(4096);
     for (const s of userSessions) {
       if (s.tagId && !defaultTagIds.has(s.tagId)) {
         await ctx.db.patch(s._id, { tagId: undefined });
@@ -194,7 +221,7 @@ export const resetToDefaults = mutation({
     const userCups = await ctx.db
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-      .collect();
+      .take(4096);
     for (const c of userCups) {
       if (c.tagId && !defaultTagIds.has(c.tagId)) {
         await ctx.db.patch(c._id, { tagId: undefined });
@@ -207,6 +234,21 @@ export const resetToDefaults = mutation({
       .unique();
     if (activeTimer && activeTimer.tagId && !defaultTagIds.has(activeTimer.tagId)) {
       await ctx.db.patch(activeTimer._id, { tagId: undefined });
+    }
+
+    const attempts = await ctx.db
+      .query("session_attempts")
+      .withIndex("by_user_ended", (q) => q.eq("userId", user._id))
+      .take(4096);
+    for (const a of attempts) {
+      const clearTag = Boolean(a.tagId && !defaultTagIds.has(a.tagId));
+      const clearInitialTag = Boolean(a.initialTagId && !defaultTagIds.has(a.initialTagId));
+      if (clearTag || clearInitialTag) {
+        await ctx.db.patch(a._id, {
+          ...(clearTag ? { tagId: undefined } : {}),
+          ...(clearInitialTag ? { initialTagId: undefined } : {}),
+        });
+      }
     }
 
     return DEFAULT_TAGS;

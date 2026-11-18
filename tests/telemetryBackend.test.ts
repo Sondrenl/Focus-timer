@@ -1,0 +1,554 @@
+// @vitest-environment edge-runtime
+import { convexTest } from "convex-test";
+import { describe, it, expect } from "vitest";
+import schema from "../convex/schema";
+import { api, internal } from "../convex/_generated/api";
+
+const modules = import.meta.glob("../convex/**/*.*s");
+
+function makeSampleAttempt(overrides: Record<string, unknown> = {}) {
+  return {
+    attemptId: "attempt-1",
+    sessionType: "WORK" as const,
+    status: "in_progress" as const,
+    wasStarted: true,
+    plannedDurationSeconds: 1500,
+    actualActiveSeconds: 300,
+    remainingSecondsAtEnd: 1200,
+    completionRatio: 0.2,
+    startedAt: "2026-11-18T10:00:00.000Z",
+    endedAt: null,
+    utcOffsetMinutes: 60,
+    ianaTimezone: "Europe/Oslo",
+    localDate: "2026-11-18",
+    localHour: 11,
+    localMinuteOfDay: 660,
+    localDayOfWeek: 3,
+    cycleIndex: 1,
+    longBreakInterval: 4,
+    autoStarted: false,
+    initialTagId: "tag-study",
+    tagId: "tag-study",
+    tagChangedMidRun: false,
+    pauseCount: 0,
+    totalPausedSeconds: 0,
+    pauseIntervals: [],
+    timeSincePreviousAttemptSeconds: null,
+    previousAttemptType: null,
+    previousAttemptOutcome: null,
+    workSessionsCompletedToday: 0,
+    workActiveSecondsToday: 0,
+    skipsToday: 0,
+    coffeeCupsTodayAtStart: 1,
+    minutesSinceLastCoffeeAtStart: 30,
+    coffeeLoggedDuringRun: 0,
+    dailyGoalMinutes: 120,
+    settingsSnapshot: {
+      workDurationMinutes: 25,
+      shortBreakDurationMinutes: 5,
+      longBreakDurationMinutes: 25,
+      longBreakInterval: 4,
+      autoStartBreaks: false,
+      autoStartPomodoros: false,
+    },
+    deviceClass: "desktop" as const,
+    tabBackgroundedCount: 0,
+    completionLatencySeconds: null,
+    source: "client" as const,
+    updatedAtMs: 1700000000000,
+    ...overrides,
+  };
+}
+
+function makeSampleEvent(overrides: Record<string, unknown> = {}) {
+  return {
+    eventId: "evt-1",
+    eventType: "session_started" as const,
+    timestamp: "2026-11-18T10:00:00.000Z",
+    timestampMs: 1700000000000,
+    utcOffsetMinutes: 60,
+    ianaTimezone: "Europe/Oslo",
+    localDate: "2026-11-18",
+    localHour: 11,
+    localMinuteOfDay: 660,
+    localDayOfWeek: 3,
+    deviceClass: "desktop" as const,
+    attemptId: "attempt-1",
+    sessionType: "WORK" as const,
+    tagId: "tag-study",
+    plannedDurationSeconds: 1500,
+    source: "client" as const,
+    ...overrides,
+  };
+}
+
+describe("Passive ML Telemetry Convex Backend", () => {
+  async function createAuthenticatedTestUser(t: ReturnType<typeof convexTest>) {
+    const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+      email: "telemetry-user@example.com",
+      sub: "google-telemetry-sub",
+      name: "Telemetry Tester",
+    });
+    const asUser = t.withIdentity({
+      subject: `${userId}|session-telemetry`,
+      email: "telemetry-user@example.com",
+      name: "Telemetry Tester",
+    });
+    return { userId, asUser };
+  }
+
+  it("returns null for unauthenticated queries and isolates telemetry strictly per authenticated user", async () => {
+    const t = convexTest(schema, modules);
+    expect(await t.query(api.telemetry.listAttempts, {})).toBeNull();
+    expect(await t.query(api.telemetry.listEvents, {})).toBeNull();
+    await expect(
+      t.mutation(api.telemetry.upsertAttempt, makeSampleAttempt())
+    ).rejects.toThrow();
+
+    const { asUser: asUserA } = await createAuthenticatedTestUser(t);
+    const userBId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+      email: "user-b@example.com",
+      sub: "google-user-b-sub",
+      name: "User B",
+    });
+    const asUserB = t.withIdentity({
+      subject: `${userBId}|session-b`,
+      email: "user-b@example.com",
+      name: "User B",
+    });
+
+    await asUserA.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({ attemptId: "shared-id-1" })
+    );
+    await asUserA.mutation(api.telemetry.recordEvents, {
+      events: [makeSampleEvent({ eventId: "shared-evt-1" })],
+    });
+
+    // User B cannot see User A's attempts/events or clear them
+    expect(await asUserB.query(api.telemetry.listAttempts, {})).toEqual([]);
+    expect(await asUserB.query(api.telemetry.listEvents, {})).toEqual([]);
+    await asUserB.mutation(api.telemetry.clear, {});
+    expect(await asUserA.query(api.telemetry.listAttempts, {})).toHaveLength(1);
+    expect(await asUserA.query(api.telemetry.listEvents, {})).toHaveLength(1);
+  });
+
+  it("upserts session_attempts, prevents finalized downgrade/older overwrites, and lists by date/index", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // Insert in_progress attempt
+    const inserted = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt()
+    );
+    expect(inserted.attemptId).toBe("attempt-1");
+    expect(inserted.endedAt).toBeNull();
+
+    // Finalize attempt
+    const finalized = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        status: "completed",
+        actualActiveSeconds: 1500,
+        remainingSecondsAtEnd: 0,
+        completionRatio: 1,
+        endedAt: "2026-11-18T10:25:00.000Z",
+        completionLatencySeconds: 1,
+        updatedAtMs: 1700001500000,
+      })
+    );
+    expect(finalized.status).toBe("completed");
+
+    // Attempt to downgrade back to in_progress with newer timestamp -> must keep finalized
+    const afterDowngradeAttempt = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        status: "in_progress",
+        updatedAtMs: 1700002000000,
+      })
+    );
+    expect(afterDowngradeAttempt.status).toBe("completed");
+
+    // Attempt to overwrite finalized with older updatedAtMs -> must keep newer finalized
+    const afterOlderAttempt = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        status: "skipped",
+        endedAt: "2026-11-18T10:10:00.000Z",
+        updatedAtMs: 1700001000000,
+      })
+    );
+    expect(afterOlderAttempt.status).toBe("completed");
+
+    // Insert second attempt on another date
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "attempt-2",
+        status: "skipped",
+        localDate: "2026-11-19",
+        endedAt: "2026-11-19T09:05:00.000Z",
+        updatedAtMs: 1700080000000,
+      })
+    );
+
+    const all = await asUser.query(api.telemetry.listAttempts, {});
+    expect(all).toHaveLength(2);
+
+    const filtered = await asUser.query(api.telemetry.listAttempts, {
+      startDate: "2026-11-19",
+      endDate: "2026-11-19",
+    });
+    expect(filtered).toHaveLength(1);
+    expect(filtered?.[0].attemptId).toBe("attempt-2");
+  });
+
+  it("validates bounds and deduplicates ml_events in recordEvents", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    await expect(
+      asUser.mutation(
+        api.telemetry.upsertAttempt,
+        makeSampleAttempt({ attemptId: "bad id!" })
+      )
+    ).rejects.toThrow("Invalid attemptId format.");
+
+    await expect(
+      asUser.mutation(
+        api.telemetry.upsertAttempt,
+        makeSampleAttempt({ localHour: 24 })
+      )
+    ).rejects.toThrow("localHour must be between 0 and 23.");
+
+    const res1 = await asUser.mutation(api.telemetry.recordEvents, {
+      events: [
+        makeSampleEvent({ eventId: "evt-1" }),
+        makeSampleEvent({ eventId: "evt-1" }), // duplicate in same batch
+        makeSampleEvent({
+          eventId: "evt-2",
+          eventType: "coffee_logged",
+          localDate: "2026-11-19",
+          timestampMs: 1700080000000,
+          cupId: "cup-1",
+          cupDate: "2026-11-19",
+          cupIndexToday: 1,
+        }),
+      ],
+    });
+    expect(res1).toEqual({ insertedCount: 2, skippedCount: 1 });
+
+    // Re-send evt-1 -> skipped
+    const res2 = await asUser.mutation(api.telemetry.recordEvents, {
+      events: [makeSampleEvent({ eventId: "evt-1" })],
+    });
+    expect(res2).toEqual({ insertedCount: 0, skippedCount: 1 });
+
+    const eventsAll = await asUser.query(api.telemetry.listEvents, {});
+    expect(eventsAll).toHaveLength(2);
+
+    const eventsFiltered = await asUser.query(api.telemetry.listEvents, {
+      startDate: "2026-11-19",
+      endDate: "2026-11-19",
+    });
+    expect(eventsFiltered).toHaveLength(1);
+    expect(eventsFiltered?.[0].eventId).toBe("evt-2");
+
+    // Clear all telemetry
+    const cleared = await asUser.mutation(api.telemetry.clear, {});
+    expect(cleared).toBe(true);
+    expect(await asUser.query(api.telemetry.listAttempts, {})).toEqual([]);
+    expect(await asUser.query(api.telemetry.listEvents, {})).toEqual([]);
+  });
+
+  it("reconciles in_progress attempts and emits server_scheduled session_completed event in timer.onTimerCompleted", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-srv-1",
+        status: "in_progress",
+        utcOffsetMinutes: 120,
+        ianaTimezone: "Europe/Berlin",
+        deviceClass: "mobile",
+      })
+    );
+
+    const nowMs = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 1500,
+        totalSeconds: 1500,
+        targetEndTime: nowMs - 2000,
+        currentCycle: 1,
+        tagId: "tag-study",
+        timerRunId: "run-srv-1",
+        updatedAtMs: nowMs - 1500_000,
+      });
+    });
+
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-srv-1",
+    });
+
+    const attempts = await asUser.query(api.telemetry.listAttempts, {});
+    expect(attempts).toHaveLength(1);
+    expect(attempts?.[0].status).toBe("completed");
+    expect(attempts?.[0].source).toBe("server_scheduled");
+    expect(attempts?.[0].completionRatio).toBe(1);
+    expect(attempts?.[0].remainingSecondsAtEnd).toBe(0);
+
+    const events = await asUser.query(api.telemetry.listEvents, {});
+    expect(events).toHaveLength(1);
+    expect(events?.[0].eventId).toBe("srv-comp-run-srv-1");
+    expect(events?.[0].eventType).toBe("session_completed");
+    expect(events?.[0].source).toBe("server_scheduled");
+    expect(events?.[0].utcOffsetMinutes).toBe(120);
+    expect(events?.[0].deviceClass).toBe("mobile");
+    expect(events?.[0].ianaTimezone).toBe("Europe/Berlin");
+
+    // Client upsertAttempt with future timestamp must NOT overwrite server_scheduled finalization
+    const clientAttemptOverwrite = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-srv-1",
+        status: "skipped",
+        source: "client",
+        updatedAtMs: Date.now() + 60_000,
+      })
+    );
+    expect(clientAttemptOverwrite.status).toBe("completed");
+    expect(clientAttemptOverwrite.source).toBe("server_scheduled");
+
+    // Client session_completed event for the same attemptId must be deduplicated
+    const dupCompEventRes = await asUser.mutation(api.telemetry.recordEvents, {
+      events: [
+        makeSampleEvent({
+          eventId: "evt-comp-run-srv-1",
+          eventType: "session_completed",
+          attemptId: "run-srv-1",
+          source: "client",
+        }),
+      ],
+    });
+    expect(dupCompEventRes).toEqual({ insertedCount: 0, skippedCount: 1 });
+  });
+
+  it("skips srv-comp event in timer.onTimerCompleted when client evt-comp already exists", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    await asUser.mutation(api.telemetry.recordEvents, {
+      events: [
+        makeSampleEvent({
+          eventId: "evt-comp-run-client-first",
+          eventType: "session_completed",
+          attemptId: "run-client-first",
+          source: "client",
+        }),
+      ],
+    });
+
+    const nowMs = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 1500,
+        totalSeconds: 1500,
+        targetEndTime: nowMs - 1000,
+        currentCycle: 1,
+        timerRunId: "run-client-first",
+        updatedAtMs: nowMs - 1500_000,
+      });
+    });
+
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-client-first",
+    });
+
+    const events = await asUser.query(api.telemetry.listEvents, {});
+    expect(events).toHaveLength(1);
+    expect(events?.[0].eventId).toBe("evt-comp-run-client-first");
+  });
+
+  it("marks stale in_progress attempts as abandoned_stale and emits ml_event in cleanupStaleTimers", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-stale-1",
+        status: "in_progress",
+      })
+    );
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 0,
+        totalSeconds: 1500,
+        targetEndTime: now - 2 * 3600 * 1000,
+        currentCycle: 1,
+        timerRunId: "run-stale-1",
+        updatedAtMs: now - 2 * 3600 * 1000,
+      });
+    });
+
+    await t.mutation(internal.timer.cleanupStaleTimers, {});
+
+    const attempts = await asUser.query(api.telemetry.listAttempts, {});
+    expect(attempts).toHaveLength(1);
+    expect(attempts?.[0].status).toBe("abandoned_stale");
+    expect(attempts?.[0].source).toBe("server_scheduled");
+    expect(attempts?.[0].endedAt).not.toBeNull();
+
+    const events = await asUser.query(api.telemetry.listEvents, {});
+    expect(events).toHaveLength(1);
+    expect(events?.[0].eventId).toBe("srv-abandoned-run-stale-1");
+    expect(events?.[0].eventType).toBe("session_abandoned_stale");
+    expect(events?.[0].source).toBe("server_scheduled");
+  });
+
+  it("clears orphaned tagId and initialTagId references in session_attempts on tags.remove and tags.resetToDefaults", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    const custom1 = await asUser.mutation(api.tags.create, {
+      name: "Custom Alpha",
+      color: "#10B981",
+    });
+    const custom2 = await asUser.mutation(api.tags.create, {
+      name: "Custom Beta",
+      color: "#F59E0B",
+    });
+
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "att-tag-1",
+        initialTagId: custom1.id,
+        tagId: custom2.id,
+        tagChangedMidRun: true,
+      })
+    );
+
+    await asUser.mutation(api.tags.remove, { id: custom1.id });
+    let attempts = await asUser.query(api.telemetry.listAttempts, {});
+    expect(attempts?.[0].initialTagId).toBeNull();
+    expect(attempts?.[0].tagId).toBe(custom2.id);
+
+    await asUser.mutation(api.tags.resetToDefaults, {});
+    attempts = await asUser.query(api.telemetry.listAttempts, {});
+    expect(attempts?.[0].initialTagId).toBeNull();
+    expect(attempts?.[0].tagId).toBeNull();
+  });
+
+  it("imports and remaps mlTelemetry in migrations.importBackup (merge & replace) while staying backwards-compatible", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // Seed an existing attempt & event that replace mode should clear
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({ attemptId: "old-attempt" })
+    );
+    await asUser.mutation(api.telemetry.recordEvents, {
+      events: [makeSampleEvent({ eventId: "old-event" })],
+    });
+
+    // Replace mode with mlTelemetry
+    await asUser.mutation(api.migrations.importBackup, {
+      mode: "replace",
+      tags: [{ id: "ext-tag", name: "Study & Learning", color: "#5C6BC0" }],
+      sessions: [],
+      mlTelemetry: {
+        schemaVersion: 1,
+        sessionAttempts: [
+          makeSampleAttempt({
+            attemptId: "imported-att-1",
+            status: "completed",
+            endedAt: "2026-11-18T10:25:00.000Z",
+            initialTagId: "ext-tag",
+            tagId: "missing-tag",
+          }),
+        ],
+        events: [
+          makeSampleEvent({
+            eventId: "imported-evt-1",
+            eventType: "tag_changed",
+            fromTagId: "ext-tag",
+            toTagId: "missing-tag",
+            tagId: "ext-tag",
+          }),
+        ],
+      },
+    });
+
+    let attempts = await asUser.query(api.telemetry.listAttempts, {});
+    expect(attempts).toHaveLength(1);
+    expect(attempts?.[0].attemptId).toBe("imported-att-1");
+    expect(attempts?.[0].initialTagId).toBe("ext-tag");
+    expect(attempts?.[0].tagId).toBeNull();
+
+    let events = await asUser.query(api.telemetry.listEvents, {});
+    expect(events).toHaveLength(1);
+    expect(events?.[0].eventId).toBe("imported-evt-1");
+    expect(events?.[0].fromTagId).toBe("ext-tag");
+    expect(events?.[0].toTagId).toBeNull();
+
+    // Merge mode deduplicates existing attemptId/eventId and remaps duplicate-named tag
+    await asUser.mutation(api.migrations.importBackup, {
+      mode: "merge",
+      tags: [{ id: "dup-name-tag", name: "Study & Learning", color: "#5C6BC0" }],
+      sessions: [],
+      mlTelemetry: {
+        schemaVersion: 1,
+        sessionAttempts: [
+          makeSampleAttempt({
+            attemptId: "imported-att-1", // duplicate -> ignored
+            status: "skipped",
+          }),
+          makeSampleAttempt({
+            attemptId: "imported-att-2",
+            status: "completed",
+            endedAt: "2026-11-18T11:25:00.000Z",
+            initialTagId: "dup-name-tag",
+            tagId: "dup-name-tag",
+          }),
+        ],
+        events: [
+          makeSampleEvent({ eventId: "imported-evt-1" }), // duplicate -> ignored
+          makeSampleEvent({
+            eventId: "imported-evt-2",
+            tagId: "dup-name-tag",
+          }),
+        ],
+      },
+    });
+
+    attempts = await asUser.query(api.telemetry.listAttempts, {});
+    expect(attempts).toHaveLength(2);
+    const att2 = attempts?.find((a) => a.attemptId === "imported-att-2");
+    expect(att2?.initialTagId).toBe("ext-tag");
+    expect(att2?.tagId).toBe("ext-tag");
+
+    events = await asUser.query(api.telemetry.listEvents, {});
+    expect(events).toHaveLength(2);
+    const evt2 = events?.find((e) => e.eventId === "imported-evt-2");
+    expect(evt2?.tagId).toBe("ext-tag");
+  });
+});

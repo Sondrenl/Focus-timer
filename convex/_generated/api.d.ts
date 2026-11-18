@@ -19,6 +19,8 @@ import type * as push from "../push.js";
 import type * as pushActions from "../pushActions.js";
 import type * as sessions from "../sessions.js";
 import type * as tags from "../tags.js";
+import type * as telemetry from "../telemetry.js";
+import type * as telemetryValidators from "../telemetryValidators.js";
 import type * as timer from "../timer.js";
 import type * as users from "../users.js";
 
@@ -40,6 +42,8 @@ declare const fullApi: ApiFromModules<{
   pushActions: typeof pushActions;
   sessions: typeof sessions;
   tags: typeof tags;
+  telemetry: typeof telemetry;
+  telemetryValidators: typeof telemetryValidators;
   timer: typeof timer;
   users: typeof users;
 }>;

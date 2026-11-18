@@ -27,6 +27,7 @@ import {
 import { useTimerAlerts } from './timer/useTimerAlerts';
 import { useTimerCloudSync } from './timer/useTimerCloudSync';
 import { useTimerWorker } from './timer/useTimerWorker';
+import { telemetryTracker } from './services';
 
 export { DEVICE_SESSION_ID };
 
@@ -59,12 +60,17 @@ const TimerContext = createContext<TimerContextValue | null>(null);
 export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
     settings,
+    profile,
+    coffeeCups,
     activeTagId,
     setActiveTagId,
     recordSession,
     sound,
     notifications,
     isEffectiveAuthenticated,
+    isConvexAuthAuthenticated,
+    isConvexAuthLoading,
+    convexSync,
     sessions,
   } = useApp();
 
@@ -94,7 +100,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const targetEndTimeRef = useRef<number | null>(initialState.targetEndTime);
   targetEndTimeRef.current = targetEndTime;
 
-  const localUpdatedAtRef = useRef<number>(initialState.updatedAtMs || Date.now());
+  const localUpdatedAtRef = useRef<number>(
+    typeof initialState.updatedAtMs === 'number' ? initialState.updatedAtMs : 0
+  );
   const lastLocalActionWallMsRef = useRef<number>(0);
   const timerRunIdRef = useRef<string | null>(initialState.timerRunId || null);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
@@ -126,6 +134,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const settingsRef = useRef<UserSettings>(settings);
   settingsRef.current = settings;
 
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+
+  const coffeeCupsRef = useRef(coffeeCups);
+  coffeeCupsRef.current = coffeeCups;
+
   const activeTagIdRef = useRef<string | null>(activeTagId);
   activeTagIdRef.current = activeTagId;
 
@@ -155,8 +169,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reportPresence,
     applyRemoteState,
     isInitialMountDoneRef,
+    hasResolvedRemoteTimerRef,
+    remoteTimerRef,
+    isConvexConfigured,
   } = useTimerCloudSync({
     isAuthenticated: isEffectiveAuthenticated,
+    isConvexAuthAuthenticated,
+    isConvexAuthLoading,
     isAuthenticatedRef,
     sessionTypeRef,
     statusRef,
@@ -199,19 +218,29 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setTotalSeconds(newDuration);
         setRemainingSeconds(newDuration);
 
-        if (isInitialMountDoneRef.current) {
+        const canPublishRemote =
+          isInitialMountDoneRef.current &&
+          (!isConvexConfigured || !isAuthenticatedRef.current || hasResolvedRemoteTimerRef.current) &&
+          remoteTimerRef.current?.status !== 'RUNNING' &&
+          remoteTimerRef.current?.status !== 'PAUSED';
+
+        if (canPublishRemote) {
           const now = Date.now();
-          publishLocalTimerState({
-            sessionType: sessionTypeRef.current,
-            status: 'IDLE',
-            remainingSeconds: newDuration,
-            totalSeconds: newDuration,
-            targetEndTime: null,
-            currentCycle: currentCycleRef.current,
-            activeTagId: activeTagIdRef.current,
-            timerRunId: null,
-            updatedAtMs: now,
-          });
+          publishLocalTimerState(
+            {
+              sessionType: sessionTypeRef.current,
+              status: 'IDLE',
+              remainingSeconds: newDuration,
+              totalSeconds: newDuration,
+              targetEndTime: null,
+              currentCycle: currentCycleRef.current,
+              activeTagId: activeTagIdRef.current,
+              timerRunId: null,
+              updatedAtMs: now,
+            },
+            false,
+            { onlyIfNotRunning: true }
+          );
         }
       }
     }
@@ -224,17 +253,32 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     getDurationForType,
     publishLocalTimerState,
     isInitialMountDoneRef,
+    hasResolvedRemoteTimerRef,
+    remoteTimerRef,
+    isConvexConfigured,
   ]);
 
   // Handle activeTagId changes: sync tag selection across tabs and cloud
   useEffect(() => {
     if (prevActiveTagIdRef.current === activeTagId) return;
+    const previousTagId = prevActiveTagIdRef.current;
     prevActiveTagIdRef.current = activeTagId;
 
-    // Ignore initial tag hydration on mount so a newly opened tab doesn't overwrite a running remote timer
-    if (!isInitialMountDoneRef.current && statusRef.current === 'IDLE') {
+    // Ignore initial tag hydration on mount or before remote timer state resolves
+    if (
+      !isInitialMountDoneRef.current ||
+      (isConvexConfigured && isAuthenticatedRef.current && !hasResolvedRemoteTimerRef.current)
+    ) {
       return;
     }
+
+    void telemetryTracker.onTagChanged({
+      previousTagId,
+      nextTagId: activeTagId,
+      timerStatus: statusRef.current,
+      sessionType: sessionTypeRef.current,
+      attemptId: timerRunIdRef.current,
+    });
 
     const now = authService.getServerNow();
     const currentRemaining =
@@ -242,18 +286,29 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         ? Math.max(1, Math.ceil((targetEndTimeRef.current - now) / 1000))
         : remainingSecondsRef.current;
 
-    publishLocalTimerState({
-      sessionType: sessionTypeRef.current,
-      status: statusRef.current,
-      remainingSeconds: currentRemaining,
-      totalSeconds: totalSecondsRef.current,
-      targetEndTime: targetEndTimeRef.current,
-      currentCycle: currentCycleRef.current,
-      activeTagId,
-      timerRunId: timerRunIdRef.current,
-      updatedAtMs: Date.now(),
-    });
-  }, [activeTagId, authService, publishLocalTimerState, isInitialMountDoneRef]);
+    publishLocalTimerState(
+      {
+        sessionType: sessionTypeRef.current,
+        status: statusRef.current,
+        remainingSeconds: currentRemaining,
+        totalSeconds: totalSecondsRef.current,
+        targetEndTime: targetEndTimeRef.current,
+        currentCycle: currentCycleRef.current,
+        activeTagId,
+        timerRunId: timerRunIdRef.current,
+        updatedAtMs: Date.now(),
+      },
+      false,
+      statusRef.current === 'IDLE' ? { onlyIfNotRunning: true } : undefined
+    );
+  }, [
+    activeTagId,
+    authService,
+    publishLocalTimerState,
+    isInitialMountDoneRef,
+    hasResolvedRemoteTimerRef,
+    isConvexConfigured,
+  ]);
 
   // Persist state to localStorage on updates
   useEffect(() => {
@@ -282,6 +337,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const currentRunId = timerRunIdRef.current;
       const currentRemaining = remainingSecondsRef.current;
       const currentTotal = totalSecondsRef.current;
+      const currentCycleVal = currentCycleRef.current;
+      const currentTargetEnd = targetEndTimeRef.current;
 
       const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, currentRemaining));
 
@@ -294,8 +351,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const completedTimestampMs =
-        targetEndTimeRef.current !== null && targetEndTimeRef.current < Date.now()
-          ? targetEndTimeRef.current
+        currentTargetEnd !== null && currentTargetEnd < Date.now()
+          ? currentTargetEnd
           : Date.now();
 
       void recordSession({
@@ -305,12 +362,27 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         completedAt: new Date(completedTimestampMs).toISOString(),
       });
 
+      void telemetryTracker.onSessionFinalized({
+        attemptId: currentRunId,
+        outcome: 'completed',
+        sessionType: completedType,
+        plannedDurationSeconds: currentTotal,
+        remainingSecondsAtEnd: 0,
+        cycleIndex: currentCycleVal,
+        tagId: activeTagIdRef.current,
+        settings: settingsRef.current,
+        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+        coffeeCups: coffeeCupsRef.current,
+        wasStarted: true,
+        targetEndTimeMs: currentTargetEnd,
+      });
+
       const completionDayKey = getLogicalDayKey(new Date());
       if (getLastResetDayKey() !== completionDayKey) {
         setLastResetDayKey(completionDayKey);
       }
 
-      const next = computeNextInterval(completedType, currentCycleRef.current, settingsRef.current);
+      const next = computeNextInterval(completedType, currentCycleVal, settingsRef.current);
       const nextType = next.nextType;
       const nextCycle = next.nextCycle;
       const nextDuration = next.nextDuration;
@@ -329,11 +401,26 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (shouldAutoStart) {
         const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const nextTargetEnd = now + nextDuration * 1000;
         timerRunIdRef.current = newRunId;
         statusRef.current = 'RUNNING';
         remainingSecondsRef.current = nextDuration;
         setStatus('RUNNING');
         setRemainingSeconds(nextDuration);
+
+        void telemetryTracker.onSessionStarted({
+          attemptId: newRunId,
+          sessionType: nextType,
+          plannedDurationSeconds: nextDuration,
+          cycleIndex: nextCycle,
+          tagId: activeTagIdRef.current,
+          autoStarted: true,
+          settings: settingsRef.current,
+          dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+          coffeeCups: coffeeCupsRef.current,
+          targetEndTimeMs: nextTargetEnd,
+          nowMs: now,
+        });
 
         publishTimerCompletion(
           {
@@ -341,7 +428,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             status: 'RUNNING',
             remainingSeconds: nextDuration,
             totalSeconds: nextDuration,
-            targetEndTime: now + nextDuration * 1000,
+            targetEndTime: nextTargetEnd,
             currentCycle: nextCycle,
             activeTagId: activeTagIdRef.current,
             timerRunId: newRunId,
@@ -387,6 +474,53 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   handleCompleteRef.current = handleComplete;
 
+  const handleStaleExpiration = useCallback(() => {
+    wakeLockService.release();
+    notifications.cancelScheduledNotification();
+
+    const staleType = sessionTypeRef.current;
+    const staleRunId = timerRunIdRef.current;
+    const staleTotal = totalSecondsRef.current;
+    const staleRemaining = remainingSecondsRef.current;
+    const staleCycle = currentCycleRef.current;
+    const staleTargetEnd = targetEndTimeRef.current;
+
+    void telemetryTracker.onSessionFinalized({
+      attemptId: staleRunId,
+      outcome: 'abandoned_stale',
+      sessionType: staleType,
+      plannedDurationSeconds: staleTotal,
+      remainingSecondsAtEnd: staleRemaining,
+      cycleIndex: staleCycle,
+      tagId: activeTagIdRef.current,
+      settings: settingsRef.current,
+      dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+      coffeeCups: coffeeCupsRef.current,
+      wasStarted: true,
+      targetEndTimeMs: staleTargetEnd,
+    });
+
+    const defaultDuration = getDurationForType(staleType);
+    statusRef.current = 'IDLE';
+    targetEndTimeRef.current = null;
+    timerRunIdRef.current = null;
+    totalSecondsRef.current = defaultDuration;
+    remainingSecondsRef.current = defaultDuration;
+    localUpdatedAtRef.current = 0;
+
+    setStatus('IDLE');
+    setTargetEndTime(null);
+    setTotalSeconds(defaultDuration);
+    setRemainingSeconds(defaultDuration);
+  }, [getDurationForType, notifications]);
+
+  useEffect(() => {
+    if (initialState.status === 'IDLE') {
+      void telemetryTracker.finalizeOrphanedDraftIfStale();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useTimerWorker({
     status,
     sessionType,
@@ -402,6 +536,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     activeTagIdRef,
     lastTickWallMsRef,
     handleCompleteRef,
+    onStaleExpiration: handleStaleExpiration,
     setRemainingSeconds,
     sound,
     syncScheduledNotification,
@@ -474,9 +609,30 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const checkAndResetForNewDay = useCallback(() => {
     if (statusRef.current === 'RUNNING') return false;
 
+    if (
+      isConvexConfigured &&
+      isAuthenticatedRef.current &&
+      (!hasResolvedRemoteTimerRef.current || convexSync.convexSessions === undefined)
+    ) {
+      return false;
+    }
+
+    const latestRemote = remoteTimerRef.current;
+    if (latestRemote && (latestRemote.status === 'RUNNING' || latestRemote.status === 'PAUSED')) {
+      return false;
+    }
+
+    const now = new Date();
+    const currentDayKey = getLogicalDayKey(now);
+    if (latestRemote && getLogicalDayKey(latestRemote.updatedAtMs) === currentDayKey) {
+      if (getLastResetDayKey() !== currentDayKey) {
+        setLastResetDayKey(currentDayKey);
+      }
+      return false;
+    }
+
     const latestSessionTime = getLastSessionCompletedAt(sessions);
     const lastResetKey = getLastResetDayKey();
-    const now = new Date();
 
     if (
       shouldResetForNewDay({
@@ -488,7 +644,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ) {
       const defaultDuration = getDurationForType('WORK');
       const nowMs = Date.now();
-      const currentDayKey = getLogicalDayKey(now);
+      const prevUpdatedAtMs = localUpdatedAtRef.current;
 
       sessionTypeRef.current = 'WORK';
       statusRef.current = 'IDLE';
@@ -540,22 +696,42 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           timerRunId: null,
           updatedAtMs: nowMs,
         },
-        true
+        false,
+        {
+          onlyIfNotRunning: true,
+          expectedUpdatedAtMs: prevUpdatedAtMs,
+        }
       );
 
       return true;
     }
 
     return false;
-  }, [sessions, getDurationForType, notifications, publishLocalTimerState]);
+  }, [
+    sessions,
+    convexSync.convexSessions,
+    isConvexConfigured,
+    hasResolvedRemoteTimerRef,
+    remoteTimerRef,
+    getDurationForType,
+    notifications,
+    publishLocalTimerState,
+  ]);
 
   // Reactive listeners for waking tab / returning to tab / periodic new day rollover
   useEffect(() => {
     checkAndResetForNewDay();
 
+    let wakeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     const handleWakeOrFocus = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-        checkAndResetForNewDay();
+        if (wakeDebounceTimer) {
+          clearTimeout(wakeDebounceTimer);
+        }
+        wakeDebounceTimer = setTimeout(() => {
+          wakeDebounceTimer = null;
+          checkAndResetForNewDay();
+        }, 1500);
       }
     };
 
@@ -570,6 +746,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, 60000);
 
     return () => {
+      if (wakeDebounceTimer) {
+        clearTimeout(wakeDebounceTimer);
+      }
       if (typeof window !== 'undefined') {
         document.removeEventListener('visibilitychange', handleWakeOrFocus);
         window.removeEventListener('pageshow', handleWakeOrFocus);
@@ -589,14 +768,38 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const duration = remainingSecondsRef.current;
     const now = Date.now();
     const calculatedTargetEnd = now + duration * 1000;
-    const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const wasPaused = statusRef.current === 'PAUSED' && Boolean(timerRunIdRef.current);
+    const runId = wasPaused
+      ? timerRunIdRef.current!
+      : `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
     targetEndTimeRef.current = calculatedTargetEnd;
-    timerRunIdRef.current = newRunId;
+    timerRunIdRef.current = runId;
     statusRef.current = 'RUNNING';
 
     setTargetEndTime(calculatedTargetEnd);
     setStatus('RUNNING');
+
+    if (wasPaused) {
+      void telemetryTracker.onSessionResumed({
+        targetEndTimeMs: calculatedTargetEnd,
+        nowMs: now,
+      });
+    } else {
+      void telemetryTracker.onSessionStarted({
+        attemptId: runId,
+        sessionType: sessionTypeRef.current,
+        plannedDurationSeconds: totalSecondsRef.current,
+        cycleIndex: currentCycleRef.current,
+        tagId: activeTagIdRef.current,
+        autoStarted: false,
+        settings: settingsRef.current,
+        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+        coffeeCups: coffeeCupsRef.current,
+        targetEndTimeMs: calculatedTargetEnd,
+        nowMs: now,
+      });
+    }
 
     const currentDayKey = getLogicalDayKey(new Date());
     if (getLastResetDayKey() !== currentDayKey) {
@@ -612,7 +815,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         targetEndTime: calculatedTargetEnd,
         currentCycle: currentCycleRef.current,
         activeTagId: activeTagIdRef.current,
-        timerRunId: newRunId,
+        timerRunId: runId,
         updatedAtMs: now,
       },
       true
@@ -644,6 +847,12 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRemainingSeconds(currentRemaining);
 
     const nowMs = Date.now();
+    void telemetryTracker.onSessionPaused({
+      remainingSeconds: currentRemaining,
+      tagId: activeTagIdRef.current,
+      nowMs,
+    });
+
     publishLocalTimerState(
       {
         sessionType: sessionTypeRef.current,
@@ -664,6 +873,30 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const reset = useCallback(() => {
     wakeLockService.release();
     notifications.cancelScheduledNotification();
+
+    const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
+    if (wasStarted) {
+      const serverNow = authService.getServerNow();
+      const currentRemaining =
+        statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
+          ? Math.max(0, Math.ceil((targetEndTimeRef.current - serverNow) / 1000))
+          : remainingSecondsRef.current;
+
+      void telemetryTracker.onSessionFinalized({
+        attemptId: timerRunIdRef.current,
+        outcome: 'reset',
+        sessionType: sessionTypeRef.current,
+        plannedDurationSeconds: totalSecondsRef.current,
+        remainingSecondsAtEnd: currentRemaining,
+        cycleIndex: currentCycleRef.current,
+        tagId: activeTagIdRef.current,
+        settings: settingsRef.current,
+        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+        coffeeCups: coffeeCupsRef.current,
+        wasStarted: true,
+        targetEndTimeMs: targetEndTimeRef.current,
+      });
+    }
 
     const defaultDuration = getDurationForType(sessionTypeRef.current);
     targetEndTimeRef.current = null;
@@ -692,12 +925,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       },
       true
     );
-  }, [getDurationForType, notifications, publishLocalTimerState]);
+  }, [getDurationForType, notifications, publishLocalTimerState, authService]);
 
   // Action: Skip interval
   const skip = useCallback(() => {
     wakeLockService.release();
     notifications.cancelScheduledNotification();
+
+    const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
+    const serverNow = authService.getServerNow();
+    const currentRemaining =
+      statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
+        ? Math.max(0, Math.ceil((targetEndTimeRef.current - serverNow) / 1000))
+        : remainingSecondsRef.current;
+    const skippedFromType = sessionTypeRef.current;
+    const skippedRunId = timerRunIdRef.current;
+    const skippedTotal = totalSecondsRef.current;
+    const skippedCycle = currentCycleRef.current;
+    const skippedTargetEnd = targetEndTimeRef.current;
 
     let nextType: SessionType;
     let nextCycle = currentCycleRef.current;
@@ -718,6 +963,22 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       nextType = 'WORK';
       nextCycle = 1;
     }
+
+    void telemetryTracker.onSessionFinalized({
+      attemptId: skippedRunId,
+      outcome: 'skipped',
+      sessionType: skippedFromType,
+      plannedDurationSeconds: skippedTotal,
+      remainingSecondsAtEnd: currentRemaining,
+      cycleIndex: skippedCycle,
+      tagId: activeTagIdRef.current,
+      settings: settingsRef.current,
+      dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+      coffeeCups: coffeeCupsRef.current,
+      wasStarted,
+      targetEndTimeMs: skippedTargetEnd,
+      toSessionType: nextType,
+    });
 
     const nextDuration = getDurationForType(nextType);
     targetEndTimeRef.current = null;
@@ -750,12 +1011,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       },
       true
     );
-  }, [getDurationForType, sound, notifications, publishLocalTimerState]);
+  }, [getDurationForType, sound, notifications, publishLocalTimerState, authService]);
 
   // Action: Previous interval
   const previousInterval = useCallback(() => {
     wakeLockService.release();
     notifications.cancelScheduledNotification();
+
+    const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
+    const serverNow = authService.getServerNow();
+    const currentRemaining =
+      statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
+        ? Math.max(0, Math.ceil((targetEndTimeRef.current - serverNow) / 1000))
+        : remainingSecondsRef.current;
+    const prevFromType = sessionTypeRef.current;
+    const prevRunId = timerRunIdRef.current;
+    const prevTotal = totalSecondsRef.current;
+    const prevCycleVal = currentCycleRef.current;
+    const prevTargetEnd = targetEndTimeRef.current;
 
     const prev = computePreviousInterval(
       sessionTypeRef.current,
@@ -766,6 +1039,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const prevType = prev.previousType;
     const prevCycle = prev.previousCycle;
     const prevDuration = prev.previousDuration;
+
+    if (wasStarted) {
+      void telemetryTracker.onSessionFinalized({
+        attemptId: prevRunId,
+        outcome: 'switched',
+        sessionType: prevFromType,
+        plannedDurationSeconds: prevTotal,
+        remainingSecondsAtEnd: currentRemaining,
+        cycleIndex: prevCycleVal,
+        tagId: activeTagIdRef.current,
+        settings: settingsRef.current,
+        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+        coffeeCups: coffeeCupsRef.current,
+        wasStarted: true,
+        targetEndTimeMs: prevTargetEnd,
+        toSessionType: prevType,
+      });
+    }
 
     targetEndTimeRef.current = null;
     timerRunIdRef.current = null;
@@ -797,13 +1088,36 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       },
       true
     );
-  }, [notifications, publishLocalTimerState]);
+  }, [notifications, publishLocalTimerState, authService]);
 
   // Action: Explicitly switch session type
   const switchSessionType = useCallback(
     (type: SessionType) => {
-      if (statusRef.current === 'RUNNING') {
-        pause();
+      const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
+      if (wasStarted) {
+        wakeLockService.release();
+        notifications.cancelScheduledNotification();
+        const serverNow = authService.getServerNow();
+        const currentRemaining =
+          statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
+            ? Math.max(0, Math.ceil((targetEndTimeRef.current - serverNow) / 1000))
+            : remainingSecondsRef.current;
+
+        void telemetryTracker.onSessionFinalized({
+          attemptId: timerRunIdRef.current,
+          outcome: 'switched',
+          sessionType: sessionTypeRef.current,
+          plannedDurationSeconds: totalSecondsRef.current,
+          remainingSecondsAtEnd: currentRemaining,
+          cycleIndex: currentCycleRef.current,
+          tagId: activeTagIdRef.current,
+          settings: settingsRef.current,
+          dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+          coffeeCups: coffeeCupsRef.current,
+          wasStarted: true,
+          targetEndTimeMs: targetEndTimeRef.current,
+          toSessionType: type,
+        });
       }
 
       const duration = getDurationForType(type);
@@ -836,7 +1150,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         true
       );
     },
-    [getDurationForType, pause, publishLocalTimerState]
+    [getDurationForType, notifications, publishLocalTimerState, authService]
   );
 
   const toggleStartPause = useCallback(() => {

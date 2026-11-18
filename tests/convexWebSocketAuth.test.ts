@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getValidAuthToken } from '../src/services/convex/ConvexClient';
+import {
+  getValidAuthToken,
+  hasStoredConvexAuthSession,
+} from '../src/services/convex/ConvexClient';
 import { AUTH_TOKEN_KEY } from '../src/services/auth/AuthService';
 
 function createMockJwt(expTimestampSeconds: number, email = 'user@example.com'): string {
@@ -21,28 +24,61 @@ describe('Convex WebSocket Token Expiration & Reconnection Resilience', () => {
   beforeEach(() => {
     mockStorage = {};
 
-    const mockWindow = {
-      localStorage: {
-        getItem: (key: string) => mockStorage[key] || null,
-        setItem: (key: string, val: string) => {
-          mockStorage[key] = val;
-        },
-        removeItem: (key: string) => {
-          delete mockStorage[key];
-        },
-        clear: () => {
-          mockStorage = {};
-        },
+    const mockLocalStorage = {
+      get length() {
+        return Object.keys(mockStorage).length;
+      },
+      key: (index: number) => Object.keys(mockStorage)[index] ?? null,
+      getItem: (key: string) => mockStorage[key] ?? null,
+      setItem: (key: string, val: string) => {
+        mockStorage[key] = val;
+      },
+      removeItem: (key: string) => {
+        delete mockStorage[key];
+      },
+      clear: () => {
+        mockStorage = {};
       },
     };
 
+    const mockWindow = {
+      localStorage: mockLocalStorage,
+    };
+
     vi.stubGlobal('window', mockWindow);
-    vi.stubGlobal('localStorage', mockWindow.localStorage);
+    vi.stubGlobal('localStorage', mockLocalStorage);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  describe('hasStoredConvexAuthSession', () => {
+    it('returns true when a persistent __convexAuthRefreshToken or __convexAuthJWT exists alongside an expired Google JWT', () => {
+      const pastExpiry = Math.floor(Date.now() / 1000) - 3600;
+      mockStorage[AUTH_TOKEN_KEY] = createMockJwt(pastExpiry);
+      mockStorage['__convexAuthRefreshToken_httpsacrobaticoyster97convexcloud'] = 'refresh-tok-123';
+
+      expect(hasStoredConvexAuthSession()).toBe(true);
+    });
+
+    it('returns false when only legacy Google JWT or empty Convex auth keys are present', () => {
+      mockStorage[AUTH_TOKEN_KEY] = createMockJwt(Math.floor(Date.now() / 1000) + 3600);
+      mockStorage['__convexAuthRefreshToken_test'] = 'null';
+      mockStorage['__convexAuthJWT_test'] = '""';
+
+      expect(hasStoredConvexAuthSession()).toBe(false);
+    });
+
+    it('returns false cleanly when localStorage omits length or key()', () => {
+      vi.stubGlobal('window', {
+        localStorage: {
+          getItem: () => null,
+        },
+      });
+      expect(hasStoredConvexAuthSession()).toBe(false);
+    });
   });
 
   describe('getValidAuthToken', () => {

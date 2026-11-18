@@ -84,8 +84,21 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
           : Array.isArray(parsed.coffee_cups)
           ? parsed.coffee_cups
           : [];
+        const rawMlTelemetry =
+          parsed.mlTelemetry && typeof parsed.mlTelemetry === 'object'
+            ? parsed.mlTelemetry
+            : undefined;
+        const hasMlTelemetry =
+          Boolean(rawMlTelemetry) &&
+          ((Array.isArray(rawMlTelemetry.sessionAttempts) && rawMlTelemetry.sessionAttempts.length > 0) ||
+            (Array.isArray(rawMlTelemetry.events) && rawMlTelemetry.events.length > 0));
 
-        if (rawTags.length === 0 && rawSessions.length === 0 && rawCoffee.length === 0) {
+        if (
+          rawTags.length === 0 &&
+          rawSessions.length === 0 &&
+          rawCoffee.length === 0 &&
+          !hasMlTelemetry
+        ) {
           throw new Error('File does not appear to be a valid Focus Timer backup.');
         }
 
@@ -107,6 +120,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
           tags: rawTags,
           sessions: rawSessions,
           coffeeCups: rawCoffee,
+          ...(rawMlTelemetry ? { mlTelemetry: rawMlTelemetry } : {}),
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to parse JSON backup file';

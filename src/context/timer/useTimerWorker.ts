@@ -6,6 +6,7 @@ import { wakeLockService } from '../../services/screen/WakeLockService';
 import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { formatTime } from '../../utils/formatters';
 import { DEVICE_ID, SavedTimerState, saveTimerState } from './timerPersistence';
+import { telemetryTracker } from '../services';
 
 const WORKER_SCRIPT = `
   let timerId = null;
@@ -40,6 +41,7 @@ interface UseTimerWorkerParams {
   activeTagIdRef: React.MutableRefObject<string | null>;
   lastTickWallMsRef: React.MutableRefObject<number>;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
+  onStaleExpiration: () => void;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
   sound: ReturnType<typeof useApp>['sound'];
   syncScheduledNotification: () => void;
@@ -62,6 +64,7 @@ export const useTimerWorker = ({
   activeTagIdRef,
   lastTickWallMsRef,
   handleCompleteRef,
+  onStaleExpiration,
   setRemainingSeconds,
   sound,
   syncScheduledNotification,
@@ -119,6 +122,10 @@ export const useTimerWorker = ({
     const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
     if (diffSec <= 0) {
+      if (diffMs < -900_000) {
+        onStaleExpiration();
+        return;
+      }
       const expiredLongAgo = diffMs < -60_000;
       handleCompleteRef.current(expiredLongAgo);
       return;
@@ -134,6 +141,7 @@ export const useTimerWorker = ({
     lastTickWallMsRef,
     targetEndTimeRef,
     handleCompleteRef,
+    onStaleExpiration,
     remainingSecondsRef,
     setRemainingSeconds,
   ]);
@@ -172,8 +180,12 @@ export const useTimerWorker = ({
 
   // Visibility, pageshow, and focus sync listeners
   useEffect(() => {
-    const handleVisibilityOrFocus = () => {
+    const handleVisibilityOrFocus = (e?: Event) => {
       const isHidden = document.visibilityState === 'hidden';
+
+      if (e?.type === 'visibilitychange' && isHidden) {
+        void telemetryTracker.onTabVisibilityChanged(true);
+      }
 
       if (statusRef.current === 'RUNNING') {
         sound.prepareForPlayback();
@@ -190,6 +202,10 @@ export const useTimerWorker = ({
         const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
 
         if (diffSec <= 0) {
+          if (diffMs < -900_000) {
+            onStaleExpiration();
+            return;
+          }
           const expiredLongAgo = diffMs < -60_000;
           handleCompleteRef.current(expiredLongAgo);
           return;
@@ -237,6 +253,7 @@ export const useTimerWorker = ({
     targetEndTimeRef,
     lastTickWallMsRef,
     handleCompleteRef,
+    onStaleExpiration,
     remainingSecondsRef,
     setRemainingSeconds,
     sessionTypeRef,

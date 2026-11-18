@@ -100,8 +100,31 @@ export function getValidAuthToken(
   }
 }
 
-// Eagerly restore auth token from localStorage if valid, avoiding delayed sync on startup
-if (isConvexConfigured && typeof window !== "undefined") {
+export function hasStoredConvexAuthSession(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const storage = window.localStorage;
+    if (!storage || typeof storage.length !== "number" || typeof storage.key !== "function") {
+      return false;
+    }
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key && (key.startsWith("__convexAuthRefreshToken") || key.startsWith("__convexAuthJWT"))) {
+        const val = storage.getItem(key);
+        if (val && val !== "null" && val !== '""') {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return false;
+}
+
+// Eagerly restore legacy Google JWT auth ONLY if no persistent @convex-dev/auth session exists;
+// otherwise ConvexAuthProvider owns convexClient.setAuth with its 30-day auto-refreshing session.
+if (isConvexConfigured && typeof window !== "undefined" && !hasStoredConvexAuthSession()) {
   try {
     const storedToken =
       localStorage.getItem(AUTH_TOKEN_KEY) ||
