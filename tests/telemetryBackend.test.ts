@@ -262,7 +262,7 @@ describe("Passive ML Telemetry Convex Backend", () => {
     expect(await asUser.query(api.telemetry.listEvents, {})).toEqual([]);
   });
 
-  it("reconciles in_progress attempts and emits server_scheduled session_completed event in timer.onTimerCompleted", async () => {
+  it("reconciles in_progress attempts without emitting duplicate ml_events in timer.onTimerCompleted", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
@@ -305,14 +305,9 @@ describe("Passive ML Telemetry Convex Backend", () => {
     expect(attempts?.[0].completionRatio).toBe(1);
     expect(attempts?.[0].remainingSecondsAtEnd).toBe(0);
 
+    // Session lifecycle events are no longer duplicated in ml_events
     const events = await asUser.query(api.telemetry.listEvents, {});
-    expect(events).toHaveLength(1);
-    expect(events?.[0].eventId).toBe("srv-comp-run-srv-1");
-    expect(events?.[0].eventType).toBe("session_completed");
-    expect(events?.[0].source).toBe("server_scheduled");
-    expect(events?.[0].utcOffsetMinutes).toBe(120);
-    expect(events?.[0].deviceClass).toBe("mobile");
-    expect(events?.[0].ianaTimezone).toBe("Europe/Berlin");
+    expect(events).toHaveLength(0);
 
     // Client upsertAttempt with future timestamp must NOT overwrite server_scheduled finalization
     const clientAttemptOverwrite = await asUser.mutation(
@@ -326,62 +321,9 @@ describe("Passive ML Telemetry Convex Backend", () => {
     );
     expect(clientAttemptOverwrite.status).toBe("completed");
     expect(clientAttemptOverwrite.source).toBe("server_scheduled");
-
-    // Client session_completed event for the same attemptId must be deduplicated
-    const dupCompEventRes = await asUser.mutation(api.telemetry.recordEvents, {
-      events: [
-        makeSampleEvent({
-          eventId: "evt-comp-run-srv-1",
-          eventType: "session_completed",
-          attemptId: "run-srv-1",
-          source: "client",
-        }),
-      ],
-    });
-    expect(dupCompEventRes).toEqual({ insertedCount: 0, skippedCount: 1 });
   });
 
-  it("skips srv-comp event in timer.onTimerCompleted when client evt-comp already exists", async () => {
-    const t = convexTest(schema, modules);
-    const { userId, asUser } = await createAuthenticatedTestUser(t);
-
-    await asUser.mutation(api.telemetry.recordEvents, {
-      events: [
-        makeSampleEvent({
-          eventId: "evt-comp-run-client-first",
-          eventType: "session_completed",
-          attemptId: "run-client-first",
-          source: "client",
-        }),
-      ],
-    });
-
-    const nowMs = Date.now();
-    await t.run(async (ctx) => {
-      await ctx.db.insert("active_timers", {
-        userId,
-        sessionType: "WORK",
-        status: "RUNNING",
-        remainingSeconds: 1500,
-        totalSeconds: 1500,
-        targetEndTime: nowMs - 1000,
-        currentCycle: 1,
-        timerRunId: "run-client-first",
-        updatedAtMs: nowMs - 1500_000,
-      });
-    });
-
-    await t.mutation(internal.timer.onTimerCompleted, {
-      userId,
-      timerRunId: "run-client-first",
-    });
-
-    const events = await asUser.query(api.telemetry.listEvents, {});
-    expect(events).toHaveLength(1);
-    expect(events?.[0].eventId).toBe("evt-comp-run-client-first");
-  });
-
-  it("marks stale in_progress attempts as abandoned_stale and emits ml_event in cleanupStaleTimers", async () => {
+  it("marks stale in_progress attempts as abandoned_stale without emitting duplicate ml_event in cleanupStaleTimers", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
@@ -417,10 +359,7 @@ describe("Passive ML Telemetry Convex Backend", () => {
     expect(attempts?.[0].endedAt).not.toBeNull();
 
     const events = await asUser.query(api.telemetry.listEvents, {});
-    expect(events).toHaveLength(1);
-    expect(events?.[0].eventId).toBe("srv-abandoned-run-stale-1");
-    expect(events?.[0].eventType).toBe("session_abandoned_stale");
-    expect(events?.[0].source).toBe("server_scheduled");
+    expect(events).toHaveLength(0);
   });
 
   it("clears orphaned tagId and initialTagId references in session_attempts on tags.remove and tags.resetToDefaults", async () => {

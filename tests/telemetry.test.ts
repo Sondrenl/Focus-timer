@@ -14,7 +14,13 @@ import { IStorageService } from '../src/services/storage/IStorageService';
 import { DEFAULT_SETTINGS, UserSettings } from '../src/types/settings';
 import { CoffeeCup } from '../src/types/coffee';
 import { telemetryTracker } from '../src/context/services';
-import { useBackupAndMigration } from '../src/hooks/data/useBackupAndMigration';
+import {
+  useBackupAndMigration,
+  shiftDateDays,
+  readHydrationWatermark,
+  writeHydrationWatermark,
+  clearAllHydrationWatermarks,
+} from '../src/hooks/data/useBackupAndMigration';
 import { BackupData } from '../src/types/user';
 
 class InMemoryStorage implements IStorageService {
@@ -353,12 +359,9 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
       expect(attempt.completionLatencySeconds).toBe(2);
 
       const types = exported.events.map((e) => e.eventType);
-      expect(types).toContain('session_started');
-      expect(types).toContain('session_paused');
+      expect(types).toHaveLength(2);
       expect(types).toContain('tag_changed');
       expect(types).toContain('coffee_logged');
-      expect(types).toContain('session_resumed');
-      expect(types).toContain('session_completed');
 
       const coffeeEvt = exported.events.find((e) => e.eventType === 'coffee_logged');
       expect(coffeeEvt?.cupIndexToday).toBe(2);
@@ -366,7 +369,7 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
       expect(coffeeEvt?.attemptId).toBe('run-lifecycle-1');
       expect(syncedAttempts[0]).toBe('run-lifecycle-1:in_progress');
       expect(syncedAttempts[syncedAttempts.length - 1]).toBe('run-lifecycle-1:completed');
-      expect(syncedEventTypes).toContain('session_completed');
+      expect(syncedEventTypes).toEqual(['tag_changed', 'coffee_logged']);
     });
 
     it('ignores IDLE navigation (wasStarted: false) and records mid-run skips, resets, switches, and orphaned draft abandonment', async () => {
@@ -504,7 +507,7 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
       expect(data.sessionAttempts[2].status).toBe('switched');
       expect(data.sessionAttempts[2].pauseCount).toBe(0);
       expect(data.sessionAttempts[3].status).toBe('abandoned_stale');
-      expect(data.events.some((e) => e.eventType === 'session_abandoned_stale')).toBe(true);
+      expect(data.events).toHaveLength(0);
     });
 
     it('discards skips and resets below the minimum duration cutoff (30s default, 1/4 for <=2m intervals)', async () => {
@@ -706,7 +709,7 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
 
       await tracker.importTelemetry(exported, 'replace');
       expect((await tracker.getExportData()).sessionAttempts).toHaveLength(1);
-      expect((await tracker.getExportData()).events.length).toBeGreaterThanOrEqual(4);
+      expect((await tracker.getExportData()).events).toHaveLength(3);
     });
   });
 
@@ -787,16 +790,76 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         true
       );
 
-      // Reset clears telemetry
-      await resetFn('sessions-only');
-      expect((await telemetryTracker.getExportData()).events).toHaveLength(0);
+      // Seed a hydration watermark and verify resetAllData clears it
+      const lsMap = new Map<string, string>();
+      const mockLs = {
+        get length() {
+          return lsMap.size;
+        },
+        key: (i: number) => Array.from(lsMap.keys())[i] ?? null,
+        getItem: (k: string) => lsMap.get(k) ?? null,
+        setItem: (k: string, v: string) => lsMap.set(k, v),
+        removeItem: (k: string) => lsMap.delete(k),
+        clear: () => lsMap.clear(),
+      };
+      vi.stubGlobal('localStorage', mockLs);
+      try {
+        writeHydrationWatermark('user-123', '2026-11-18');
+        expect(readHydrationWatermark('user-123')).toBe('2026-11-18');
 
-      // Re-import exported backup in replace mode restores mlTelemetry
-      await importFn(exported, 'replace');
-      const afterImport = await telemetryTracker.getExportData();
-      expect(afterImport.events.some((e) => e.eventType === 'settings_changed')).toBe(true);
+        // Reset clears telemetry & watermark
+        await resetFn('sessions-only');
+        expect((await telemetryTracker.getExportData()).events).toHaveLength(0);
+        expect(readHydrationWatermark('user-123')).toBeNull();
+
+        // Re-import exported backup in replace mode restores mlTelemetry & clears watermark
+        writeHydrationWatermark('user-123', '2026-11-18');
+        await importFn(exported, 'replace');
+        const afterImport = await telemetryTracker.getExportData();
+        expect(afterImport.events.some((e) => e.eventType === 'settings_changed')).toBe(true);
+        expect(readHydrationWatermark('user-123')).toBeNull();
+      } finally {
+        vi.unstubAllGlobals();
+      }
 
       await telemetryTracker.clearAll();
+    });
+
+    it('computes shifted dates cleanly and manages per-user hydration watermarks in localStorage', () => {
+      expect(shiftDateDays('2026-11-18', -1)).toBe('2026-11-17');
+      expect(shiftDateDays('2026-03-01', -1)).toBe('2026-02-28');
+      expect(shiftDateDays('2024-03-01', -1)).toBe('2024-02-29'); // leap year
+      expect(shiftDateDays('2026-01-01', -1)).toBe('2025-12-31');
+
+      const lsMap = new Map<string, string>();
+      vi.stubGlobal('localStorage', {
+        get length() {
+          return lsMap.size;
+        },
+        key: (i: number) => Array.from(lsMap.keys())[i] ?? null,
+        getItem: (k: string) => lsMap.get(k) ?? null,
+        setItem: (k: string, v: string) => lsMap.set(k, v),
+        removeItem: (k: string) => lsMap.delete(k),
+        clear: () => lsMap.clear(),
+      });
+
+      try {
+        lsMap.set('unrelated_key', 'keep-me');
+        writeHydrationWatermark('user-a', '2026-11-18');
+        writeHydrationWatermark('user-b', '2026-11-15');
+        writeHydrationWatermark('user-bad', 'not-a-date');
+
+        expect(readHydrationWatermark('user-a')).toBe('2026-11-18');
+        expect(readHydrationWatermark('user-b')).toBe('2026-11-15');
+        expect(readHydrationWatermark('user-bad')).toBeNull();
+
+        clearAllHydrationWatermarks();
+        expect(readHydrationWatermark('user-a')).toBeNull();
+        expect(readHydrationWatermark('user-b')).toBeNull();
+        expect(lsMap.get('unrelated_key')).toBe('keep-me');
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 });

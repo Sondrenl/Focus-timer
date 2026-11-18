@@ -618,58 +618,6 @@ export const onTimerCompleted = internalMutation({
           updatedAtMs: nowMs,
         });
       }
-
-      const serverEventId = `srv-comp-${args.timerRunId}`;
-      const clientEventId = `evt-comp-${args.timerRunId}`;
-      const [existingServerEvent, existingClientEvent] = await Promise.all([
-        ctx.db
-          .query("ml_events")
-          .withIndex("by_user_event", (q) =>
-            q.eq("userId", args.userId).eq("eventId", serverEventId)
-          )
-          .first(),
-        ctx.db
-          .query("ml_events")
-          .withIndex("by_user_event", (q) =>
-            q.eq("userId", args.userId).eq("eventId", clientEventId)
-          )
-          .first(),
-      ]);
-
-      if (!existingServerEvent && !existingClientEvent) {
-        const utcOffsetMinutes = existingAttempt?.utcOffsetMinutes ?? 0;
-        const ianaTimezone = existingAttempt?.ianaTimezone;
-        const deviceClass = existingAttempt?.deviceClass ?? "desktop";
-        const localMs = nowMs + utcOffsetMinutes * 60_000;
-        const localDateObj = new Date(localMs);
-        const localDate = localDateObj.toISOString().slice(0, 10);
-        const localHour = localDateObj.getUTCHours();
-        const localMinuteOfDay = localHour * 60 + localDateObj.getUTCMinutes();
-        const localDayOfWeek = localDateObj.getUTCDay();
-
-        await ctx.db.insert("ml_events", {
-          userId: args.userId,
-          eventId: serverEventId,
-          eventType: "session_completed",
-          timestamp: nowIso,
-          timestampMs: nowMs,
-          utcOffsetMinutes,
-          ...(ianaTimezone !== undefined ? { ianaTimezone } : {}),
-          localDate,
-          localHour,
-          localMinuteOfDay,
-          localDayOfWeek,
-          deviceClass,
-          attemptId: args.timerRunId,
-          sessionType: timer.sessionType,
-          tagId: timer.tagId,
-          plannedDurationSeconds:
-            existingAttempt?.plannedDurationSeconds ?? timer.totalSeconds,
-          elapsedActiveSeconds: actualActiveSeconds,
-          remainingSeconds: 0,
-          source: "server_scheduled",
-        });
-      }
     }
 
     // 2. Advance active_timers to the next interval in IDLE status
@@ -788,48 +736,6 @@ export const cleanupStaleTimers = internalMutation({
               source: "server_scheduled",
               updatedAtMs: nowMs,
             });
-
-            const abandonedEventId = `srv-abandoned-${runId}`;
-            const existingAbandonedEvent = await ctx.db
-              .query("ml_events")
-              .withIndex("by_user_event", (q) =>
-                q.eq("userId", timer.userId).eq("eventId", abandonedEventId)
-              )
-              .first();
-
-            if (!existingAbandonedEvent) {
-              const utcOffsetMinutes = existingAttempt.utcOffsetMinutes ?? 0;
-              const localMs = nowMs + utcOffsetMinutes * 60_000;
-              const localDateObj = new Date(localMs);
-              const localDate = localDateObj.toISOString().slice(0, 10);
-              const localHour = localDateObj.getUTCHours();
-              const localMinuteOfDay = localHour * 60 + localDateObj.getUTCMinutes();
-              const localDayOfWeek = localDateObj.getUTCDay();
-
-              await ctx.db.insert("ml_events", {
-                userId: timer.userId,
-                eventId: abandonedEventId,
-                eventType: "session_abandoned_stale",
-                timestamp: nowIso,
-                timestampMs: nowMs,
-                utcOffsetMinutes,
-                ...(existingAttempt.ianaTimezone !== undefined
-                  ? { ianaTimezone: existingAttempt.ianaTimezone }
-                  : {}),
-                localDate,
-                localHour,
-                localMinuteOfDay,
-                localDayOfWeek,
-                deviceClass: existingAttempt.deviceClass ?? "desktop",
-                attemptId: runId,
-                sessionType: existingAttempt.sessionType,
-                tagId: existingAttempt.tagId,
-                plannedDurationSeconds: existingAttempt.plannedDurationSeconds,
-                elapsedActiveSeconds: existingAttempt.actualActiveSeconds,
-                remainingSeconds: existingAttempt.remainingSecondsAtEnd,
-                source: "server_scheduled",
-              });
-            }
           }
         }
 

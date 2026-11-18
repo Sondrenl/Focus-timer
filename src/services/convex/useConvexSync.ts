@@ -49,10 +49,19 @@ export function useConvexSync(isAuthenticated: boolean) {
   const scheduleTestPushMutation = useMutation(api.push.scheduleTestPush);
 
   const fetchTelemetryAttempts = useCallback(
-    async (limit = 5000) => {
+    async (
+      options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
+    ) => {
       if (!isConvexConfigured || !isAuthenticated) return null;
+      const resolved =
+        typeof options === 'number' ? { limit: options } : options;
+      const limit = resolved.limit ?? 5000;
       try {
-        return await convexClient.query(api.telemetry.listAttempts, { limit });
+        return await convexClient.query(api.telemetry.listAttempts, {
+          limit,
+          ...(resolved.startDate ? { startDate: resolved.startDate } : {}),
+          ...(resolved.endDate ? { endDate: resolved.endDate } : {}),
+        });
       } catch (err) {
         console.warn('Convex listAttempts query error:', err);
         return null;
@@ -62,10 +71,19 @@ export function useConvexSync(isAuthenticated: boolean) {
   );
 
   const fetchTelemetryEvents = useCallback(
-    async (limit = 5000) => {
+    async (
+      options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
+    ) => {
       if (!isConvexConfigured || !isAuthenticated) return null;
+      const resolved =
+        typeof options === 'number' ? { limit: options } : options;
+      const limit = resolved.limit ?? 5000;
       try {
-        return await convexClient.query(api.telemetry.listEvents, { limit });
+        return await convexClient.query(api.telemetry.listEvents, {
+          limit,
+          ...(resolved.startDate ? { startDate: resolved.startDate } : {}),
+          ...(resolved.endDate ? { endDate: resolved.endDate } : {}),
+        });
       } catch (err) {
         console.warn('Convex listEvents query error:', err);
         return null;

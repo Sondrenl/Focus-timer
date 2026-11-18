@@ -211,18 +211,6 @@ export class TelemetryTracker {
       await this.repo.saveActiveDraft(draft);
       await this.repo.upsertAttempt(attempt);
       this.pushAttemptToCloud(attempt);
-
-      const startEvt: MlEvent = {
-        ...this.buildBaseEvent('session_started', nowMs, `evt-start-${params.attemptId}`),
-        attemptId: params.attemptId,
-        sessionType: params.sessionType,
-        tagId: cleanTagId,
-        plannedDurationSeconds: plannedSec,
-        autoStarted: params.autoStarted,
-        source: 'client',
-      };
-      await this.repo.recordEvent(startEvt);
-      this.pushEventsToCloud([startEvt]);
     });
   }
 
@@ -273,18 +261,6 @@ export class TelemetryTracker {
     await this.repo.saveActiveDraft(nextDraft);
     await this.repo.upsertAttempt(updatedAttempt);
     this.pushAttemptToCloud(updatedAttempt);
-
-    const resumeEvt: MlEvent = {
-      ...this.buildBaseEvent('session_resumed', nowMs),
-      attemptId: updatedAttempt.attemptId,
-      sessionType: updatedAttempt.sessionType,
-      tagId: updatedAttempt.tagId,
-      elapsedActiveSeconds: Math.round(draft.accumulatedActiveMs / 1000),
-      pauseDurationSeconds,
-      source: 'client',
-    };
-    await this.repo.recordEvent(resumeEvt);
-    this.pushEventsToCloud([resumeEvt]);
   }
 
   async onSessionPaused(params: {
@@ -342,18 +318,6 @@ export class TelemetryTracker {
       await this.repo.saveActiveDraft(nextDraft);
       await this.repo.upsertAttempt(updatedAttempt);
       this.pushAttemptToCloud(updatedAttempt);
-
-      const pauseEvt: MlEvent = {
-        ...this.buildBaseEvent('session_paused', nowMs),
-        attemptId: updatedAttempt.attemptId,
-        sessionType: updatedAttempt.sessionType,
-        tagId: updatedAttempt.tagId,
-        elapsedActiveSeconds,
-        remainingSeconds: Math.max(0, Math.round(params.remainingSeconds)),
-        source: 'client',
-      };
-      await this.repo.recordEvent(pauseEvt);
-      this.pushEventsToCloud([pauseEvt]);
     });
   }
 
@@ -566,33 +530,6 @@ export class TelemetryTracker {
       await this.repo.saveActiveDraft(null);
       await this.repo.upsertAttempt(finalizedAttempt);
       this.pushAttemptToCloud(finalizedAttempt);
-
-      const eventTypeMap: Record<AttemptOutcome, MlEvent['eventType']> = {
-        completed: 'session_completed',
-        skipped: 'session_skipped',
-        reset: 'session_reset',
-        switched: 'session_switched',
-        abandoned_stale: 'session_abandoned_stale',
-      };
-
-      const evtId =
-        params.outcome === 'completed'
-          ? `evt-comp-${resolvedAttemptId}`
-          : generateId('evt');
-
-      const finalEvt: MlEvent = {
-        ...this.buildBaseEvent(eventTypeMap[params.outcome], nowMs, evtId),
-        attemptId: finalizedAttempt.attemptId,
-        sessionType: finalizedAttempt.sessionType,
-        tagId: finalizedAttempt.tagId,
-        plannedDurationSeconds: finalizedAttempt.plannedDurationSeconds,
-        elapsedActiveSeconds: finalizedAttempt.actualActiveSeconds,
-        remainingSeconds: finalizedAttempt.remainingSecondsAtEnd,
-        toSessionType: params.toSessionType ?? null,
-        source: 'client',
-      };
-      await this.repo.recordEvent(finalEvt);
-      this.pushEventsToCloud([finalEvt]);
     });
   }
 
@@ -853,19 +790,6 @@ export class TelemetryTracker {
       await this.repo.saveActiveDraft(null);
       await this.repo.upsertAttempt(finalizedAttempt);
       this.pushAttemptToCloud(finalizedAttempt);
-
-      const staleEvt: MlEvent = {
-        ...this.buildBaseEvent('session_abandoned_stale', nowMs),
-        attemptId: finalizedAttempt.attemptId,
-        sessionType: finalizedAttempt.sessionType,
-        tagId: finalizedAttempt.tagId,
-        plannedDurationSeconds: finalizedAttempt.plannedDurationSeconds,
-        elapsedActiveSeconds: finalizedAttempt.actualActiveSeconds,
-        remainingSeconds: finalizedAttempt.remainingSecondsAtEnd,
-        source: 'client',
-      };
-      await this.repo.recordEvent(staleEvt);
-      this.pushEventsToCloud([staleEvt]);
     });
   }
 

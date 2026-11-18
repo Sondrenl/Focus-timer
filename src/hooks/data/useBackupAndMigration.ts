@@ -24,10 +24,56 @@ import {
   SessionAttempt,
 } from '../../types/telemetry';
 import { useAuthProfile } from '../../context/AuthProfileContext';
+import { buildLocalTimeContext } from '../../utils/telemetryContext';
 
 const BACKUP_CHUNK_SIZE = 400;
 const TELEMETRY_ATTEMPT_CHUNK_SIZE = 400;
 const TELEMETRY_EVENT_CHUNK_SIZE = 800;
+const ML_HYDRATED_DATE_PREFIX = 'ml_hydrated_date_v1_';
+
+export function shiftDateDays(yyyyMmDd: string, deltaDays: number): string {
+  const [y, m, d] = yyyyMmDd.split('-').map(Number);
+  if (!y || !m || !d) return yyyyMmDd;
+  const dt = new Date(Date.UTC(y, m - 1, d + deltaDays));
+  return dt.toISOString().slice(0, 10);
+}
+
+export function readHydrationWatermark(userId: string): string | null {
+  if (!userId || typeof localStorage === 'undefined') return null;
+  try {
+    const val = localStorage.getItem(`${ML_HYDRATED_DATE_PREFIX}${userId}`);
+    return val && /^\d{4}-\d{2}-\d{2}$/.test(val) ? val : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeHydrationWatermark(userId: string, yyyyMmDd: string): void {
+  if (!userId || !/^\d{4}-\d{2}-\d{2}$/.test(yyyyMmDd) || typeof localStorage === 'undefined') {
+    return;
+  }
+  try {
+    localStorage.setItem(`${ML_HYDRATED_DATE_PREFIX}${userId}`, yyyyMmDd);
+  } catch {
+    // Ignore storage quota or disabled storage errors
+  }
+}
+
+export function clearAllHydrationWatermarks(): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(ML_HYDRATED_DATE_PREFIX)) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 function sanitizeMlTelemetryForImport(
   raw: unknown,
@@ -360,10 +406,29 @@ export function useBackupAndMigration({
           return undefined;
         };
 
-        // Fetch cloud telemetry on-demand to compute missing local vs remote items
+        // Fetch cloud telemetry incrementally when we already hydrated for this user & have local telemetry
+        const convexUserId =
+          convexUser?.id ?? (convexUser as { _id?: string } | null | undefined)?._id;
+        const lastHydratedDate = convexUserId
+          ? readHydrationWatermark(convexUserId)
+          : null;
+        const hasLocalTelemetry =
+          localTelemetry.sessionAttempts.length > 0 || localTelemetry.events.length > 0;
+        const incrementalStartDate =
+          lastHydratedDate && hasLocalTelemetry
+            ? shiftDateDays(lastHydratedDate, -1)
+            : null;
+        const telemetryQueryOptions = incrementalStartDate
+          ? { limit: 500, startDate: incrementalStartDate }
+          : { limit: 5000 };
+
         const [remoteAttemptsRaw, remoteEventsRaw] = await Promise.all([
-          fetchTelemetryAttempts ? fetchTelemetryAttempts(5000) : Promise.resolve(null),
-          fetchTelemetryEvents ? fetchTelemetryEvents(5000) : Promise.resolve(null),
+          fetchTelemetryAttempts
+            ? fetchTelemetryAttempts(telemetryQueryOptions)
+            : Promise.resolve(null),
+          fetchTelemetryEvents
+            ? fetchTelemetryEvents(telemetryQueryOptions)
+            : Promise.resolve(null),
         ]);
         const remoteAttempts = Array.isArray(remoteAttemptsRaw)
           ? (remoteAttemptsRaw as SessionAttempt[])
@@ -376,14 +441,24 @@ export function useBackupAndMigration({
         const remoteEventIds = new Set(remoteEvents.map((e) => e.eventId));
 
         const missingAttempts = localTelemetry.sessionAttempts
-          .filter((a) => !isSampleSessionId(a.attemptId) && !remoteAttemptIds.has(a.attemptId))
+          .filter(
+            (a) =>
+              !isSampleSessionId(a.attemptId) &&
+              (!incrementalStartDate || a.localDate >= incrementalStartDate) &&
+              !remoteAttemptIds.has(a.attemptId)
+          )
           .map((a) => ({
             ...a,
             initialTagId: resolveMigratedTagId(a.initialTagId) ?? null,
             tagId: resolveMigratedTagId(a.tagId) ?? null,
           }));
         const missingEvents = localTelemetry.events
-          .filter((e) => !isSampleSessionId(e.eventId) && !remoteEventIds.has(e.eventId))
+          .filter(
+            (e) =>
+              !isSampleSessionId(e.eventId) &&
+              (!incrementalStartDate || e.localDate >= incrementalStartDate) &&
+              !remoteEventIds.has(e.eventId)
+          )
           .map((e) => ({
             ...e,
             tagId: resolveMigratedTagId(e.tagId) ?? null,
@@ -439,6 +514,14 @@ export function useBackupAndMigration({
             },
             'merge'
           );
+        }
+
+        if (
+          convexUserId &&
+          Array.isArray(remoteAttemptsRaw) &&
+          Array.isArray(remoteEventsRaw)
+        ) {
+          writeHydrationWatermark(convexUserId, buildLocalTimeContext().localDate);
         }
       } catch (err) {
         console.warn('Initial local-to-Convex migration check failed', err);
@@ -789,6 +872,14 @@ export function useBackupAndMigration({
         await updateProfile(safeProfileUpdate);
       }
 
+      if (
+        mode === 'replace' ||
+        (finalMlTelemetry &&
+          (finalMlTelemetry.sessionAttempts.length > 0 || finalMlTelemetry.events.length > 0))
+      ) {
+        clearAllHydrationWatermarks();
+      }
+
       if (isConvexConfigured && isEffectiveAuthenticated) {
         const tagsForConvex = finalTags;
         const sessionsForConvex = finalSessions;
@@ -847,6 +938,7 @@ export function useBackupAndMigration({
         await sessionRepository.clear();
         await coffeeRepository.clear();
         await telemetryTracker.clearAll();
+        clearAllHydrationWatermarks();
         setSessions([]);
         setCoffeeCups([]);
         broadcastCoffeeCups([]);
@@ -860,6 +952,7 @@ export function useBackupAndMigration({
         await sessionRepository.clear();
         await coffeeRepository.clear();
         await telemetryTracker.clearAll();
+        clearAllHydrationWatermarks();
         const defaultTags = await tagRepository.resetToDefaults();
         await resetSettingsToDefaults();
         await resetProfileToDefaults();
