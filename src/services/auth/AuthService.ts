@@ -10,7 +10,6 @@ export const AUTH_TOKEN_KEY = 'auth_token_v2';
 export const AUTH_USER_KEY = 'auth_user_v2';
 const TOKEN_KEY = AUTH_TOKEN_KEY;
 const USER_KEY = AUTH_USER_KEY;
-const LAST_SYNC_KEY = 'auth_last_synced_at_v1';
 
 export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
   try {
@@ -88,14 +87,6 @@ export class AuthService {
     }
   }
 
-  public getLastSyncedAt(): string | null {
-    try {
-      return localStorage.getItem(LAST_SYNC_KEY);
-    } catch {
-      return null;
-    }
-  }
-
   public isTokenExpired(token?: string | null): boolean {
     if (!token) return true;
     const payload = parseGoogleJwt(token);
@@ -142,7 +133,7 @@ export class AuthService {
       user,
       token: isAuthenticated ? token : null,
       isSyncing: false,
-      lastSyncedAt: this.getLastSyncedAt(),
+      lastSyncedAt: null,
       syncError: null,
       isTokenExpired: Boolean(token && isExpired && !hasConvexSession),
     };
@@ -154,7 +145,6 @@ export class AuthService {
       localStorage.removeItem('auth_token_v1');
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem('auth_user_v1');
-      localStorage.removeItem(LAST_SYNC_KEY);
 
       // Disable Google One Tap auto-selection to prevent automatic immediate re-login
       if (typeof window !== 'undefined' && (window as any).google?.accounts?.id?.disableAutoSelect) {

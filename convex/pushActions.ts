@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { buildPushHTTPRequest } from "@pushforge/builder";
-import { isSubscriptionMobile, shouldSendPushToDevice } from "./push";
+import { isSubscriptionMobile } from "./push";
 
 function getCompletionCopy(sessionType: "WORK" | "SHORT_BREAK" | "LONG_BREAK") {
   if (sessionType === "WORK") {
@@ -63,21 +63,12 @@ export const sendTimerCompletionPush = internalAction({
     }
 
     const { title, body } = getCompletionCopy(args.sessionType);
-    const nowMs = Date.now();
     let sent = 0;
     let pruned = 0;
 
     await Promise.allSettled(
       dispatchCtx.subscriptions.map(async (sub) => {
         const isMobileSub = isSubscriptionMobile(sub);
-        const shouldSend = shouldSendPushToDevice({
-          isMobileSub,
-          peerPresence: dispatchCtx.peerPresence,
-          nowMs,
-        });
-        if (!shouldSend) {
-          return;
-        }
 
         try {
           const req = await buildPushHTTPRequest({

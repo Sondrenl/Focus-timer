@@ -386,7 +386,6 @@ export class TelemetryTracker {
     coffeeCups: CoffeeCup[];
     wasStarted: boolean;
     targetEndTimeMs?: number | null;
-    toSessionType?: SessionType | null;
     nowMs?: number;
   }): Promise<void> {
     if (!params.wasStarted) return;

@@ -5,7 +5,6 @@ import { sanitizeHexColor } from '../../utils/colors';
 export interface ITagRepository {
   getAll(): Promise<Tag[]>;
   getActive(): Promise<Tag[]>;
-  getById(id: string): Promise<Tag | null>;
   create(input: CreateTagInput): Promise<Tag>;
   update(id: string, updates: UpdateTagInput): Promise<Tag | null>;
   archive(id: string): Promise<Tag | null>;
@@ -89,11 +88,6 @@ export class TagRepository implements ITagRepository {
   async getActive(): Promise<Tag[]> {
     const all = await this.getAll();
     return all.filter((tag) => !tag.isArchived);
-  }
-
-  async getById(id: string): Promise<Tag | null> {
-    const all = await this.getAll();
-    return all.find((tag) => tag.id === id) ?? null;
   }
 
   async create(input: CreateTagInput): Promise<Tag> {

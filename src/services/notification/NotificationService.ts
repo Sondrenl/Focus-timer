@@ -189,10 +189,6 @@ export class NotificationService {
     });
   }
 
-  setAuthToken(_token: string | null): void {
-    // No-op: Auth tokens are no longer exposed to Service Worker memory
-  }
-
   private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
     if (this.cachedRegistration?.active) {
       return this.cachedRegistration;
@@ -363,24 +359,6 @@ export class NotificationService {
       // Ignore browser unsubscribe errors
     }
     this.setPushStatus('unsubscribed');
-  }
-
-  /**
-   * Closes any previous Pomodor notifications in the notification center so they never bunch up.
-   */
-  clearActiveNotifications(): void {
-    this.sendWorkerMessage({ type: 'CLEAR_NOTIFICATIONS' });
-
-    if (this.cachedRegistration && typeof this.cachedRegistration.getNotifications === 'function') {
-      this.cachedRegistration
-        .getNotifications()
-        .then((list) => {
-          for (const n of list) {
-            n.close();
-          }
-        })
-        .catch(() => {});
-    }
   }
 
   private markSessionNotifiedInWorker(sessionId?: string | null): void {

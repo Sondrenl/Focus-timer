@@ -42,21 +42,19 @@ export function filterPeriodSessions<T extends StatSession>(
 }
 
 /**
- * Computes total focus seconds, focus hours (rounded to 1 decimal), and work session count.
+ * Computes total focus seconds and work session count.
  */
 export function computeFocusTotals(filteredSessions: StatSession[]): {
   totalFocusSeconds: number;
-  totalFocusHours: number;
   totalWorkCount: number;
 } {
   const totalFocusSeconds = filteredSessions.reduce(
     (acc, s) => acc + (s.durationSeconds > 0 ? s.durationSeconds : 0),
     0
   );
-  const totalFocusHours = Number((totalFocusSeconds / 3600).toFixed(1));
   const totalWorkCount = filteredSessions.length;
 
-  return { totalFocusSeconds, totalFocusHours, totalWorkCount };
+  return { totalFocusSeconds, totalWorkCount };
 }
 
 /**

@@ -31,11 +31,6 @@ export const DEFAULT_PROFILE: UserProfile = {
   createdAt: new Date().toISOString(),
 };
 
-/** Available avatar emojis for quick selection */
-export const AVATAR_EMOJI_OPTIONS = [
-  '🎯', '🍅', '⚡', '🚀', '🧠', '☕', '🦉', '🌿', '🔥', '💻', '📚', '🌟'
-];
-
 /**
  * Cloud authentication and sync state
  */

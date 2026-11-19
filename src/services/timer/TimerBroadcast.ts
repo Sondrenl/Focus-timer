@@ -7,7 +7,7 @@ export type ResetScope = 'sessions-only' | 'factory-reset';
 
 export interface TimerBroadcastEvent {
   senderId: string;
-  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'RESET' | 'TAB_HELLO' | 'TAB_ACK' | 'TAB_GOODBYE';
+  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'RESET';
   timer?: RemoteTimerState;
   coffeeCups?: CoffeeCup[];
   tags?: Tag[];
@@ -20,61 +20,18 @@ export const TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID
   ? crypto.randomUUID()
   : `tab-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-const MAX_PEER_TABS = 50;
-
 function isValidSenderId(id: unknown): id is string {
   return typeof id === 'string' && id.length >= 8 && id.length <= 128 && /^[a-zA-Z0-9_-]+$/.test(id);
 }
-
-const activePeerTabs = new Set<string>();
 
 let channel: BroadcastChannel | null = null;
 try {
   if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
     channel = new BroadcastChannel(CHANNEL_NAME);
-    channel.addEventListener('message', (event: MessageEvent<TimerBroadcastEvent>) => {
-      const data = event.data;
-      if (!data || !isValidSenderId(data.senderId) || data.senderId === TAB_ID) return;
-
-      if (data.type === 'TAB_HELLO') {
-        if (activePeerTabs.size < MAX_PEER_TABS) {
-          activePeerTabs.add(data.senderId);
-        }
-        try {
-          channel?.postMessage({ senderId: TAB_ID, type: 'TAB_ACK' } as TimerBroadcastEvent);
-        } catch {
-          // Ignore broadcast error
-        }
-      } else if (data.type === 'TAB_ACK') {
-        if (activePeerTabs.size < MAX_PEER_TABS) {
-          activePeerTabs.add(data.senderId);
-        }
-      } else if (data.type === 'TAB_GOODBYE') {
-        activePeerTabs.delete(data.senderId);
-      } else if (activePeerTabs.size < MAX_PEER_TABS) {
-        activePeerTabs.add(data.senderId);
-      }
-    });
-
-    // Announce presence to any existing open tabs
-    channel.postMessage({ senderId: TAB_ID, type: 'TAB_HELLO' } as TimerBroadcastEvent);
-
-    const announceGoodbye = () => {
-      try {
-        channel?.postMessage({ senderId: TAB_ID, type: 'TAB_GOODBYE' } as TimerBroadcastEvent);
-      } catch {
-        // Ignore
-      }
-    };
-    window.addEventListener('pagehide', announceGoodbye);
   }
 } catch {
   channel = null;
 }
-
-export const hasActivePeerTabs = (): boolean => {
-  return activePeerTabs.size > 0;
-};
 
 /**
  * Generic helper to broadcast typed events to peer tabs

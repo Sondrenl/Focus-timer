@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  generatePeriodInsights,
   generateAllPeriodInsights,
   selectTieredInsight,
   INSIGHT_TIERS,
@@ -15,9 +14,9 @@ const testTags: Tag[] = [
   { id: 'tag-admin', name: 'Admin', color: '#F59E0B', isArchived: false },
 ];
 
-describe('generatePeriodInsights & tiered insight selection', () => {
+describe('generateAllPeriodInsights & tiered insight selection', () => {
   it('returns empty state (Tier 3) when no sessions and no coffee cups exist', () => {
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions: [],
       coffeeCups: [],
       tags: testTags,
@@ -25,12 +24,14 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       totalFocusSeconds: 0,
       totalCoffeeCups: 0,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('empty-state');
-    expect(insights[0].tier).toBe(3);
-    expect(insights[0].headline).toContain('No activity logged');
-    expect(insights[0].description).toBe('Complete a session or log a cup of coffee to view insights');
+    expect(allInsights).toHaveLength(1);
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('empty-state');
+    expect(insight!.tier).toBe(3);
+    expect(insight!.headline).toContain('No activity logged');
+    expect(insight!.description).toBe('Complete a session or log a cup of coffee to view insights');
   });
 
   it('generates a daily summary (Tier 3) for day view when no higher-tier insights apply', () => {
@@ -52,7 +53,7 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       },
     ];
 
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions,
       coffeeCups: coffee,
       tags: testTags,
@@ -60,12 +61,14 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       totalFocusSeconds: 1500,
       totalCoffeeCups: 1,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('daily-summary');
-    expect(insights[0].tier).toBe(3);
-    expect(insights[0].headline).toContain('1 Pomodoro');
-    expect(insights[0].headline).toContain('1 cup');
+    expect(allInsights).toHaveLength(1);
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('daily-summary');
+    expect(insight!.tier).toBe(3);
+    expect(insight!.headline).toContain('1 Pomodoro');
+    expect(insight!.headline).toContain('1 cup');
   });
 
   it('detects precision peak focus window (Tier 1)', () => {
@@ -93,7 +96,7 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       },
     ];
 
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions,
       coffeeCups: [],
       tags: testTags,
@@ -101,12 +104,13 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       totalFocusSeconds: 5400,
       totalCoffeeCups: 0,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('peak-focus-window');
-    expect(insights[0].tier).toBe(1);
-    expect(insights[0].badge).toBe('Peak Flow Window');
-    expect(insights[0].headline).toContain('Your peak focus window is');
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('peak-focus-window');
+    expect(insight!.tier).toBe(1);
+    expect(insight!.badge).toBe('Peak Flow Window');
+    expect(insight!.headline).toContain('Your peak focus window is');
   });
 
   it('detects tag-coffee affinity (Tier 1) using day and tag correlations', () => {
@@ -121,7 +125,7 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-02T10:00:00.000Z' },
     ];
 
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions,
       coffeeCups: coffee,
       tags: testTags,
@@ -129,12 +133,13 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       totalFocusSeconds: 7200,
       totalCoffeeCups: 3,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('tag-coffee-affinity');
-    expect(insights[0].tier).toBe(1);
-    expect(insights[0].badge).toBe('Caffeine Affinity');
-    expect(insights[0].headline).toContain('% of coffee was logged for Coding');
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('tag-coffee-affinity');
+    expect(insight!.tier).toBe(1);
+    expect(insight!.badge).toBe('Caffeine Affinity');
+    expect(insight!.headline).toContain('% of coffee was logged for Coding');
   });
 
   it('detects daily coffee ritual (Tier 3) when logged on majority of active focus days', () => {
@@ -456,15 +461,15 @@ describe('generatePeriodInsights & tiered insight selection', () => {
     expect(sweetSpot?.tier).toBe(1);
     expect(sweetSpot?.badge).toBe('Caffeine Sweet Spot');
 
-    // Verify generatePeriodInsights only returns 1 insight and always picks from Tier 1
-    const firstPick = generatePeriodInsights(params, () => 0.0);
-    const lastPick = generatePeriodInsights(params, () => 0.99);
+    // Verify selectTieredInsight picks a single Tier 1 insight when Tier 1 insights exist
+    const firstPick = selectTieredInsight(allInsights, () => 0.0);
+    const lastPick = selectTieredInsight(allInsights, () => 0.99);
 
-    expect(firstPick).toHaveLength(1);
-    expect(lastPick).toHaveLength(1);
-    expect(firstPick[0].tier).toBe(1);
-    expect(lastPick[0].tier).toBe(1);
-    expect(firstPick[0].id).not.toBe(lastPick[0].id);
+    expect(firstPick).not.toBeNull();
+    expect(lastPick).not.toBeNull();
+    expect(firstPick!.tier).toBe(1);
+    expect(lastPick!.tier).toBe(1);
+    expect(firstPick!.id).not.toBe(lastPick!.id);
   });
 
   it('strictly prioritizes Tier 1 -> Tier 2 -> Tier 3 and picks randomly within the winning tier', () => {

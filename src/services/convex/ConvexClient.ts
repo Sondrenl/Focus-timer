@@ -4,10 +4,6 @@ import { AUTH_TOKEN_KEY, parseGoogleJwt } from "../auth/AuthService";
 export const PROD_CONVEX_URL = "https://acrobatic-oyster-97.convex.cloud";
 export const DEV_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";
 
-export const DEFAULT_CONVEX_URL = import.meta.env.PROD
-  ? PROD_CONVEX_URL
-  : DEV_CONVEX_URL;
-
 // Ensure production builds always point to production deployment even if .env.local has dev URL
 export const convexUrl =
   (typeof window !== "undefined" && (window as any).__CONVEX_URL__) ||

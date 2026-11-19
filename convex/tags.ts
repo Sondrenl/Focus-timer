@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { requireUser, getAuthenticatedUser, DEFAULT_TAGS } from "./authHelper";
+import { mutation } from "./_generated/server";
+import { requireUser, DEFAULT_TAGS } from "./authHelper";
 
 const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 export const MAX_TAGS_PER_USER = 100;
@@ -21,15 +21,6 @@ export function validateTagName(name: string): string {
   }
   return trimmed;
 }
-
-export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getAuthenticatedUser(ctx);
-    if (!user) return DEFAULT_TAGS;
-    return user.tags ?? DEFAULT_TAGS;
-  },
-});
 
 export const create = mutation({
   args: {

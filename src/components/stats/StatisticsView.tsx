@@ -42,7 +42,6 @@ export const StatisticsView: React.FC = () => {
     totalWorkCount,
     totalCoffeeCups,
     coffeeDailyAverage,
-    coffeeElapsedDays: _coffeeElapsedDays,
     coffeePeakMetric,
     tagDistribution,
     activityBars,

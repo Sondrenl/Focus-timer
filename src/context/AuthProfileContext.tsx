@@ -145,7 +145,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     const hadConvexSession = authService.hasConvexAuthSession();
     authService.logout();
-    notificationService.setAuthToken(null);
     if (isConvexConfigured) {
       try {
         await convexSignOut();
@@ -200,7 +199,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           }
         }
 
-        notificationService.setAuthToken(idToken);
         setAuth({
           isAuthenticated: true,
           user,
@@ -264,11 +262,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
             : storedUser || profileRef.current;
 
         if (!isExpired) {
-          if (storedToken) {
-            notificationService.setAuthToken(storedToken);
-            if (!hasConvexSession) {
-              setAuthToken(storedToken);
-            }
+          if (storedToken && !hasConvexSession) {
+            setAuthToken(storedToken);
           }
           setAuth({
             isAuthenticated: true,

@@ -69,17 +69,3 @@ export function generateAllPeriodInsights(params: GenerateInsightsParams): Inter
   // Sort by tier ascending (1 -> 2 -> 3), then score descending
   return tieredInsights.sort((a, b) => a.tier - b.tier || b.score - a.score);
 }
-
-/**
- * Generates and selects a single insight for the period based on tier priority:
- * Tier 1 if available, otherwise Tier 2 if available, otherwise Tier 3.
- * Picks a random insight when multiple insights exist in the winning tier.
- */
-export function generatePeriodInsights(
-  params: GenerateInsightsParams,
-  randomFn: () => number = Math.random
-): InterestingStat[] {
-  const allInsights = generateAllPeriodInsights(params);
-  const selected = selectTieredInsight(allInsights, randomFn);
-  return selected ? [selected] : [];
-}

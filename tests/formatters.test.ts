@@ -1,4 +1,4 @@
-import { formatTime, formatDurationHoursMins, formatDecimalHours, formatCompactDuration } from '../src/utils/formatters';
+import { formatTime, formatDurationHoursMins, formatCompactDuration } from '../src/utils/formatters';
 
 describe('Time and Duration Formatters', () => {
   it('formats remaining seconds into MM:SS correctly', () => {
@@ -15,12 +15,6 @@ describe('Time and Duration Formatters', () => {
     expect(formatDurationHoursMins(5400)).toBe('1h 30m');
     expect(formatDurationHoursMins(1500)).toBe('25m');
     expect(formatDurationHoursMins(0)).toBe('0m');
-  });
-
-  it('formats decimal hours to 1 decimal place', () => {
-    expect(formatDecimalHours(3600)).toBe('1.0');
-    expect(formatDecimalHours(5400)).toBe('1.5');
-    expect(formatDecimalHours(1800)).toBe('0.5');
   });
 
   it('formats compact duration for dense mobile calendar cells', () => {

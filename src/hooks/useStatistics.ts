@@ -95,7 +95,7 @@ export function useStatistics() {
       shouldExcludeSample
     );
 
-    const { totalFocusSeconds, totalFocusHours, totalWorkCount } =
+    const { totalFocusSeconds, totalWorkCount } =
       computeFocusTotals(filteredSessions);
 
     const tagDistribution = computeTagDistribution(filteredSessions, tags, totalFocusSeconds);
@@ -119,7 +119,6 @@ export function useStatistics() {
     const {
       filteredCoffee,
       totalCoffeeCups,
-      coffeeElapsedDays,
       coffeeDailyAverage,
       coffeePeakMetric,
     } = computeCoffeeStats({
@@ -150,11 +149,9 @@ export function useStatistics() {
     return {
       periodLabel,
       totalFocusSeconds,
-      totalFocusHours,
       totalWorkCount,
       totalCoffeeCups,
       coffeeDailyAverage,
-      coffeeElapsedDays,
       coffeePeakMetric,
       tagDistribution,
       activityBars,
@@ -179,10 +176,6 @@ export function useStatistics() {
     return selectTieredInsight(stats.candidateInsights);
   }, [stats.insightsSignature]);
 
-  const insights = useMemo(() => {
-    return topInsight ? [topInsight] : [];
-  }, [topInsight]);
-
   return {
     periodType,
     setPeriodType,
@@ -195,17 +188,14 @@ export function useStatistics() {
     canGoNext,
     isCurrentPeriod,
     totalFocusSeconds: stats.totalFocusSeconds,
-    totalFocusHours: stats.totalFocusHours,
     totalWorkCount: stats.totalWorkCount,
     totalCoffeeCups: stats.totalCoffeeCups,
     coffeeDailyAverage: stats.coffeeDailyAverage,
-    coffeeElapsedDays: stats.coffeeElapsedDays,
     coffeePeakMetric: stats.coffeePeakMetric,
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,
     filteredSessions: stats.filteredSessions,
-    insights,
     topInsight,
   };
 }

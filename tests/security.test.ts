@@ -246,7 +246,7 @@ describe("Security Hardening & Input Validation", () => {
 
   it("enforces push subscription quota and prunes oldest devices when exceeding quota", async () => {
     const t = convexTest(schema, modules);
-    const { asUser } = await createAuthenticatedTestUser(t);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     // Register 11 devices
     for (let i = 1; i <= 11; i++) {
@@ -258,7 +258,12 @@ describe("Security Hardening & Input Validation", () => {
       });
     }
 
-    const subs = await asUser.query(api.push.listSubscriptions, {});
+    const subs = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_user_device", (q) => q.eq("userId", userId))
+        .collect();
+    });
     expect(subs.length).toBeLessThanOrEqual(10);
     // Device 1 should have been pruned
     expect(subs.some((s) => s.deviceId === "device-1")).toBe(false);

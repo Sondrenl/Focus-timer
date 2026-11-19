@@ -1007,7 +1007,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         coffeeCups: coffeeCupsRef.current,
         wasStarted: true,
         targetEndTimeMs: skippedTargetEnd,
-        toSessionType: nextType,
       });
     }
 
@@ -1085,7 +1084,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         coffeeCups: coffeeCupsRef.current,
         wasStarted: true,
         targetEndTimeMs: prevTargetEnd,
-        toSessionType: prevType,
       });
     }
 
@@ -1147,7 +1145,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           coffeeCups: coffeeCupsRef.current,
           wasStarted: true,
           targetEndTimeMs: targetEndTimeRef.current,
-          toSessionType: type,
         });
       }
 

@@ -183,27 +183,6 @@ export class SoundService {
   }
 
   /**
-   * Explicitly suspends audio context when the app or tab is being unloaded.
-   */
-  stopAudio(): void {
-    this.isPlayingChime = false;
-    if (this.chimeTimeoutId) {
-      clearTimeout(this.chimeTimeoutId);
-      this.chimeTimeoutId = null;
-    }
-    if (this.chimeAudio) {
-      try {
-        this.chimeAudio.pause();
-      } catch {
-        // Ignore
-      }
-    }
-    if (this.audioCtx && this.audioCtx.state === 'running') {
-      this.audioCtx.suspend().catch(() => {});
-    }
-  }
-
-  /**
    * Plays a gentle, pleasant triple-tone chime (Major triad: C5 - E5 - G5).
    * For user gestures and foreground playback, Web Audio is reliably used to prevent
    * mobile iOS/Android muting or race condition cutoffs.
@@ -262,14 +241,6 @@ export class SoundService {
     this.playWebAudioChime(clampedVol);
   }
 
-  /**
-   * Dedicated test chime player ensuring immediate playback on user interaction
-   */
-  playTestChime(volume?: number): void {
-    this.prepareForPlayback();
-    this.playChime(volume ?? 0.8);
-  }
-
   private playWebAudioChime(clampedVol: number): void {
     const ctx = this.getAudioContext();
     if (!ctx) return;
@@ -303,13 +274,6 @@ export class SoundService {
     } else {
       scheduleNotes();
     }
-  }
-
-  /**
-   * Plays the completion chime for break completion
-   */
-  playBreakComplete(volume: number = 0.8): void {
-    this.playChime(volume);
   }
 }
 

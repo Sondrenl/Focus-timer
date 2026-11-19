@@ -52,17 +52,6 @@ export function formatFriendlyDate(dateStr: string | Date, includeYear = false):
 }
 
 /**
- * Returns numeric date in day/month/year format: DD/MM/YYYY
- */
-export function formatNumericDate(dateStr: string | Date): string {
-  const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
-  const day = d.getDate().toString().padStart(2, '0');
-  const month = (d.getMonth() + 1).toString().padStart(2, '0');
-  const year = d.getFullYear();
-  return `${day}/${month}/${year}`;
-}
-
-/**
  * Start and end of a single day (00:00:00.000 to 23:59:59.999)
  */
 export function getDayRange(ref: Date): { start: Date; end: Date } {

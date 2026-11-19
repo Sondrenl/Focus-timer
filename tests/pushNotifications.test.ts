@@ -1,9 +1,9 @@
 // @vitest-environment edge-runtime
 import { convexTest } from "convex-test";
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-import { isSubscriptionMobile, shouldSendPushToDevice } from "../convex/push";
+import { isSubscriptionMobile } from "../convex/push";
 import { buildPushHTTPRequest } from "@pushforge/builder";
 
 const modules = import.meta.glob("../convex/**/*.*s");
@@ -172,36 +172,97 @@ describe("Web Push Backend & Arbitration", () => {
     expect(scheduledRes).toEqual({ scheduled: true, delayMs: 5000, deviceCount: 1 });
   });
 
-  it("delivers mobile Web Push even when a desktop window is left open/visible so watch & break alerts are never swallowed", () => {
-    const now = 1_000_000;
+  it("delivers Web Push to both mobile and desktop subscriptions via sendTimerCompletionPush even when desktop is visible", async () => {
+    const vapidKp = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"]
+    );
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(
+      await crypto.subtle.exportKey("jwk", vapidKp.privateKey)
+    );
 
-    expect(
-      shouldSendPushToDevice({
-        isMobileSub: true,
+    const makeSubKeys = async () => {
+      const ecdh = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveBits"]
+      );
+      const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", ecdh.publicKey));
+      const p256dh = btoa(String.fromCharCode(...rawPub))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+      const authBytes = crypto.getRandomValues(new Uint8Array(16));
+      const auth = btoa(String.fromCharCode(...authBytes))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+      return { p256dh, auth };
+    };
+
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createTestUser(t);
+    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+
+    const mobileKeys = await makeSubKeys();
+    const desktopKeys = await makeSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "android-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/android-tok",
+      ...mobileKeys,
+      isMobile: true,
+    });
+    await asUser.mutation(api.push.register, {
+      deviceId: "desktop-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/desktop-tok",
+      ...desktopKeys,
+      isMobile: false,
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "WORK",
+        status: "IDLE",
+        remainingSeconds: 1500,
+        totalSeconds: 1500,
+        currentCycle: 1,
+        updatedAtMs: now,
         peerPresence: {
           desktopActive: true,
           desktopVisible: true,
           mobileActive: true,
           mobileVisible: false,
-          lastSeenMs: now - 10_000,
+          lastSeenMs: now,
         },
-        nowMs: now,
-      })
-    ).toBe(true);
+      });
+    });
 
-    expect(
-      shouldSendPushToDevice({
-        isMobileSub: false,
-        peerPresence: {
-          desktopActive: true,
-          desktopVisible: true,
-          mobileActive: true,
-          mobileVisible: false,
-          lastSeenMs: now - 5_000,
-        },
-        nowMs: now,
-      })
-    ).toBe(true);
+    const deliveredEndpoints: string[] = [];
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        deliveredEndpoints.push(typeof input === "string" ? input : input.toString());
+        return new Response(null, { status: 201 });
+      });
+
+    try {
+      const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+        userId,
+        sessionType: "WORK",
+        timerRunId: "run-push-1",
+        completedAtMs: now,
+      });
+
+      expect(result).toEqual({ sent: 2, pruned: 0 });
+      expect(deliveredEndpoints).toContain("https://fcm.googleapis.com/fcm/send/android-tok");
+      expect(deliveredEndpoints).toContain("https://fcm.googleapis.com/fcm/send/desktop-tok");
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("records session, advances break->work, and schedules push when client api.timer.complete beats onTimerCompleted", async () => {

@@ -388,7 +388,6 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         dailyGoalMinutes: 120,
         coffeeCups: [],
         wasStarted: false,
-        toSessionType: 'WORK',
         nowMs: baseMs,
       });
       expect(tracker.getExportDataSync().sessionAttempts).toHaveLength(0);
@@ -420,7 +419,6 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         dailyGoalMinutes: 120,
         coffeeCups: [],
         wasStarted: true,
-        toSessionType: 'SHORT_BREAK',
         nowMs: baseMs + 35_000,
       });
 
@@ -479,7 +477,6 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         dailyGoalMinutes: 120,
         coffeeCups: [],
         wasStarted: true,
-        toSessionType: 'LONG_BREAK',
         nowMs: baseMs + 250_000,
       });
 
@@ -573,7 +570,6 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         dailyGoalMinutes: 120,
         coffeeCups: [],
         wasStarted: true,
-        toSessionType: 'SHORT_BREAK',
         nowMs: baseMs + 5_000,
       });
 
@@ -639,7 +635,6 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         dailyGoalMinutes: 120,
         coffeeCups: [],
         wasStarted: true,
-        toSessionType: 'WORK',
         nowMs: baseMs + 45_000,
       });
 

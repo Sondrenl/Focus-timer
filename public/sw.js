@@ -252,8 +252,6 @@ self.addEventListener('message', (event) => {
     }
   } else if (data.type === 'CANCEL_TIMER_NOTIFICATION') {
     clearExistingSchedule();
-  } else if (data.type === 'CLEAR_NOTIFICATIONS') {
-    event.waitUntil(closeAllExistingNotifications());
   }
 });
 

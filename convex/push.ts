@@ -1,38 +1,15 @@
 import { v } from "convex/values";
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireUser, getAuthenticatedUser } from "./authHelper";
+import { requireUser } from "./authHelper";
 
 export const MAX_PUSH_DEVICES_PER_USER = 10;
-export const PRESENCE_TTL_MS = 90_000;
 
 export function isSubscriptionMobile(sub: { isMobile?: boolean; userAgent?: string }): boolean {
   if (typeof sub.isMobile === "boolean") {
     return sub.isMobile;
   }
   return /Android|iPhone|iPad|iPod|Mobile/i.test(sub.userAgent || "");
-}
-
-export function shouldSendPushToDevice({
-  isMobileSub,
-  peerPresence: _peerPresence,
-  nowMs: _nowMs = Date.now(),
-}: {
-  isMobileSub: boolean;
-  peerPresence: {
-    desktopActive: boolean;
-    desktopVisible: boolean;
-    mobileActive: boolean;
-    mobileVisible: boolean;
-    lastSeenMs: number;
-  } | null;
-  nowMs?: number;
-}): boolean {
-  // Always deliver Web Push to subscribed devices when notifications are enabled.
-  // Leaving a desktop browser window open/unminimized would otherwise suppress mobile & watch alerts
-  // during breaks away from the desk or short timers. Same-device foreground duplicates are handled by sw.js.
-  void isMobileSub;
-  return true;
 }
 
 export const ALLOWED_PUSH_DOMAINS = [
@@ -225,25 +202,12 @@ export const unregister = mutation({
   },
 });
 
-export const listSubscriptions = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getAuthenticatedUser(ctx);
-    if (!user) return [];
-
-    return await ctx.db
-      .query("push_subscriptions")
-      .withIndex("by_user_device", (q) => q.eq("userId", user._id))
-      .take(MAX_PUSH_DEVICES_PER_USER);
-  },
-});
-
 export const getPushDispatchContext = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) {
-      return { notificationsEnabled: false, subscriptions: [], peerPresence: null };
+      return { notificationsEnabled: false, subscriptions: [] };
     }
 
     const notificationsEnabled = user.settings?.notificationsEnabled ?? false;
@@ -252,15 +216,9 @@ export const getPushDispatchContext = internalQuery({
       .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
       .take(MAX_PUSH_DEVICES_PER_USER);
 
-    const activeTimer = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .first();
-
     return {
       notificationsEnabled,
       subscriptions,
-      peerPresence: activeTimer?.peerPresence ?? null,
     };
   },
 });

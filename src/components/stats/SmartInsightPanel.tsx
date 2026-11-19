@@ -19,7 +19,6 @@ import {
 
 interface SmartInsightPanelProps {
   insight?: InterestingStat | null;
-  insights?: InterestingStat[];
 }
 
 const INSIGHT_ICONS: Record<
@@ -39,8 +38,8 @@ const INSIGHT_ICONS: Record<
   'battery-charging': { Icon: BatteryCharging, color: 'text-teal-600 dark:text-teal-400', bg: 'bg-teal-600/10' },
 };
 
-export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insight, insights }) => {
-  const currentInsight = insight ?? insights?.[0] ?? null;
+export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insight }) => {
+  const currentInsight = insight ?? null;
 
   if (!currentInsight) return null;
 

@@ -26,14 +26,6 @@ export function formatDurationHoursMins(totalSeconds: number): string {
 }
 
 /**
- * Formats seconds to decimal hours with 1 decimal place (e.g. 4.5 hrs)
- */
-export function formatDecimalHours(totalSeconds: number): string {
-  const hours = totalSeconds / 3600;
-  return hours.toFixed(1);
-}
-
-/**
  * Formats seconds into a compact string suitable for dense mobile tiles (e.g. "45m", "1.5h", "2h")
  */
 export function formatCompactDuration(totalSeconds: number): string {

@@ -339,7 +339,6 @@ export function computeCoffeeStats<T extends StatCoffeeCup>(params: {
 }): {
   filteredCoffee: T[];
   totalCoffeeCups: number;
-  coffeeElapsedDays: number;
   coffeeDailyAverage: number;
   coffeePeakMetric: CoffeePeakMetric;
 } {
@@ -377,7 +376,6 @@ export function computeCoffeeStats<T extends StatCoffeeCup>(params: {
   return {
     filteredCoffee,
     totalCoffeeCups,
-    coffeeElapsedDays,
     coffeeDailyAverage,
     coffeePeakMetric,
   };

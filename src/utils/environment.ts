@@ -39,14 +39,6 @@ export function isPreviewOrDev(): boolean {
   return !isProduction();
 }
 
-export function getEnvironmentType(): 'production' | 'preview' | 'development' {
-  if (typeof window === 'undefined') return 'production';
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return 'development';
-  if (isProduction()) return 'production';
-  return 'preview';
-}
-
 /**
  * Detects if the current user agent / device is mobile or touch-primary
  */
