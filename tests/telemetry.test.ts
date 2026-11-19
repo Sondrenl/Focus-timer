@@ -711,6 +711,229 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
       expect((await tracker.getExportData()).sessionAttempts).toHaveLength(1);
       expect((await tracker.getExportData()).events).toHaveLength(3);
     });
+
+    it('caps abandoned_stale timing, finalizes mismatched in_progress drafts cleanly, handles expired/rekeyed coffee, and preserves cross-device merge context', async () => {
+      const startMs = new Date(2026, 10, 18, 8, 0, 0).getTime();
+
+      // 1. Start attempt A (25m), pause after 10m, then finalize late as abandoned_stale via onSessionFinalized
+      await tracker.onSessionStarted({
+        attemptId: 'att-stale-cap',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        autoStarted: true,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: startMs + 1500_000,
+        nowMs: startMs,
+      });
+
+      await tracker.onSessionFinalized({
+        attemptId: 'att-stale-cap',
+        outcome: 'abandoned_stale',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        remainingSecondsAtEnd: 0,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        wasStarted: true,
+        targetEndTimeMs: startMs + 1500_000,
+        nowMs: startMs + 5000_000, // 83+ minutes later
+      });
+
+      const attA = (await repo.getAttempts()).find((a) => a.attemptId === 'att-stale-cap');
+      expect(attA?.status).toBe('abandoned_stale');
+      expect(attA?.actualActiveSeconds).toBe(1500);
+      expect(attA?.remainingSecondsAtEnd).toBe(0);
+      expect(attA?.completionRatio).toBe(1);
+      expect(attA?.endedAt).toBe(new Date(startMs + 1500_000).toISOString());
+
+      // 2. Start attempt B, leave it in_progress, then start attempt C -> B must be auto-finalized as abandoned_stale
+      const bStart = startMs + 6000_000;
+      await tracker.onSessionStarted({
+        attemptId: 'att-overlap-b',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        autoStarted: false,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: bStart + 1500_000,
+        nowMs: bStart,
+      });
+      await tracker.onSessionPaused({ remainingSeconds: 1200, nowMs: bStart + 300_000 });
+
+      await tracker.onSessionStarted({
+        attemptId: 'att-overlap-c',
+        sessionType: 'SHORT_BREAK',
+        plannedDurationSeconds: 300,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        autoStarted: false,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: bStart + 900_000,
+        nowMs: bStart + 600_000,
+      });
+
+      const attB = (await repo.getAttempts()).find((a) => a.attemptId === 'att-overlap-b');
+      expect(attB?.status).toBe('abandoned_stale');
+      expect(attB?.actualActiveSeconds).toBe(300);
+      expect(attB?.remainingSecondsAtEnd).toBe(1200);
+      expect(attB?.totalPausedSeconds).toBe(300);
+      expect(attB?.pauseIntervals[0].resumedAt).toBeDefined();
+
+      // 3. Finalize a different attemptId while C is in_progress -> C is stale-finalized before D is synthesized
+      await tracker.onSessionFinalized({
+        attemptId: 'att-remote-d',
+        outcome: 'completed',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        remainingSecondsAtEnd: 0,
+        cycleIndex: 2,
+        tagId: 'tag-2',
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        wasStarted: true,
+        targetEndTimeMs: bStart + 2100_000,
+        nowMs: bStart + 2105_000,
+      });
+
+      const attemptsAfterD = await repo.getAttempts();
+      expect(attemptsAfterD.find((a) => a.attemptId === 'att-overlap-c')?.status).toBe(
+        'abandoned_stale'
+      );
+      expect(attemptsAfterD.find((a) => a.attemptId === 'att-remote-d')?.status).toBe(
+        'completed'
+      );
+
+      // 4. Coffee logging ignores expired draft; coffee removal decrements even when cup ID was server-rekeyed
+      const eStart = bStart + 3000_000;
+      await tracker.onSessionStarted({
+        attemptId: 'att-coffee-rekey',
+        sessionType: 'WORK',
+        plannedDurationSeconds: 1500,
+        cycleIndex: 1,
+        tagId: 'tag-1',
+        autoStarted: false,
+        settings: DEFAULT_SETTINGS,
+        dailyGoalMinutes: 120,
+        coffeeCups: [],
+        targetEndTimeMs: eStart + 1500_000,
+        nowMs: eStart,
+      });
+
+      const validCup: CoffeeCup = {
+        id: 'local-cup-1',
+        date: '2026-11-18',
+        tagId: 'tag-1',
+        createdAt: new Date(eStart + 120_000).toISOString(),
+      };
+      await tracker.onCoffeeLogged({
+        cup: validCup,
+        allCupsAfterAdd: [validCup],
+        timerStatus: 'RUNNING',
+        activeSessionType: 'WORK',
+      });
+      expect((await repo.getActiveDraft())?.attempt.coffeeLoggedDuringRun).toBe(1);
+
+      // Cup logged well after targetEndTimeMs + 60s must NOT attach to expired draft
+      const lateCup: CoffeeCup = {
+        id: 'late-cup-2',
+        date: '2026-11-18',
+        tagId: 'tag-1',
+        createdAt: new Date(eStart + 1700_000).toISOString(),
+      };
+      await tracker.onCoffeeLogged({
+        cup: lateCup,
+        allCupsAfterAdd: [validCup, lateCup],
+        timerStatus: 'RUNNING',
+        activeSessionType: 'WORK',
+      });
+      expect((await repo.getActiveDraft())?.attempt.coffeeLoggedDuringRun).toBe(1);
+
+      // Simulate server rekeying local-cup-1 -> convex-cup-1 before user removes it
+      await tracker.onCoffeeRemoved({
+        ...validCup,
+        id: 'convex-cup-1',
+      });
+      expect((await repo.getActiveDraft())?.attempt.coffeeLoggedDuringRun).toBe(0);
+
+      // 5. Repository precedence & cross-device merge
+      await repo.upsertAttempt({
+        ...attA!,
+        attemptId: 'att-merge-local',
+        status: 'in_progress',
+        endedAt: null,
+        startedAt: new Date(eStart).toISOString(),
+        autoStarted: true,
+        initialTagId: 'tag-init',
+        tagId: 'tag-init',
+        pauseCount: 1,
+        totalPausedSeconds: 45,
+        pauseIntervals: [
+          {
+            pausedAt: new Date(eStart + 60_000).toISOString(),
+            resumedAt: new Date(eStart + 105_000).toISOString(),
+            durationSeconds: 45,
+            elapsedActiveSecondsAtPause: 60,
+            remainingSecondsAtPause: 1440,
+          },
+        ],
+        coffeeLoggedDuringRun: 1,
+        tabBackgroundedCount: 2,
+        updatedAtMs: eStart + 200_000,
+      });
+
+      // Synthesized completion from peer device merges rich start/pause/coffee fields
+      await repo.upsertAttempt({
+        ...attA!,
+        attemptId: 'att-merge-local',
+        status: 'completed',
+        startedAt: new Date(eStart + 5000).toISOString(),
+        endedAt: new Date(eStart + 1550_000).toISOString(),
+        autoStarted: false,
+        initialTagId: 'tag-other',
+        tagId: 'tag-other',
+        pauseCount: 0,
+        totalPausedSeconds: 0,
+        pauseIntervals: [],
+        coffeeLoggedDuringRun: 0,
+        tabBackgroundedCount: 0,
+        updatedAtMs: eStart + 1550_000,
+      });
+
+      // Newer abandoned_stale update cannot downgrade completed attempt
+      await repo.upsertAttempt({
+        ...attA!,
+        attemptId: 'att-merge-local',
+        status: 'abandoned_stale',
+        updatedAtMs: eStart + 9999_000,
+      });
+
+      const mergedLocal = (await repo.getAttempts()).find(
+        (a) => a.attemptId === 'att-merge-local'
+      );
+      expect(mergedLocal?.status).toBe('completed');
+      expect(mergedLocal?.startedAt).toBe(new Date(eStart).toISOString());
+      expect(mergedLocal?.autoStarted).toBe(true);
+      expect(mergedLocal?.initialTagId).toBe('tag-init');
+      expect(mergedLocal?.tagId).toBe('tag-other');
+      expect(mergedLocal?.tagChangedMidRun).toBe(true);
+      expect(mergedLocal?.pauseCount).toBe(1);
+      expect(mergedLocal?.pauseIntervals).toHaveLength(1);
+      expect(mergedLocal?.coffeeLoggedDuringRun).toBe(1);
+      expect(mergedLocal?.tabBackgroundedCount).toBe(2);
+    });
   });
 
   describe('useBackupAndMigration mlTelemetry export, import, and reset', () => {
@@ -720,6 +943,12 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         previousSettings: DEFAULT_SETTINGS,
         newSettings: { ...DEFAULT_SETTINGS, workDurationMinutes: 35 },
       });
+
+      const updateProfileMock = vi.fn().mockResolvedValue(undefined);
+      const updateSettingsMock = vi.fn().mockResolvedValue(undefined);
+      const resetProfileMock = vi.fn().mockResolvedValue(undefined);
+      const resetSettingsMock = vi.fn().mockResolvedValue(undefined);
+      const setActiveTagIdMock = vi.fn();
 
       let exportFn!: () => BackupData;
       let importFn!: (
@@ -739,10 +968,10 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
             createdAt: '2026-11-18T00:00:00.000Z',
           },
           settings: DEFAULT_SETTINGS,
-          updateProfile: vi.fn(),
-          updateSettings: vi.fn(),
-          resetProfileToDefaults: vi.fn(),
-          resetSettingsToDefaults: vi.fn(),
+          updateProfile: updateProfileMock,
+          updateSettings: updateSettingsMock,
+          resetProfileToDefaults: resetProfileMock,
+          resetSettingsToDefaults: resetSettingsMock,
           convexSync: {
             isConvexConfigured: false,
             convexUser: null,
@@ -767,8 +996,8 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
             },
           ],
           setTags: vi.fn(),
-          activeTagId: 'tag-work',
-          setActiveTagId: vi.fn(),
+          activeTagId: 'tag-missing',
+          setActiveTagId: setActiveTagIdMock,
           sessions: [],
           setSessions: vi.fn(),
           coffeeCups: [],
@@ -812,12 +1041,44 @@ describe('ML Telemetry Context, Repository, and Tracker', () => {
         expect((await telemetryTracker.getExportData()).events).toHaveLength(0);
         expect(readHydrationWatermark('user-123')).toBeNull();
 
-        // Re-import exported backup in replace mode restores mlTelemetry & clears watermark
+        // Re-import exported backup with settings/profile passes skipTelemetry: true
         writeHydrationWatermark('user-123', '2026-11-18');
-        await importFn(exported, 'replace');
+        await importFn(
+          {
+            ...exported,
+            settings: { ...DEFAULT_SETTINGS, workDurationMinutes: 40 },
+            profile: {
+              id: 'local',
+              displayName: 'Restored',
+              avatarEmoji: '🚀',
+              dailyGoalMinutes: 180,
+              createdAt: '2026-11-18T00:00:00.000Z',
+            },
+          },
+          'replace'
+        );
         const afterImport = await telemetryTracker.getExportData();
         expect(afterImport.events.some((e) => e.eventType === 'settings_changed')).toBe(true);
         expect(readHydrationWatermark('user-123')).toBeNull();
+        expect(updateSettingsMock).toHaveBeenCalledWith(
+          expect.objectContaining({ workDurationMinutes: 40 }),
+          { skipTelemetry: true }
+        );
+        expect(updateProfileMock).toHaveBeenCalledWith(
+          expect.objectContaining({ dailyGoalMinutes: 180 }),
+          { skipTelemetry: true }
+        );
+        expect(setActiveTagIdMock).toHaveBeenCalledWith(expect.any(String), {
+          skipTelemetry: true,
+        });
+
+        // Factory reset passes skipTelemetry: true to profile/settings/tag resets
+        await resetFn('factory-reset');
+        expect(resetSettingsMock).toHaveBeenCalledWith({ skipTelemetry: true });
+        expect(resetProfileMock).toHaveBeenCalledWith({ skipTelemetry: true });
+        expect(setActiveTagIdMock).toHaveBeenLastCalledWith(expect.any(String), {
+          skipTelemetry: true,
+        });
       } finally {
         vi.unstubAllGlobals();
       }

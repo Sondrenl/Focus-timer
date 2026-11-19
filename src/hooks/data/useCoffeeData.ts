@@ -22,8 +22,15 @@ function readActiveTimerContext(): {
     const raw = localStorage.getItem(TIMER_STORAGE_KEY);
     if (!raw) return { status: null, sessionType: null };
     const parsed = JSON.parse(raw);
+    const rawStatus: TimerStatus | null = parsed?.status ?? null;
+    const targetEndTime =
+      typeof parsed?.targetEndTime === 'number' ? parsed.targetEndTime : null;
+    const status: TimerStatus | null =
+      rawStatus === 'RUNNING' && targetEndTime !== null && targetEndTime <= Date.now()
+        ? 'IDLE'
+        : rawStatus;
     return {
-      status: parsed?.status ?? null,
+      status,
       sessionType: parsed?.sessionType ?? null,
     };
   } catch {

@@ -110,6 +110,37 @@ export class TelemetryTracker {
     };
   }
 
+  /**
+   * Resets the cached active draft so the next queued operation reloads from storage
+   * (used when another tab broadcasts a data reset).
+   */
+  invalidateDraftCache(): void {
+    this.draftLoaded = false;
+    this.activeDraft = null;
+  }
+
+  /**
+   * Discards an in-progress attempt locally and in the cloud (used when multi-device
+   * arbitration rejects a phantom auto-started run).
+   */
+  async discardInProgressAttempt(attemptId: string): Promise<void> {
+    if (!attemptId) return;
+    return this.enqueue(async () => {
+      const draft = await this.ensureDraftLoaded();
+      if (draft && draft.attempt.attemptId === attemptId && draft.attempt.status === 'in_progress') {
+        this.activeDraft = null;
+        this.draftLoaded = true;
+        await this.repo.saveActiveDraft(null);
+      }
+      await this.repo.discardAttempt(attemptId);
+      if (this.cloudSink?.discardAttempt) {
+        this.cloudSink.discardAttempt(attemptId).catch((err) => {
+          console.warn('[Telemetry] Failed to discard attempt from cloud:', err);
+        });
+      }
+    });
+  }
+
   async onSessionStarted(params: {
     attemptId: string;
     sessionType: SessionType;
@@ -136,6 +167,15 @@ export class TelemetryTracker {
       ) {
         await this.performResume(existingDraft, nowMs, params.targetEndTimeMs);
         return;
+      }
+
+      // Finalize any older orphaned draft with a different attemptId before computing prior context
+      if (
+        existingDraft &&
+        existingDraft.attempt.status === 'in_progress' &&
+        existingDraft.attempt.attemptId !== params.attemptId
+      ) {
+        await this.finalizeDraftStaleInternal(existingDraft, nowMs);
       }
 
       const [priorAttempts] = await Promise.all([this.repo.getAttempts()]);
@@ -355,9 +395,25 @@ export class TelemetryTracker {
       const timeCtx = buildLocalTimeContext(nowMs);
       const draft = await this.ensureDraftLoaded();
 
+      const draftMatchesAttempt =
+        Boolean(draft) &&
+        draft!.attempt.status === 'in_progress' &&
+        params.wasStarted &&
+        (!params.attemptId || draft!.attempt.attemptId === params.attemptId);
+
+      // Finalize any older orphaned local draft before finalizing a different attemptId
+      if (
+        draft &&
+        draft.attempt.status === 'in_progress' &&
+        params.attemptId &&
+        draft.attempt.attemptId !== params.attemptId
+      ) {
+        await this.finalizeDraftStaleInternal(draft, nowMs);
+      }
+
       const resolvedAttemptId =
         params.attemptId ||
-        draft?.attempt.attemptId ||
+        (draftMatchesAttempt ? draft!.attempt.attemptId : null) ||
         generateId(params.wasStarted ? 'att' : 'idle');
 
       const cleanTagId = toNullableId(params.tagId);
@@ -366,16 +422,17 @@ export class TelemetryTracker {
 
       let finalizedAttempt: SessionAttempt;
 
-      if (draft && draft.attempt.status === 'in_progress' && params.wasStarted) {
+      if (draftMatchesAttempt && draft) {
+        const effectiveTargetEnd = params.targetEndTimeMs ?? draft.targetEndTimeMs;
+        const shouldCapAtTargetEnd =
+          (params.outcome === 'completed' || params.outcome === 'abandoned_stale') &&
+          effectiveTargetEnd !== null &&
+          effectiveTargetEnd < nowMs;
+
         let accumulatedActiveMs = draft.accumulatedActiveMs;
         if (draft.activeSegmentStartMs !== null) {
-          // Cap active segment end to targetEndTimeMs if completed after sleeping slightly
-          const effectiveEndMs =
-            params.outcome === 'completed' &&
-            (params.targetEndTimeMs ?? draft.targetEndTimeMs) !== null &&
-            (params.targetEndTimeMs ?? draft.targetEndTimeMs)! < nowMs
-              ? (params.targetEndTimeMs ?? draft.targetEndTimeMs)!
-              : nowMs;
+          // Cap active segment end to targetEndTimeMs if completed or stale-abandoned after sleep
+          const effectiveEndMs = shouldCapAtTargetEnd ? effectiveTargetEnd! : nowMs;
           accumulatedActiveMs += Math.max(0, effectiveEndMs - draft.activeSegmentStartMs);
         }
 
@@ -399,23 +456,24 @@ export class TelemetryTracker {
 
         const wallActiveSec = Math.round(accumulatedActiveMs / 1000);
         const nominalElapsedSec = Math.max(0, plannedSec - remainingSec);
+        const rawActiveSec = wallActiveSec > 0 ? wallActiveSec : nominalElapsedSec;
         const actualActiveSeconds =
           params.outcome === 'completed'
             ? Math.max(1, wallActiveSec > 0 ? Math.min(wallActiveSec, plannedSec) : plannedSec)
-            : Math.max(0, wallActiveSec > 0 ? wallActiveSec : nominalElapsedSec);
+            : Math.max(0, Math.min(plannedSec, rawActiveSec));
 
-        const effectiveTargetEnd = params.targetEndTimeMs ?? draft.targetEndTimeMs;
         const completionLatencySeconds =
           params.outcome === 'completed' && effectiveTargetEnd !== null
             ? Math.max(0, Math.round((nowMs - effectiveTargetEnd) / 1000))
             : null;
 
-        const endedMs =
-          params.outcome === 'completed' &&
-          effectiveTargetEnd !== null &&
-          effectiveTargetEnd < nowMs
-            ? effectiveTargetEnd
-            : nowMs;
+        const endedMs = shouldCapAtTargetEnd ? effectiveTargetEnd! : nowMs;
+        const remainingSecondsAtEnd =
+          params.outcome === 'completed'
+            ? 0
+            : params.outcome === 'abandoned_stale'
+            ? Math.max(0, plannedSec - actualActiveSeconds)
+            : remainingSec;
 
         finalizedAttempt = {
           ...draft.attempt,
@@ -425,9 +483,9 @@ export class TelemetryTracker {
           tagChangedMidRun:
             draft.attempt.tagChangedMidRun || cleanTagId !== draft.attempt.initialTagId,
           actualActiveSeconds,
-          remainingSecondsAtEnd: params.outcome === 'completed' ? 0 : remainingSec,
+          remainingSecondsAtEnd,
           completionRatio: Number(
-            Math.min(2, actualActiveSeconds / plannedSec).toFixed(4)
+            Math.min(1, actualActiveSeconds / plannedSec).toFixed(4)
           ),
           totalPausedSeconds,
           pauseIntervals: updatedPauses,
@@ -436,23 +494,37 @@ export class TelemetryTracker {
           updatedAtMs: nowMs,
         };
       } else {
-        // Synthesize attempt for idle skips or runs originated on another tab/device
+        // Synthesize attempt for runs originated on another tab/device
+        const effectiveTargetEnd = params.targetEndTimeMs ?? null;
+        const shouldCapAtTargetEnd =
+          (params.outcome === 'completed' || params.outcome === 'abandoned_stale') &&
+          effectiveTargetEnd !== null &&
+          effectiveTargetEnd < nowMs;
+        const endedMs = shouldCapAtTargetEnd ? effectiveTargetEnd! : nowMs;
+        const endedCtx = buildLocalTimeContext(endedMs);
+
         const priorAttempts = await this.repo.getAttempts();
         const coffeeMetrics = computeCoffeeContextAt(
           params.coffeeCups,
-          timeCtx.localDate,
-          nowMs
+          endedCtx.localDate,
+          endedMs
         );
         const priorMetrics = computePriorAttemptContext(
           priorAttempts,
-          timeCtx.localDate,
-          nowMs
+          endedCtx.localDate,
+          endedMs
         );
         const actualActiveSeconds = !params.wasStarted
           ? 0
           : params.outcome === 'completed'
           ? plannedSec
-          : Math.max(0, plannedSec - remainingSec);
+          : Math.max(0, Math.min(plannedSec, plannedSec - remainingSec));
+        const remainingSecondsAtEnd =
+          params.outcome === 'completed'
+            ? 0
+            : params.outcome === 'abandoned_stale'
+            ? Math.max(0, plannedSec - actualActiveSeconds)
+            : remainingSec;
 
         finalizedAttempt = {
           attemptId: resolvedAttemptId,
@@ -461,20 +533,20 @@ export class TelemetryTracker {
           wasStarted: params.wasStarted,
           plannedDurationSeconds: plannedSec,
           actualActiveSeconds,
-          remainingSecondsAtEnd: params.outcome === 'completed' ? 0 : remainingSec,
+          remainingSecondsAtEnd,
           completionRatio: Number(
-            Math.min(2, actualActiveSeconds / plannedSec).toFixed(4)
+            Math.min(1, actualActiveSeconds / plannedSec).toFixed(4)
           ),
           startedAt: params.wasStarted
-            ? new Date(nowMs - actualActiveSeconds * 1000).toISOString()
+            ? new Date(endedMs - actualActiveSeconds * 1000).toISOString()
             : null,
-          endedAt: timeCtx.timestamp,
-          utcOffsetMinutes: timeCtx.utcOffsetMinutes,
-          ianaTimezone: timeCtx.ianaTimezone,
-          localDate: timeCtx.localDate,
-          localHour: timeCtx.localHour,
-          localMinuteOfDay: timeCtx.localMinuteOfDay,
-          localDayOfWeek: timeCtx.localDayOfWeek,
+          endedAt: endedCtx.timestamp,
+          utcOffsetMinutes: endedCtx.utcOffsetMinutes,
+          ianaTimezone: endedCtx.ianaTimezone,
+          localDate: endedCtx.localDate,
+          localHour: endedCtx.localHour,
+          localMinuteOfDay: endedCtx.localMinuteOfDay,
+          localDayOfWeek: endedCtx.localDayOfWeek,
           cycleIndex: params.cycleIndex,
           longBreakInterval: params.settings.longBreakInterval,
           autoStarted: false,
@@ -498,8 +570,8 @@ export class TelemetryTracker {
           deviceClass: getDeviceClass(),
           tabBackgroundedCount: 0,
           completionLatencySeconds:
-            params.outcome === 'completed' && params.targetEndTimeMs
-              ? Math.max(0, Math.round((nowMs - params.targetEndTimeMs) / 1000))
+            params.outcome === 'completed' && effectiveTargetEnd !== null
+              ? Math.max(0, Math.round((nowMs - effectiveTargetEnd) / 1000))
               : null,
           source: 'client',
           updatedAtMs: nowMs,
@@ -550,6 +622,8 @@ export class TelemetryTracker {
       };
       this.activeDraft = nextDraft;
       await this.repo.saveActiveDraft(nextDraft);
+      await this.repo.upsertAttempt(nextDraft.attempt);
+      this.pushAttemptToCloud(nextDraft.attempt);
     });
   }
 
@@ -614,7 +688,14 @@ export class TelemetryTracker {
 
       const draft = await this.ensureDraftLoaded();
       let activeAttemptId: string | null = null;
-      if (draft && draft.attempt.status === 'in_progress') {
+      const isDraftFresh =
+        draft !== null &&
+        draft.attempt.status === 'in_progress' &&
+        (draft.currentPauseStartMs !== null ||
+          draft.targetEndTimeMs === null ||
+          nowMs <= draft.targetEndTimeMs + 60_000);
+
+      if (draft && isDraftFresh) {
         activeAttemptId = draft.attempt.attemptId;
         const nextDraft: ActiveAttemptDraft = {
           ...draft,
@@ -626,6 +707,8 @@ export class TelemetryTracker {
         };
         this.activeDraft = nextDraft;
         await this.repo.saveActiveDraft(nextDraft);
+        await this.repo.upsertAttempt(nextDraft.attempt);
+        this.pushAttemptToCloud(nextDraft.attempt);
       }
 
       const cupsOnDate = params.allCupsAfterAdd.filter((c) => c.date === params.cup.date);
@@ -682,6 +765,45 @@ export class TelemetryTracker {
   async onCoffeeRemoved(cup: CoffeeCup): Promise<void> {
     return this.enqueue(async () => {
       const nowMs = Date.now();
+      const draft = await this.ensureDraftLoaded();
+      if (
+        draft &&
+        draft.attempt.status === 'in_progress' &&
+        draft.attempt.coffeeLoggedDuringRun > 0
+      ) {
+        const cupMs = Date.parse(cup.createdAt);
+        const startMs = draft.attempt.startedAt ? Date.parse(draft.attempt.startedAt) : NaN;
+        const events = await this.repo.getEvents();
+        const loggedDuringThisAttempt = events.some(
+          (e) =>
+            e.eventType === 'coffee_logged' &&
+            e.cupId === cup.id &&
+            e.attemptId === draft.attempt.attemptId
+        );
+        const createdDuringDraft =
+          !Number.isNaN(cupMs) &&
+          !Number.isNaN(startMs) &&
+          cupMs >= startMs &&
+          (draft.currentPauseStartMs !== null ||
+            draft.targetEndTimeMs === null ||
+            cupMs <= draft.targetEndTimeMs + 60_000);
+
+        if (loggedDuringThisAttempt || createdDuringDraft) {
+          const nextDraft: ActiveAttemptDraft = {
+            ...draft,
+            attempt: {
+              ...draft.attempt,
+              coffeeLoggedDuringRun: Math.max(0, draft.attempt.coffeeLoggedDuringRun - 1),
+              updatedAtMs: nowMs,
+            },
+          };
+          this.activeDraft = nextDraft;
+          await this.repo.saveActiveDraft(nextDraft);
+          await this.repo.upsertAttempt(nextDraft.attempt);
+          this.pushAttemptToCloud(nextDraft.attempt);
+        }
+      }
+
       const evt: MlEvent = {
         ...this.buildBaseEvent('coffee_removed', nowMs),
         tagId: toNullableId(cup.tagId),
@@ -752,44 +874,71 @@ export class TelemetryTracker {
     });
   }
 
+  private async finalizeDraftStaleInternal(
+    draft: ActiveAttemptDraft,
+    nowMs: number
+  ): Promise<void> {
+    const timeCtx = buildLocalTimeContext(nowMs);
+    let accumulatedActiveMs = draft.accumulatedActiveMs;
+    if (draft.activeSegmentStartMs !== null) {
+      const capMs =
+        draft.targetEndTimeMs !== null && draft.targetEndTimeMs < nowMs
+          ? draft.targetEndTimeMs
+          : nowMs;
+      accumulatedActiveMs += Math.max(0, capMs - draft.activeSegmentStartMs);
+    }
+
+    let totalPausedSeconds = draft.attempt.totalPausedSeconds;
+    const updatedPauses = [...draft.attempt.pauseIntervals];
+    if (draft.currentPauseStartMs !== null) {
+      const extraPauseSec = Math.max(
+        0,
+        Math.round((nowMs - draft.currentPauseStartMs) / 1000)
+      );
+      totalPausedSeconds += extraPauseSec;
+      if (updatedPauses.length > 0) {
+        const lastIdx = updatedPauses.length - 1;
+        updatedPauses[lastIdx] = {
+          ...updatedPauses[lastIdx],
+          resumedAt: timeCtx.timestamp,
+          durationSeconds: extraPauseSec,
+        };
+      }
+    }
+
+    const plannedSec = Math.max(1, draft.attempt.plannedDurationSeconds);
+    const wallActiveSec = Math.max(0, Math.min(plannedSec, Math.round(accumulatedActiveMs / 1000)));
+    const remainingSecondsAtEnd = Math.max(0, plannedSec - wallActiveSec);
+    const endedMs =
+      draft.targetEndTimeMs !== null && draft.targetEndTimeMs < nowMs
+        ? draft.targetEndTimeMs
+        : nowMs;
+
+    const finalizedAttempt: SessionAttempt = {
+      ...draft.attempt,
+      status: 'abandoned_stale',
+      endedAt: new Date(endedMs).toISOString(),
+      actualActiveSeconds: wallActiveSec,
+      remainingSecondsAtEnd,
+      completionRatio: Number(Math.min(1, wallActiveSec / plannedSec).toFixed(4)),
+      totalPausedSeconds,
+      pauseIntervals: updatedPauses,
+      source: 'client',
+      updatedAtMs: nowMs,
+    };
+
+    this.activeDraft = null;
+    this.draftLoaded = true;
+    await this.repo.saveActiveDraft(null);
+    await this.repo.upsertAttempt(finalizedAttempt);
+    this.pushAttemptToCloud(finalizedAttempt);
+  }
+
   async finalizeOrphanedDraftIfStale(): Promise<void> {
     return this.enqueue(async () => {
       const draft = await this.ensureDraftLoaded();
       if (!draft || draft.attempt.status !== 'in_progress') return;
-
-      const nowMs = Date.now();
-      const timeCtx = buildLocalTimeContext(nowMs);
-      let accumulatedActiveMs = draft.accumulatedActiveMs;
-      if (draft.activeSegmentStartMs !== null) {
-        const capMs =
-          draft.targetEndTimeMs !== null && draft.targetEndTimeMs < nowMs
-            ? draft.targetEndTimeMs
-            : nowMs;
-        accumulatedActiveMs += Math.max(0, capMs - draft.activeSegmentStartMs);
-      }
-
-      const plannedSec = Math.max(1, draft.attempt.plannedDurationSeconds);
-      const wallActiveSec = Math.max(0, Math.min(plannedSec, Math.round(accumulatedActiveMs / 1000)));
-      const remainingSecondsAtEnd = Math.max(0, plannedSec - wallActiveSec);
-
-      const finalizedAttempt: SessionAttempt = {
-        ...draft.attempt,
-        status: 'abandoned_stale',
-        endedAt: draft.targetEndTimeMs
-          ? new Date(Math.min(nowMs, draft.targetEndTimeMs)).toISOString()
-          : timeCtx.timestamp,
-        actualActiveSeconds: wallActiveSec,
-        remainingSecondsAtEnd,
-        completionRatio: Number(Math.min(2, wallActiveSec / plannedSec).toFixed(4)),
-        source: 'client',
-        updatedAtMs: nowMs,
-      };
-
-      this.activeDraft = null;
-      this.draftLoaded = true;
-      await this.repo.saveActiveDraft(null);
-      await this.repo.upsertAttempt(finalizedAttempt);
-      this.pushAttemptToCloud(finalizedAttempt);
+      await this.finalizeDraftStaleInternal(draft, Date.now());
     });
   }
 

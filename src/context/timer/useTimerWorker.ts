@@ -126,6 +126,8 @@ export const useTimerWorker = ({
         onStaleExpiration();
         return;
       }
+      remainingSecondsRef.current = 0;
+      setRemainingSeconds(0);
       const expiredLongAgo = diffMs < -60_000;
       handleCompleteRef.current(expiredLongAgo);
       return;
@@ -206,6 +208,8 @@ export const useTimerWorker = ({
             onStaleExpiration();
             return;
           }
+          remainingSecondsRef.current = 0;
+          setRemainingSeconds(0);
           const expiredLongAgo = diffMs < -60_000;
           handleCompleteRef.current(expiredLongAgo);
           return;

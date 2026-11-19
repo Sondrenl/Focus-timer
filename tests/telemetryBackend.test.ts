@@ -566,4 +566,202 @@ describe("Passive ML Telemetry Convex Backend", () => {
     expect(discardFinalized).toBe(false);
     expect(await asUser.query(api.telemetry.listAttempts, {})).toHaveLength(1);
   });
+
+  it("enforces status precedence and merges cross-device synthesized finalization with existing in_progress context", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // 1. Device A starts run with rich context & pauses
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "cross-dev-1",
+        status: "in_progress",
+        startedAt: "2026-11-18T10:00:00.000Z",
+        autoStarted: true,
+        initialTagId: "tag-initial",
+        tagId: "tag-initial",
+        pauseCount: 2,
+        totalPausedSeconds: 90,
+        pauseIntervals: [
+          {
+            pausedAt: "2026-11-18T10:05:00.000Z",
+            resumedAt: "2026-11-18T10:06:00.000Z",
+            durationSeconds: 60,
+            elapsedActiveSecondsAtPause: 300,
+            remainingSecondsAtPause: 1200,
+          },
+          {
+            pausedAt: "2026-11-18T10:12:00.000Z",
+            resumedAt: "2026-11-18T10:12:30.000Z",
+            durationSeconds: 30,
+            elapsedActiveSecondsAtPause: 660,
+            remainingSecondsAtPause: 840,
+          },
+        ],
+        coffeeLoggedDuringRun: 1,
+        tabBackgroundedCount: 3,
+        updatedAtMs: 1700000800000,
+      })
+    );
+
+    // 2. Device B submits synthesized completion (pauseCount: 0, shifted startedAt, updated tagId)
+    const merged = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "cross-dev-1",
+        status: "completed",
+        actualActiveSeconds: 1500,
+        remainingSecondsAtEnd: 0,
+        completionRatio: 1,
+        startedAt: "2026-11-18T10:01:30.000Z",
+        endedAt: "2026-11-18T10:26:30.000Z",
+        autoStarted: false,
+        initialTagId: "tag-final",
+        tagId: "tag-final",
+        pauseCount: 0,
+        totalPausedSeconds: 0,
+        pauseIntervals: [],
+        coffeeLoggedDuringRun: 0,
+        tabBackgroundedCount: 0,
+        updatedAtMs: 1700001600000,
+      })
+    );
+
+    expect(merged.status).toBe("completed");
+    expect(merged.startedAt).toBe("2026-11-18T10:00:00.000Z");
+    expect(merged.autoStarted).toBe(true);
+    expect(merged.initialTagId).toBe("tag-initial");
+    expect(merged.tagId).toBe("tag-final");
+    expect(merged.tagChangedMidRun).toBe(true);
+    expect(merged.pauseCount).toBe(2);
+    expect(merged.totalPausedSeconds).toBe(90);
+    expect(merged.pauseIntervals).toHaveLength(2);
+    expect(merged.coffeeLoggedDuringRun).toBe(1);
+    expect(merged.tabBackgroundedCount).toBe(3);
+
+    // 3. Even newer abandoned_stale must NOT overwrite completed
+    const afterStale = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "cross-dev-1",
+        status: "abandoned_stale",
+        endedAt: "2026-11-18T12:00:00.000Z",
+        updatedAtMs: 1700099999000,
+      })
+    );
+    expect(afterStale.status).toBe("completed");
+
+    // 4. Explicit skipped upgrades an existing client abandoned_stale attempt
+    await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "stale-then-skip",
+        status: "abandoned_stale",
+        endedAt: "2026-11-18T11:10:00.000Z",
+        updatedAtMs: 1700010000000,
+      })
+    );
+    const upgraded = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "stale-then-skip",
+        status: "skipped",
+        actualActiveSeconds: 400,
+        remainingSecondsAtEnd: 1100,
+        completionRatio: 0.2667,
+        endedAt: "2026-11-18T11:06:40.000Z",
+        updatedAtMs: 1700005000000, // older wall time still upgrades stale placeholder
+      })
+    );
+    expect(upgraded.status).toBe("skipped");
+    expect(upgraded.actualActiveSeconds).toBe(400);
+  });
+
+  it("sets accurate endedAt, actualActiveSeconds, remainingSecondsAtEnd, and completionRatio in cleanupStaleTimers", async () => {
+    const t = convexTest(schema, modules);
+    const now = Date.now();
+
+    const userRunId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+      email: "stale-run@example.com",
+      sub: "google-stale-run",
+      name: "Stale Run",
+    });
+    const asRunUser = t.withIdentity({
+      subject: `${userRunId}|sess-run`,
+      email: "stale-run@example.com",
+      name: "Stale Run",
+    });
+
+    const userPausedId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+      email: "stale-paused@example.com",
+      sub: "google-stale-paused",
+      name: "Stale Paused",
+    });
+    const asPausedUser = t.withIdentity({
+      subject: `${userPausedId}|sess-paused`,
+      email: "stale-paused@example.com",
+      name: "Stale Paused",
+    });
+
+    await asRunUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-expired-2h",
+        status: "in_progress",
+        plannedDurationSeconds: 1500,
+        actualActiveSeconds: 0,
+      })
+    );
+    await asPausedUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-paused-8d",
+        status: "in_progress",
+        plannedDurationSeconds: 1500,
+        actualActiveSeconds: 450,
+      })
+    );
+
+    const expectedTargetEnd = now - 2 * 3600 * 1000;
+    const eightDaysAgo = now - 8 * 24 * 3600 * 1000;
+    await t.run(async (ctx) => {
+      await ctx.db.insert("active_timers", {
+        userId: userRunId,
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 0,
+        totalSeconds: 1500,
+        targetEndTime: expectedTargetEnd,
+        currentCycle: 1,
+        timerRunId: "run-expired-2h",
+        updatedAtMs: expectedTargetEnd,
+      });
+      await ctx.db.insert("active_timers", {
+        userId: userPausedId,
+        sessionType: "WORK",
+        status: "PAUSED",
+        remainingSeconds: 1050,
+        totalSeconds: 1500,
+        currentCycle: 1,
+        timerRunId: "run-paused-8d",
+        updatedAtMs: eightDaysAgo,
+      });
+    });
+
+    await t.mutation(internal.timer.cleanupStaleTimers, {});
+
+    const runAttempts = await asRunUser.query(api.telemetry.listAttempts, {});
+    expect(runAttempts?.[0].status).toBe("abandoned_stale");
+    expect(runAttempts?.[0].endedAt).toBe(new Date(expectedTargetEnd).toISOString());
+    expect(runAttempts?.[0].actualActiveSeconds).toBe(1500);
+    expect(runAttempts?.[0].remainingSecondsAtEnd).toBe(0);
+    expect(runAttempts?.[0].completionRatio).toBe(1);
+
+    const pausedAttempts = await asPausedUser.query(api.telemetry.listAttempts, {});
+    expect(pausedAttempts?.[0].status).toBe("abandoned_stale");
+    expect(pausedAttempts?.[0].actualActiveSeconds).toBe(450);
+    expect(pausedAttempts?.[0].remainingSecondsAtEnd).toBe(1050);
+    expect(pausedAttempts?.[0].completionRatio).toBe(0.3);
+  });
 });

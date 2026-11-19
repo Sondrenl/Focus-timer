@@ -44,18 +44,32 @@ export function useTagsData({
   const activeTagIdRef = useRef<string | null>(activeTagId);
   activeTagIdRef.current = activeTagId;
 
-  const setActiveTagId = useCallback((id: string | null) => {
-    activeTagIdRef.current = id;
-    setActiveTagIdState(id);
-    try {
-      if (id) {
-        localStorage.setItem('active_tag_id_v1', id);
-      } else {
-        localStorage.removeItem('active_tag_id_v1');
+  const skipNextTagTelemetryRef = useRef<boolean>(false);
+
+  const setActiveTagId = useCallback(
+    (id: string | null, options?: { skipTelemetry?: boolean }) => {
+      if (id !== activeTagIdRef.current) {
+        skipNextTagTelemetryRef.current = Boolean(options?.skipTelemetry);
       }
-    } catch {
-      // Ignore storage error
-    }
+      activeTagIdRef.current = id;
+      setActiveTagIdState(id);
+      try {
+        if (id) {
+          localStorage.setItem('active_tag_id_v1', id);
+        } else {
+          localStorage.removeItem('active_tag_id_v1');
+        }
+      } catch {
+        // Ignore storage error
+      }
+    },
+    []
+  );
+
+  const consumeSkipTagTelemetry = useCallback((): boolean => {
+    const shouldSkip = skipNextTagTelemetryRef.current;
+    skipNextTagTelemetryRef.current = false;
+    return shouldSkip;
   }, []);
 
   const ensureValidActiveTag = useCallback(
@@ -65,7 +79,7 @@ export function useTagsData({
         return;
       }
       const nextActive = tagList.find((t) => !t.isArchived);
-      setActiveTagId(nextActive?.id ?? null);
+      setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
     },
     [setActiveTagId]
   );
@@ -84,10 +98,10 @@ export function useTagsData({
       }
 
       if (storedTagId && loadedTags.some((t) => t.id === storedTagId && !t.isArchived)) {
-        setActiveTagId(storedTagId);
+        setActiveTagId(storedTagId, { skipTelemetry: true });
       } else {
         const firstActive = loadedTags.find((t) => !t.isArchived);
-        setActiveTagId(firstActive?.id ?? null);
+        setActiveTagId(firstActive?.id ?? null, { skipTelemetry: true });
       }
     }
 
@@ -183,7 +197,7 @@ export function useTagsData({
       setTags(updated);
       if (activeTagIdRef.current === id) {
         const nextActive = updated.find((t) => !t.isArchived);
-        setActiveTagId(nextActive?.id ?? null);
+        setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
       }
       broadcastTags(updated);
 
@@ -238,7 +252,7 @@ export function useTagsData({
       setTags(updatedTags);
       if (activeTagIdRef.current === id) {
         const nextActive = updatedTags.find((t) => !t.isArchived);
-        setActiveTagId(nextActive?.id ?? null);
+        setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
       }
       broadcastTags(updatedTags);
 
@@ -266,6 +280,7 @@ export function useTagsData({
     activeTags,
     activeTagId,
     setActiveTagId,
+    consumeSkipTagTelemetry,
     activeTagIdRef,
     createTag,
     updateTag,

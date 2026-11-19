@@ -451,11 +451,14 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       };
 
       await importBackupFn(sanitizedBackup, "merge");
-      expect(mockUpdateProfile).toHaveBeenCalledWith({
-        displayName: "Imported Practitioner",
-        avatarEmoji: "🚀",
-        dailyGoalMinutes: 150,
-      });
+      expect(mockUpdateProfile).toHaveBeenCalledWith(
+        {
+          displayName: "Imported Practitioner",
+          avatarEmoji: "🚀",
+          dailyGoalMinutes: 150,
+        },
+        { skipTelemetry: true }
+      );
 
       // 2. Test importing a legacy backup containing legacy id, email, and avatarUrl
       mockUpdateProfile.mockClear();
@@ -477,11 +480,14 @@ describe("Repository Serialization & Sample Data Isolation", () => {
 
       await importBackupFn(legacyBackup, "merge");
       // Must NOT include id or email in the profile update
-      expect(mockUpdateProfile).toHaveBeenCalledWith({
-        displayName: "Legacy Practitioner",
-        avatarEmoji: "⚡",
-        dailyGoalMinutes: 60,
-      });
+      expect(mockUpdateProfile).toHaveBeenCalledWith(
+        {
+          displayName: "Legacy Practitioner",
+          avatarEmoji: "⚡",
+          dailyGoalMinutes: 60,
+        },
+        { skipTelemetry: true }
+      );
       const updatePayload = mockUpdateProfile.mock.calls[0][0];
       expect(updatePayload.id).toBeUndefined();
       expect(updatePayload.email).toBeUndefined();

@@ -729,10 +729,29 @@ export const cleanupStaleTimers = internalMutation({
             .first();
 
           if (existingAttempt && existingAttempt.status === "in_progress") {
-            const nowIso = new Date(nowMs).toISOString();
+            const plannedSec = Math.max(
+              1,
+              existingAttempt.plannedDurationSeconds || timer.totalSeconds || 1
+            );
+            const isExpiredRunning =
+              timer.status === "RUNNING" &&
+              typeof timer.targetEndTime === "number" &&
+              timer.targetEndTime < nowMs;
+            const endedMs = isExpiredRunning ? timer.targetEndTime! : nowMs;
+            const actualActiveSeconds = isExpiredRunning
+              ? plannedSec
+              : Math.max(0, Math.min(plannedSec, existingAttempt.actualActiveSeconds));
+            const remainingSecondsAtEnd = Math.max(0, plannedSec - actualActiveSeconds);
+            const completionRatio = Number(
+              Math.min(1, actualActiveSeconds / plannedSec).toFixed(4)
+            );
+
             await ctx.db.patch(existingAttempt._id, {
               status: "abandoned_stale",
-              endedAt: nowIso,
+              endedAt: new Date(endedMs).toISOString(),
+              actualActiveSeconds,
+              remainingSecondsAtEnd,
+              completionRatio,
               source: "server_scheduled",
               updatedAtMs: nowMs,
             });

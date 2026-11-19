@@ -35,6 +35,10 @@ function pickConvexSettings(s: Partial<UserSettings>) {
   };
 }
 
+export interface TelemetryControlOptions {
+  skipTelemetry?: boolean;
+}
+
 export interface AuthProfileContextValue {
   auth: AuthState;
   isEffectiveAuthenticated: boolean;
@@ -44,11 +48,17 @@ export interface AuthProfileContextValue {
   logout: () => Promise<void>;
   syncWithCloud: (force?: boolean) => Promise<void>;
   profile: UserProfile;
-  updateProfile: (newProfile: Partial<UserProfile>) => Promise<void>;
-  resetProfileToDefaults: () => Promise<UserProfile>;
+  updateProfile: (
+    newProfile: Partial<UserProfile>,
+    options?: TelemetryControlOptions
+  ) => Promise<void>;
+  resetProfileToDefaults: (options?: TelemetryControlOptions) => Promise<UserProfile>;
   settings: UserSettings;
-  updateSettings: (newSettings: Partial<UserSettings>) => Promise<void>;
-  resetSettingsToDefaults: () => Promise<UserSettings>;
+  updateSettings: (
+    newSettings: Partial<UserSettings>,
+    options?: TelemetryControlOptions
+  ) => Promise<void>;
+  resetSettingsToDefaults: (options?: TelemetryControlOptions) => Promise<UserSettings>;
   sound: SoundService;
   notifications: NotificationService;
   convexSync: ReturnType<typeof useConvexSync>;
@@ -459,7 +469,10 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   );
 
   const updateProfile = useCallback(
-    async (newProfile: Partial<UserProfile>): Promise<void> => {
+    async (
+      newProfile: Partial<UserProfile>,
+      options?: TelemetryControlOptions
+    ): Promise<void> => {
       lastLocalProfileEditMsRef.current = Date.now();
       const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
       const merged = { ...profileRef.current, ...newProfile };
@@ -467,7 +480,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setProfile(merged);
       await profileRepository.save(merged);
 
-      if (merged.dailyGoalMinutes !== previousGoalMinutes) {
+      if (!options?.skipTelemetry && merged.dailyGoalMinutes !== previousGoalMinutes) {
         void telemetryTracker.onDailyGoalChanged({
           previousGoalMinutes,
           newGoalMinutes: merged.dailyGoalMinutes,
@@ -487,32 +500,38 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
   );
 
-  const resetProfileToDefaults = useCallback(async (): Promise<UserProfile> => {
-    lastLocalProfileEditMsRef.current = Date.now();
-    const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
-    const defaultProfile = await profileRepository.resetToDefaults();
-    profileRef.current = defaultProfile;
-    setProfile(defaultProfile);
-    if (defaultProfile.dailyGoalMinutes !== previousGoalMinutes) {
-      void telemetryTracker.onDailyGoalChanged({
-        previousGoalMinutes,
-        newGoalMinutes: defaultProfile.dailyGoalMinutes,
-      });
-    }
-    if (isConvexConfigured && isEffectiveAuthenticated) {
-      convexMutations
-        .updateProfile({
-          displayName: defaultProfile.displayName,
-          avatarEmoji: defaultProfile.avatarEmoji,
-          dailyGoalMinutes: defaultProfile.dailyGoalMinutes,
-        })
-        .catch(console.warn);
-    }
-    return defaultProfile;
-  }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);
+  const resetProfileToDefaults = useCallback(
+    async (options?: TelemetryControlOptions): Promise<UserProfile> => {
+      lastLocalProfileEditMsRef.current = Date.now();
+      const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
+      const defaultProfile = await profileRepository.resetToDefaults();
+      profileRef.current = defaultProfile;
+      setProfile(defaultProfile);
+      if (!options?.skipTelemetry && defaultProfile.dailyGoalMinutes !== previousGoalMinutes) {
+        void telemetryTracker.onDailyGoalChanged({
+          previousGoalMinutes,
+          newGoalMinutes: defaultProfile.dailyGoalMinutes,
+        });
+      }
+      if (isConvexConfigured && isEffectiveAuthenticated) {
+        convexMutations
+          .updateProfile({
+            displayName: defaultProfile.displayName,
+            avatarEmoji: defaultProfile.avatarEmoji,
+            dailyGoalMinutes: defaultProfile.dailyGoalMinutes,
+          })
+          .catch(console.warn);
+      }
+      return defaultProfile;
+    },
+    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+  );
 
   const updateSettings = useCallback(
-    async (newValues: Partial<UserSettings>): Promise<void> => {
+    async (
+      newValues: Partial<UserSettings>,
+      options?: TelemetryControlOptions
+    ): Promise<void> => {
       lastLocalSettingsEditMsRef.current = Date.now();
       const previousSettings = settingsRef.current;
       const cleanValues = pickConvexSettings(newValues);
@@ -524,10 +543,12 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setSettings(merged);
       await settingsRepository.save(merged);
 
-      void telemetryTracker.onSettingsChanged({
-        previousSettings,
-        newSettings: merged,
-      });
+      if (!options?.skipTelemetry) {
+        void telemetryTracker.onSettingsChanged({
+          previousSettings,
+          newSettings: merged,
+        });
+      }
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
         convexMutations.updateSettings(cleanValues).catch(console.warn);
@@ -536,23 +557,28 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
   );
 
-  const resetSettingsToDefaults = useCallback(async (): Promise<UserSettings> => {
-    lastLocalSettingsEditMsRef.current = Date.now();
-    const previousSettings = settingsRef.current;
-    const defaultSettings = await settingsRepository.resetToDefaults();
-    settingsRef.current = defaultSettings;
-    setSettings(defaultSettings);
+  const resetSettingsToDefaults = useCallback(
+    async (options?: TelemetryControlOptions): Promise<UserSettings> => {
+      lastLocalSettingsEditMsRef.current = Date.now();
+      const previousSettings = settingsRef.current;
+      const defaultSettings = await settingsRepository.resetToDefaults();
+      settingsRef.current = defaultSettings;
+      setSettings(defaultSettings);
 
-    void telemetryTracker.onSettingsChanged({
-      previousSettings,
-      newSettings: defaultSettings,
-    });
+      if (!options?.skipTelemetry) {
+        void telemetryTracker.onSettingsChanged({
+          previousSettings,
+          newSettings: defaultSettings,
+        });
+      }
 
-    if (isConvexConfigured && isEffectiveAuthenticated) {
-      convexMutations.updateSettings(pickConvexSettings(defaultSettings)).catch(console.warn);
-    }
-    return defaultSettings;
-  }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);
+      if (isConvexConfigured && isEffectiveAuthenticated) {
+        convexMutations.updateSettings(pickConvexSettings(defaultSettings)).catch(console.warn);
+      }
+      return defaultSettings;
+    },
+    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+  );
 
   // Track push status updates emitted by NotificationService
   useEffect(() => {

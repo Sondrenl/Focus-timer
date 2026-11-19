@@ -106,20 +106,100 @@ export class TelemetryRepository implements ITelemetryRepository {
         const existing = all[idx];
         const existingFinalized = existing.status !== 'in_progress';
         const incomingInProgress = sanitizedAttempt.status === 'in_progress';
-        if (existingFinalized && incomingInProgress) {
-          return existing;
-        }
-        if (
-          existingFinalized &&
+        const completedProtected =
+          existing.status === 'completed' && sanitizedAttempt.status !== 'completed';
+        const staleCannotOverwriteFinalized =
+          existingFinalized && sanitizedAttempt.status === 'abandoned_stale';
+        const upgradesStaleToExplicit =
+          existing.status === 'abandoned_stale' &&
           sanitizedAttempt.status !== 'in_progress' &&
-          sanitizedAttempt.updatedAtMs < existing.updatedAtMs
+          sanitizedAttempt.status !== 'abandoned_stale';
+
+        if (
+          (existingFinalized && incomingInProgress) ||
+          completedProtected ||
+          staleCannotOverwriteFinalized ||
+          (existingFinalized &&
+            !upgradesStaleToExplicit &&
+            sanitizedAttempt.updatedAtMs < existing.updatedAtMs) ||
+          (!existingFinalized &&
+            incomingInProgress &&
+            sanitizedAttempt.updatedAtMs < existing.updatedAtMs)
         ) {
           return existing;
         }
-        all[idx] = sanitizedAttempt;
-      } else {
-        all.push(sanitizedAttempt);
+
+        const isSynthesizedSecondaryFinalization =
+          !incomingInProgress &&
+          ((existing.pauseCount > 0 && sanitizedAttempt.pauseCount === 0) ||
+            (Boolean(existing.startedAt) &&
+              existing.startedAt !== sanitizedAttempt.startedAt));
+
+        let mergedAttempt = sanitizedAttempt;
+        if (isSynthesizedSecondaryFinalization) {
+          const resolvedInitialTagId = existing.initialTagId ?? sanitizedAttempt.initialTagId;
+          const resolvedTagId = sanitizedAttempt.tagId ?? existing.tagId;
+          mergedAttempt = {
+            ...sanitizedAttempt,
+            startedAt: existing.startedAt ?? sanitizedAttempt.startedAt,
+            utcOffsetMinutes: existing.utcOffsetMinutes,
+            ianaTimezone: existing.ianaTimezone ?? sanitizedAttempt.ianaTimezone,
+            localDate: existing.localDate,
+            localHour: existing.localHour,
+            localMinuteOfDay: existing.localMinuteOfDay,
+            localDayOfWeek: existing.localDayOfWeek,
+            cycleIndex: existing.cycleIndex,
+            longBreakInterval: existing.longBreakInterval,
+            autoStarted: existing.autoStarted || sanitizedAttempt.autoStarted,
+            initialTagId: resolvedInitialTagId,
+            tagId: resolvedTagId,
+            tagChangedMidRun:
+              existing.tagChangedMidRun ||
+              sanitizedAttempt.tagChangedMidRun ||
+              (resolvedInitialTagId ?? null) !== (resolvedTagId ?? null),
+            pauseCount: Math.max(existing.pauseCount, sanitizedAttempt.pauseCount),
+            totalPausedSeconds: Math.max(
+              existing.totalPausedSeconds,
+              sanitizedAttempt.totalPausedSeconds
+            ),
+            pauseIntervals:
+              sanitizedAttempt.pauseIntervals.length >= existing.pauseIntervals.length
+                ? sanitizedAttempt.pauseIntervals
+                : existing.pauseIntervals,
+            timeSincePreviousAttemptSeconds:
+              existing.timeSincePreviousAttemptSeconds ??
+              sanitizedAttempt.timeSincePreviousAttemptSeconds,
+            previousAttemptType:
+              existing.previousAttemptType ?? sanitizedAttempt.previousAttemptType,
+            previousAttemptOutcome:
+              existing.previousAttemptOutcome ?? sanitizedAttempt.previousAttemptOutcome,
+            workSessionsCompletedToday: existing.workSessionsCompletedToday,
+            workActiveSecondsToday: existing.workActiveSecondsToday,
+            skipsToday: existing.skipsToday,
+            coffeeCupsTodayAtStart: existing.coffeeCupsTodayAtStart,
+            minutesSinceLastCoffeeAtStart:
+              existing.minutesSinceLastCoffeeAtStart ??
+              sanitizedAttempt.minutesSinceLastCoffeeAtStart,
+            coffeeLoggedDuringRun: Math.max(
+              existing.coffeeLoggedDuringRun,
+              sanitizedAttempt.coffeeLoggedDuringRun
+            ),
+            dailyGoalMinutes: existing.dailyGoalMinutes,
+            settingsSnapshot: existing.settingsSnapshot,
+            deviceClass: existing.deviceClass,
+            tabBackgroundedCount: Math.max(
+              existing.tabBackgroundedCount,
+              sanitizedAttempt.tabBackgroundedCount
+            ),
+          };
+        }
+
+        all[idx] = mergedAttempt;
+        this.safeSetArray(ATTEMPTS_STORAGE_KEY, all, MAX_LOCAL_ATTEMPTS);
+        return mergedAttempt;
       }
+
+      all.push(sanitizedAttempt);
       this.safeSetArray(ATTEMPTS_STORAGE_KEY, all, MAX_LOCAL_ATTEMPTS);
       return sanitizedAttempt;
     });

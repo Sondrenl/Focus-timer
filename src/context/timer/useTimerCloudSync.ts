@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SessionType, TimerStatus, RemoteTimerState, PeerPresence } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
+import { CoffeeCup } from '../../types/coffee';
 import type { useApp } from '../AppContext';
 import { AuthService } from '../../services/auth/AuthService';
 import { broadcastTimerState } from '../../services/timer/TimerBroadcast';
@@ -9,6 +10,7 @@ import { useConvexTimer } from '../../services/convex/useConvexTimer';
 import { IS_MOBILE } from './timerPersistence';
 import { getLogicalDayKey } from '../../utils/newDayCheck';
 import { evaluateDeviceAlert } from '../../utils/arbitration';
+import { telemetryTracker } from '../services';
 
 interface UseTimerCloudSyncParams {
   isAuthenticated: boolean;
@@ -28,6 +30,8 @@ interface UseTimerCloudSyncParams {
   prevActiveTagIdRef: React.MutableRefObject<string | null>;
   peerPresenceRef: React.MutableRefObject<PeerPresence>;
   settingsRef: React.MutableRefObject<UserSettings>;
+  profileRef?: React.MutableRefObject<{ dailyGoalMinutes: number }>;
+  coffeeCupsRef?: React.MutableRefObject<CoffeeCup[]>;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
   setSessionType: React.Dispatch<React.SetStateAction<SessionType>>;
   setStatus: React.Dispatch<React.SetStateAction<TimerStatus>>;
@@ -35,7 +39,7 @@ interface UseTimerCloudSyncParams {
   setTotalSeconds: React.Dispatch<React.SetStateAction<number>>;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
   setTargetEndTime: React.Dispatch<React.SetStateAction<number | null>>;
-  setActiveTagId?: (id: string | null) => void;
+  setActiveTagId?: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
   getDurationForType: (type: SessionType) => number;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
   sound: ReturnType<typeof useApp>['sound'];
@@ -92,6 +96,8 @@ export const useTimerCloudSync = ({
   prevActiveTagIdRef,
   peerPresenceRef,
   settingsRef,
+  profileRef,
+  coffeeCupsRef,
   handleCompleteRef,
   setSessionType,
   setStatus,
@@ -126,6 +132,7 @@ export const useTimerCloudSync = ({
   );
 
   const isInitialMountDoneRef = useRef<boolean>(false);
+  const finalizedStaleRunIdsRef = useRef<Set<string>>(new Set());
   const lastReportedPresenceRef = useRef<{
     isMobile: boolean;
     isVisible: boolean;
@@ -219,6 +226,13 @@ export const useTimerCloudSync = ({
                 (res.status === 'RUNNING' && res.timerRunId !== payload.timerRunId) ||
                 (payload.status === 'RUNNING' && res.status !== 'RUNNING');
               if (diverged) {
+                if (
+                  payload.status === 'RUNNING' &&
+                  payload.timerRunId &&
+                  res.timerRunId !== payload.timerRunId
+                ) {
+                  void telemetryTracker.discardInProgressAttempt(payload.timerRunId);
+                }
                 localUpdatedAtRef.current = res.updatedAtMs;
                 applyRemoteStateRef.current(toRemoteTimerState(res));
               }
@@ -355,7 +369,7 @@ export const useTimerCloudSync = ({
           timerRunIdRef.current = remote.timerRunId || null;
           if (remote.activeTagId !== undefined && setActiveTagId) {
             prevActiveTagIdRef.current = remote.activeTagId;
-            setActiveTagId(remote.activeTagId);
+            setActiveTagId(remote.activeTagId, { skipTelemetry: true });
           }
 
           targetEndTimeRef.current = remote.targetEndTime;
@@ -385,6 +399,26 @@ export const useTimerCloudSync = ({
           if (diffMs < -900000) {
             const dur = getDurationForType(remote.sessionType);
             const cycle = remote.currentCycle || 1;
+            const staleRunId = remote.timerRunId || null;
+
+            if (staleRunId && !finalizedStaleRunIdsRef.current.has(staleRunId)) {
+              finalizedStaleRunIdsRef.current.add(staleRunId);
+              void telemetryTracker.onSessionFinalized({
+                attemptId: staleRunId,
+                outcome: 'abandoned_stale',
+                sessionType: remote.sessionType,
+                plannedDurationSeconds: remote.totalSeconds || dur,
+                remainingSecondsAtEnd: 0,
+                cycleIndex: cycle,
+                tagId: remote.activeTagId ?? null,
+                settings: settingsRef.current,
+                dailyGoalMinutes: profileRef?.current.dailyGoalMinutes ?? 120,
+                coffeeCups: coffeeCupsRef?.current ?? [],
+                wasStarted: true,
+                targetEndTimeMs: remote.targetEndTime,
+              });
+            }
+
             sessionTypeRef.current = remote.sessionType;
             currentCycleRef.current = cycle;
             totalSecondsRef.current = dur;
@@ -400,7 +434,7 @@ export const useTimerCloudSync = ({
             timerRunIdRef.current = null;
             if (remote.activeTagId !== undefined && setActiveTagId) {
               prevActiveTagIdRef.current = remote.activeTagId;
-              setActiveTagId(remote.activeTagId);
+              setActiveTagId(remote.activeTagId, { skipTelemetry: true });
             }
             notifications.cancelScheduledNotification();
             wakeLockService.release();
@@ -427,7 +461,7 @@ export const useTimerCloudSync = ({
           timerRunIdRef.current = remote.timerRunId || null;
           if (remote.activeTagId !== undefined && setActiveTagId) {
             prevActiveTagIdRef.current = remote.activeTagId;
-            setActiveTagId(remote.activeTagId);
+            setActiveTagId(remote.activeTagId, { skipTelemetry: true });
           }
 
           const expiredLongAgo = diffMs < -60000;
@@ -438,6 +472,26 @@ export const useTimerCloudSync = ({
         if (nowMs - remote.updatedAtMs > PAUSED_TTL_MS) {
           const dur = getDurationForType(remote.sessionType);
           const cycle = remote.currentCycle || 1;
+          const staleRunId = remote.timerRunId || null;
+
+          if (staleRunId && !finalizedStaleRunIdsRef.current.has(staleRunId)) {
+            finalizedStaleRunIdsRef.current.add(staleRunId);
+            void telemetryTracker.onSessionFinalized({
+              attemptId: staleRunId,
+              outcome: 'abandoned_stale',
+              sessionType: remote.sessionType,
+              plannedDurationSeconds: remote.totalSeconds || dur,
+              remainingSecondsAtEnd: remote.remainingSeconds,
+              cycleIndex: cycle,
+              tagId: remote.activeTagId ?? null,
+              settings: settingsRef.current,
+              dailyGoalMinutes: profileRef?.current.dailyGoalMinutes ?? 120,
+              coffeeCups: coffeeCupsRef?.current ?? [],
+              wasStarted: true,
+              targetEndTimeMs: null,
+            });
+          }
+
           sessionTypeRef.current = remote.sessionType;
           currentCycleRef.current = cycle;
           totalSecondsRef.current = dur;
@@ -476,7 +530,7 @@ export const useTimerCloudSync = ({
         timerRunIdRef.current = remote.timerRunId || null;
         if (remote.activeTagId !== undefined && setActiveTagId) {
           prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId);
+          setActiveTagId(remote.activeTagId, { skipTelemetry: true });
         }
 
         wakeLockService.release();
@@ -516,7 +570,7 @@ export const useTimerCloudSync = ({
         timerRunIdRef.current = remote.timerRunId || null;
         if (remote.activeTagId !== undefined && setActiveTagId) {
           prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId);
+          setActiveTagId(remote.activeTagId, { skipTelemetry: true });
         }
 
         wakeLockService.release();
@@ -546,6 +600,8 @@ export const useTimerCloudSync = ({
       prevActiveTagIdRef,
       lastTickWallMsRef,
       settingsRef,
+      profileRef,
+      coffeeCupsRef,
       handleCompleteRef,
       setSessionType,
       setCurrentCycle,

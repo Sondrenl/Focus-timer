@@ -162,7 +162,7 @@ interface UseBackupAndMigrationParams {
   tags: Tag[];
   setTags: React.Dispatch<React.SetStateAction<Tag[]>>;
   activeTagId: string | null;
-  setActiveTagId: (id: string | null) => void;
+  setActiveTagId: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
   sessions: CompletedSession[];
   setSessions: React.Dispatch<React.SetStateAction<CompletedSession[]>>;
   coffeeCups: CoffeeCup[];
@@ -707,7 +707,7 @@ export function useBackupAndMigration({
 
         if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
           const nextActive = finalTags.find((t) => !t.isArchived);
-          setActiveTagId(nextActive?.id ?? null);
+          setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
         }
 
         broadcastTags(finalTags);
@@ -753,7 +753,7 @@ export function useBackupAndMigration({
         setTags(finalTags);
         if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
           const nextActive = finalTags.find((t) => !t.isArchived);
-          setActiveTagId(nextActive?.id ?? null);
+          setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
         }
         broadcastTags(finalTags);
 
@@ -840,7 +840,7 @@ export function useBackupAndMigration({
         if (typeof raw.autoStartPomodoros === 'boolean') safeSettings.autoStartPomodoros = raw.autoStartPomodoros;
         if (typeof raw.keepAwake === 'boolean') safeSettings.keepAwake = raw.keepAwake;
 
-        await updateSettings(safeSettings);
+        await updateSettings(safeSettings, { skipTelemetry: true });
       }
       if (data.profile) {
         const safeDisplayName =
@@ -869,7 +869,7 @@ export function useBackupAndMigration({
         ) {
           safeProfileUpdate.avatarUrl = data.profile.avatarUrl;
         }
-        await updateProfile(safeProfileUpdate);
+        await updateProfile(safeProfileUpdate, { skipTelemetry: true });
       }
 
       if (
@@ -954,13 +954,13 @@ export function useBackupAndMigration({
         await telemetryTracker.clearAll();
         clearAllHydrationWatermarks();
         const defaultTags = await tagRepository.resetToDefaults();
-        await resetSettingsToDefaults();
-        await resetProfileToDefaults();
+        await resetSettingsToDefaults({ skipTelemetry: true });
+        await resetProfileToDefaults({ skipTelemetry: true });
 
         setSessions([]);
         setCoffeeCups([]);
         setTags(defaultTags);
-        setActiveTagId(defaultTags[0]?.id || null);
+        setActiveTagId(defaultTags[0]?.id || null, { skipTelemetry: true });
 
         broadcastCoffeeCups([]);
         broadcastTags(defaultTags);

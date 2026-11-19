@@ -69,20 +69,97 @@ export const upsertAttempt = mutation({
         existingIsFinalized &&
         existing.source === "server_scheduled" &&
         normalized.source === "client";
+      const completedProtected =
+        existing.status === "completed" && normalized.status !== "completed";
+      const staleCannotOverwriteFinalized =
+        existingIsFinalized && normalized.status === "abandoned_stale";
+      const upgradesStaleToExplicit =
+        existing.status === "abandoned_stale" &&
+        !incomingIsInProgress &&
+        normalized.status !== "abandoned_stale";
 
       if (
         lockedByServerFinalization ||
-        (existingIsFinalized && (incomingIsInProgress || incomingIsOlder)) ||
+        (existingIsFinalized && incomingIsInProgress) ||
+        completedProtected ||
+        staleCannotOverwriteFinalized ||
+        (existingIsFinalized && !upgradesStaleToExplicit && incomingIsOlder) ||
         (!existingIsFinalized && incomingIsInProgress && incomingIsOlder)
       ) {
         return formatAttemptForClient(existing);
       }
 
+      const isSynthesizedSecondaryFinalization =
+        !incomingIsInProgress &&
+        ((existing.pauseCount > 0 && normalized.pauseCount === 0) ||
+          (Boolean(existing.startedAt) &&
+            existing.startedAt !== normalized.startedAt));
+
+      let mergedAttempt = normalized;
+      if (isSynthesizedSecondaryFinalization) {
+        const resolvedInitialTagId = existing.initialTagId ?? normalized.initialTagId;
+        const resolvedTagId = normalized.tagId ?? existing.tagId;
+        mergedAttempt = {
+          ...normalized,
+          startedAt: existing.startedAt ?? normalized.startedAt,
+          utcOffsetMinutes: existing.utcOffsetMinutes,
+          ianaTimezone: existing.ianaTimezone ?? normalized.ianaTimezone,
+          localDate: existing.localDate,
+          localHour: existing.localHour,
+          localMinuteOfDay: existing.localMinuteOfDay,
+          localDayOfWeek: existing.localDayOfWeek,
+          cycleIndex: existing.cycleIndex,
+          longBreakInterval: existing.longBreakInterval,
+          autoStarted: existing.autoStarted || normalized.autoStarted,
+          initialTagId: resolvedInitialTagId,
+          tagId: resolvedTagId,
+          tagChangedMidRun: Boolean(
+            existing.tagChangedMidRun ||
+              normalized.tagChangedMidRun ||
+              resolvedInitialTagId !== resolvedTagId
+          ),
+          pauseCount: Math.max(existing.pauseCount, normalized.pauseCount),
+          totalPausedSeconds: Math.max(
+            existing.totalPausedSeconds,
+            normalized.totalPausedSeconds
+          ),
+          pauseIntervals:
+            normalized.pauseIntervals.length >= existing.pauseIntervals.length
+              ? normalized.pauseIntervals
+              : existing.pauseIntervals,
+          timeSincePreviousAttemptSeconds:
+            existing.timeSincePreviousAttemptSeconds ??
+            normalized.timeSincePreviousAttemptSeconds,
+          previousAttemptType:
+            existing.previousAttemptType ?? normalized.previousAttemptType,
+          previousAttemptOutcome:
+            existing.previousAttemptOutcome ?? normalized.previousAttemptOutcome,
+          workSessionsCompletedToday: existing.workSessionsCompletedToday,
+          workActiveSecondsToday: existing.workActiveSecondsToday,
+          skipsToday: existing.skipsToday,
+          coffeeCupsTodayAtStart: existing.coffeeCupsTodayAtStart,
+          minutesSinceLastCoffeeAtStart:
+            existing.minutesSinceLastCoffeeAtStart ??
+            normalized.minutesSinceLastCoffeeAtStart,
+          coffeeLoggedDuringRun: Math.max(
+            existing.coffeeLoggedDuringRun,
+            normalized.coffeeLoggedDuringRun
+          ),
+          dailyGoalMinutes: existing.dailyGoalMinutes,
+          settingsSnapshot: existing.settingsSnapshot,
+          deviceClass: existing.deviceClass,
+          tabBackgroundedCount: Math.max(
+            existing.tabBackgroundedCount,
+            normalized.tabBackgroundedCount
+          ),
+        };
+      }
+
       await ctx.db.replace(existing._id, {
         userId: user._id,
-        ...normalized,
+        ...mergedAttempt,
       });
-      return formatAttemptForClient(normalized);
+      return formatAttemptForClient(mergedAttempt);
     }
 
     await ctx.db.insert("session_attempts", {

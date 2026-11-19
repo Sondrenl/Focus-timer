@@ -64,6 +64,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     coffeeCups,
     activeTagId,
     setActiveTagId,
+    consumeSkipTagTelemetry,
     recordSession,
     sound,
     notifications,
@@ -190,6 +191,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     prevActiveTagIdRef,
     peerPresenceRef,
     settingsRef,
+    profileRef,
+    coffeeCupsRef,
     handleCompleteRef,
     setSessionType,
     setStatus,
@@ -260,6 +263,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Handle activeTagId changes: sync tag selection across tabs and cloud
   useEffect(() => {
+    const shouldSkipTelemetry = consumeSkipTagTelemetry();
     if (prevActiveTagIdRef.current === activeTagId) return;
     const previousTagId = prevActiveTagIdRef.current;
     prevActiveTagIdRef.current = activeTagId;
@@ -272,13 +276,15 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    void telemetryTracker.onTagChanged({
-      previousTagId,
-      nextTagId: activeTagId,
-      timerStatus: statusRef.current,
-      sessionType: sessionTypeRef.current,
-      attemptId: timerRunIdRef.current,
-    });
+    if (!shouldSkipTelemetry) {
+      void telemetryTracker.onTagChanged({
+        previousTagId,
+        nextTagId: activeTagId,
+        timerStatus: statusRef.current,
+        sessionType: sessionTypeRef.current,
+        attemptId: timerRunIdRef.current,
+      });
+    }
 
     const now = authService.getServerNow();
     const currentRemaining =
@@ -303,6 +309,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, [
     activeTagId,
+    consumeSkipTagTelemetry,
     authService,
     publishLocalTimerState,
     isInitialMountDoneRef,
@@ -579,8 +586,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       wakeLockService.release();
       notifications.cancelScheduledNotification();
 
+      telemetryTracker.invalidateDraftCache();
+
       if (scope === 'factory-reset') {
-        prevActiveTagIdRef.current = null;
+        prevActiveTagIdRef.current = activeTagIdRef.current;
       }
 
       publishLocalTimerState(
@@ -642,6 +651,26 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isTimerRunning: false,
       })
     ) {
+      if (statusRef.current === 'PAUSED') {
+        if (timerRunIdRef.current) {
+          void telemetryTracker.onSessionFinalized({
+            attemptId: timerRunIdRef.current,
+            outcome: 'abandoned_stale',
+            sessionType: sessionTypeRef.current,
+            plannedDurationSeconds: totalSecondsRef.current,
+            remainingSecondsAtEnd: remainingSecondsRef.current,
+            cycleIndex: currentCycleRef.current,
+            tagId: activeTagIdRef.current,
+            settings: settingsRef.current,
+            dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
+            coffeeCups: coffeeCupsRef.current,
+            wasStarted: true,
+          });
+        } else {
+          void telemetryTracker.finalizeOrphanedDraftIfStale();
+        }
+      }
+
       const defaultDuration = getDurationForType('WORK');
       const nowMs = Date.now();
       const prevUpdatedAtMs = localUpdatedAtRef.current;

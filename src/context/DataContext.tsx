@@ -15,7 +15,8 @@ export interface DataContextValue {
   tags: Tag[];
   activeTags: Tag[];
   activeTagId: string | null;
-  setActiveTagId: (id: string | null) => void;
+  setActiveTagId: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
+  consumeSkipTagTelemetry: () => boolean;
   createTag: (input: CreateTagInput) => Promise<Tag>;
   updateTag: (id: string, updates: UpdateTagInput) => Promise<Tag | null>;
   archiveTag: (id: string) => Promise<Tag | null>;
@@ -77,6 +78,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     activeTags,
     activeTagId,
     setActiveTagId,
+    consumeSkipTagTelemetry,
     createTag,
     updateTag,
     archiveTag,
@@ -116,6 +118,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       activeTags,
       activeTagId,
       setActiveTagId,
+      consumeSkipTagTelemetry,
       createTag,
       updateTag,
       archiveTag,
@@ -138,6 +141,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       activeTags,
       activeTagId,
       setActiveTagId,
+      consumeSkipTagTelemetry,
       createTag,
       updateTag,
       archiveTag,
