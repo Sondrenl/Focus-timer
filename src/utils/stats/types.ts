@@ -18,7 +18,6 @@ export interface TagStat {
   color: string;
   isArchived: boolean;
   totalSeconds: number;
-  hours: number;
   percentage: number;
   sessionCount: number;
 }
@@ -28,7 +27,6 @@ export interface ActivityBarStat {
   label: string;
   subLabel?: string;
   totalSeconds: number;
-  hours: number;
   sessionCount: number;
 }
 

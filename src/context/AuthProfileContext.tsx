@@ -46,7 +46,7 @@ export interface AuthProfileContextValue {
   isConvexAuthLoading: boolean;
   loginWithGoogle: (idToken: string) => Promise<void>;
   logout: () => Promise<void>;
-  syncWithCloud: (force?: boolean) => Promise<void>;
+  syncWithCloud: () => Promise<void>;
   profile: UserProfile;
   updateProfile: (
     newProfile: Partial<UserProfile>,
@@ -448,7 +448,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [auth.isTokenExpired]);
 
   const syncWithCloud = useCallback(
-    async (_force = false): Promise<void> => {
+    async (): Promise<void> => {
       if (isEffectiveAuthenticated) {
         setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
         setTimeout(() => {

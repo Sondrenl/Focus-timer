@@ -29,7 +29,6 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
         key: `month-${i}`,
         label: MONTH_NAMES[i].slice(0, 3),
         totalSeconds: 0,
-        hours: 0,
         sessionCount: 0,
       };
     });

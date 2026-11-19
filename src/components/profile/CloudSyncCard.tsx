@@ -8,7 +8,7 @@ interface CloudSyncCardProps {
   auth: AuthState;
   loginWithGoogle: (credential: string) => Promise<void>;
   logout: () => void;
-  syncWithCloud: (force?: boolean) => Promise<void>;
+  syncWithCloud: () => Promise<void>;
 }
 
 export const CloudSyncCard: React.FC<CloudSyncCardProps> = ({
@@ -83,7 +83,7 @@ export const CloudSyncCard: React.FC<CloudSyncCardProps> = ({
           <Button
             variant="tonal"
             size="sm"
-            onClick={() => syncWithCloud(true)}
+            onClick={() => syncWithCloud()}
             disabled={auth.isSyncing}
           >
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${auth.isSyncing ? 'animate-spin' : ''}`} />

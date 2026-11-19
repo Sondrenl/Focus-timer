@@ -83,7 +83,6 @@ export function computeTagDistribution(
       const name = tagId === 'unassigned' ? 'Unassigned' : foundTag ? foundTag.name : 'Unknown Tag';
       const color = tagId === 'unassigned' ? '#9E9E9E' : foundTag ? foundTag.color : '#BDBDBD';
       const isArchived = foundTag ? foundTag.isArchived : false;
-      const hours = Number((data.seconds / 3600).toFixed(1));
       const percentage =
         totalFocusSeconds > 0 ? Math.round((data.seconds / totalFocusSeconds) * 100) : 0;
 
@@ -93,7 +92,6 @@ export function computeTagDistribution(
         color,
         isArchived,
         totalSeconds: data.seconds,
-        hours,
         percentage,
         sessionCount: data.count,
       };
@@ -131,7 +129,6 @@ export function computeActivityBars(
       key: `hour-${item.hour}`,
       label: `${item.hour.toString().padStart(2, '0')}:00`,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -163,7 +160,6 @@ export function computeActivityBars(
       label: item.label,
       subLabel: `${item.date.getDate()}`,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -199,7 +195,6 @@ export function computeActivityBars(
       label: `${item.dayNum}`,
       subLabel: monthShort,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -224,7 +219,6 @@ export function computeActivityBars(
       key: `month-${item.monthIdx}`,
       label: item.label,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -257,7 +251,6 @@ export function computeActivityBars(
         label: item.label,
         subLabel: item.subLabel,
         totalSeconds: item.seconds,
-        hours: Number((item.seconds / 3600).toFixed(1)),
         sessionCount: item.count,
       }));
     }
@@ -286,7 +279,6 @@ export function computeActivityBars(
       key: `year-${item.year}`,
       label: `${item.year}`,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -325,7 +317,6 @@ export function computeActivityBars(
     label: String(item.dayNum),
     subLabel: item.monthShort,
     totalSeconds: item.seconds,
-    hours: Number((item.seconds / 3600).toFixed(1)),
     sessionCount: item.count,
   }));
 }

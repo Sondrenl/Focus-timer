@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { SessionType, TimerStatus, TimerState, PeerPresence } from '../types/timer';
+import { SessionType, TimerStatus, PeerPresence } from '../types/timer';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { useApp } from './AppContext';
 import { AuthService } from '../services/auth/AuthService';
@@ -32,7 +32,6 @@ import { telemetryTracker } from './services';
 export { DEVICE_SESSION_ID };
 
 export interface TimerContextValue {
-  state: TimerState;
   sessionType: SessionType;
   status: TimerStatus;
   remainingSeconds: number;
@@ -40,19 +39,10 @@ export interface TimerContextValue {
   targetEndTime: number | null;
   currentCycle: number;
   maxCycles: number;
-  activeTagId: string | null;
-  start: () => void;
-  pause: () => void;
-  reset: () => void;
-  skip: () => void;
-  previous: () => void;
-  switchSessionType: (type: SessionType) => void;
   toggleStartPause: () => void;
   resetTimer: () => void;
   skipInterval: () => void;
   previousInterval: () => void;
-  setSessionTypeManually: (type: SessionType) => void;
-  peerPresence: PeerPresence;
 }
 
 const TimerContext = createContext<TimerContextValue | null>(null);
@@ -1119,68 +1109,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, [notifications, publishLocalTimerState, authService]);
 
-  // Action: Explicitly switch session type
-  const switchSessionType = useCallback(
-    (type: SessionType) => {
-      const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
-      if (wasStarted) {
-        wakeLockService.release();
-        notifications.cancelScheduledNotification();
-        const serverNow = authService.getServerNow();
-        const currentRemaining =
-          statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
-            ? Math.max(0, Math.ceil((targetEndTimeRef.current - serverNow) / 1000))
-            : remainingSecondsRef.current;
-
-        void telemetryTracker.onSessionFinalized({
-          attemptId: timerRunIdRef.current,
-          outcome: 'switched',
-          sessionType: sessionTypeRef.current,
-          plannedDurationSeconds: totalSecondsRef.current,
-          remainingSecondsAtEnd: currentRemaining,
-          cycleIndex: currentCycleRef.current,
-          tagId: activeTagIdRef.current,
-          settings: settingsRef.current,
-          dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-          coffeeCups: coffeeCupsRef.current,
-          wasStarted: true,
-          targetEndTimeMs: targetEndTimeRef.current,
-        });
-      }
-
-      const duration = getDurationForType(type);
-      sessionTypeRef.current = type;
-      totalSecondsRef.current = duration;
-      remainingSecondsRef.current = duration;
-      statusRef.current = 'IDLE';
-      targetEndTimeRef.current = null;
-      timerRunIdRef.current = null;
-
-      setSessionType(type);
-      setTotalSeconds(duration);
-      setRemainingSeconds(duration);
-      setStatus('IDLE');
-      setTargetEndTime(null);
-
-      const nowMs = Date.now();
-      publishLocalTimerState(
-        {
-          sessionType: type,
-          status: 'IDLE',
-          remainingSeconds: duration,
-          totalSeconds: duration,
-          targetEndTime: null,
-          currentCycle: currentCycleRef.current,
-          activeTagId: activeTagIdRef.current,
-          timerRunId: null,
-          updatedAtMs: nowMs,
-        },
-        true
-      );
-    },
-    [getDurationForType, notifications, publishLocalTimerState, authService]
-  );
-
   const toggleStartPause = useCallback(() => {
     if (statusRef.current === 'RUNNING') {
       pause();
@@ -1190,15 +1118,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [pause, start]);
 
   const value: TimerContextValue = {
-    state: {
-      sessionType,
-      status,
-      remainingSeconds,
-      totalSeconds,
-      currentCycle,
-      maxCycles: settings.longBreakInterval,
-      activeTagId,
-    },
     sessionType,
     status,
     remainingSeconds,
@@ -1206,19 +1125,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     targetEndTime,
     currentCycle,
     maxCycles: settings.longBreakInterval,
-    activeTagId,
-    start,
-    pause,
-    reset,
-    skip,
-    previous: previousInterval,
-    switchSessionType,
     toggleStartPause,
     resetTimer: reset,
     skipInterval: skip,
     previousInterval,
-    setSessionTypeManually: switchSessionType,
-    peerPresence: peerPresenceRef.current,
   };
 
   return <TimerContext.Provider value={value}>{children}</TimerContext.Provider>;

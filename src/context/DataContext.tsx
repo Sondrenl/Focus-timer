@@ -24,7 +24,6 @@ export interface DataContextValue {
   deleteTag: (id: string) => Promise<boolean>;
   sessions: CompletedSession[];
   recordSession: (session: Omit<CompletedSession, 'id'> & { id?: string }) => Promise<CompletedSession>;
-  clearSessions: () => Promise<void>;
   coffeeCups: CoffeeCup[];
   addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
   removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
@@ -55,7 +54,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSessions,
     isDemoEnvironment,
     recordSession,
-    clearSessions,
     reloadSampleData,
   } = useSessionsData({
     isEffectiveAuthenticated,
@@ -126,7 +124,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deleteTag,
       sessions,
       recordSession,
-      clearSessions,
       coffeeCups,
       addCoffeeCup,
       removeCoffeeCup,
@@ -149,7 +146,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deleteTag,
       sessions,
       recordSession,
-      clearSessions,
       coffeeCups,
       addCoffeeCup,
       removeCoffeeCup,

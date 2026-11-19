@@ -186,15 +186,6 @@ export function useSessionsData({
     [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
   );
 
-  const clearSessions = useCallback(async (): Promise<void> => {
-    pendingAddsRef.current.clear();
-    await sessionRepository.clear();
-    setSessions([]);
-    if (isConvexConfigured && isEffectiveAuthenticated) {
-      convexMutations.clearSessions({}).catch(console.warn);
-    }
-  }, [isConvexConfigured, isEffectiveAuthenticated, convexMutations]);
-
   // Sample data is strictly allowed ONLY on non-production builds when NOT signed into a real account
   const reloadSampleData = useCallback(async (): Promise<void> => {
     if (isProduction() || isEffectiveAuthenticated) return;
@@ -208,7 +199,6 @@ export function useSessionsData({
     sessionsRef,
     isDemoEnvironment,
     recordSession,
-    clearSessions,
     reloadSampleData,
   };
 }
