@@ -20,16 +20,6 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
-function arrayBufferToBase64Url(buffer: ArrayBuffer | null): string {
-  if (!buffer) return '';
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 function uint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -45,6 +35,7 @@ export interface PushRegisterPayload {
   auth: string;
   userAgent?: string;
   isMobile?: boolean;
+  origin?: string;
 }
 
 export class NotificationService {
@@ -54,8 +45,8 @@ export class NotificationService {
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
-  private handleControllerChange: (() => void) | null = null;
-  private handleVisibilityChange: (() => void) | null = null;
+  private controllerChangeHandler: (() => void) | null = null;
+  private visibilityChangeHandler: (() => void) | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -73,44 +64,44 @@ export class NotificationService {
         })
         .catch(() => {});
 
-      this.handleControllerChange = () => {
-        navigator.serviceWorker.getRegistration().then((reg) => {
-          if (reg) {
-            this.cachedRegistration = reg;
-          }
-        }).catch(() => {});
+      this.controllerChangeHandler = () => {
+        navigator.serviceWorker
+          .getRegistration()
+          .then((reg) => {
+            if (reg) {
+              this.cachedRegistration = reg;
+            }
+          })
+          .catch(() => {});
       };
-      navigator.serviceWorker.addEventListener('controllerchange', this.handleControllerChange);
+      navigator.serviceWorker.addEventListener('controllerchange', this.controllerChangeHandler);
 
       if (typeof document !== 'undefined') {
-        this.handleVisibilityChange = () => {
+        this.visibilityChangeHandler = () => {
           if (document.visibilityState === 'visible' && this.cachedRegistration) {
             this.cachedRegistration.update().catch(() => {});
           }
         };
-        document.addEventListener('visibilitychange', this.handleVisibilityChange);
+        document.addEventListener('visibilitychange', this.visibilityChangeHandler);
       }
     }
   }
 
   destroy(): void {
     if (
-      this.handleControllerChange &&
-      typeof window !== 'undefined' &&
+      typeof navigator !== 'undefined' &&
       'serviceWorker' in navigator &&
+      this.controllerChangeHandler &&
       typeof navigator.serviceWorker.removeEventListener === 'function'
     ) {
-      navigator.serviceWorker.removeEventListener('controllerchange', this.handleControllerChange);
-      this.handleControllerChange = null;
+      navigator.serviceWorker.removeEventListener('controllerchange', this.controllerChangeHandler);
     }
-    if (
-      this.handleVisibilityChange &&
-      typeof document !== 'undefined' &&
-      typeof document.removeEventListener === 'function'
-    ) {
-      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-      this.handleVisibilityChange = null;
+    this.controllerChangeHandler = null;
+
+    if (typeof document !== 'undefined' && this.visibilityChangeHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
     }
+    this.visibilityChangeHandler = null;
   }
 
   private setPushStatus(status: PushSubscriptionStatus): void {
@@ -140,11 +131,10 @@ export class NotificationService {
   }
 
   isPushSupported(): boolean {
-    return (
-      this.isSupported() &&
-      'serviceWorker' in navigator &&
-      'PushManager' in window
-    );
+    if (!this.isSupported()) return false;
+    const hasWindowPushManager = 'pushManager' in window;
+    const hasSwPushManager = 'serviceWorker' in navigator && 'PushManager' in window;
+    return hasWindowPushManager || hasSwPushManager;
   }
 
   getPermissionState(): NotificationPermissionStatus {
@@ -158,20 +148,7 @@ export class NotificationService {
       if (Notification.permission === 'granted') {
         return true;
       }
-      let result: NotificationPermission;
-      try {
-        // Modern standard: Notification.requestPermission returns a Promise
-        result = await Notification.requestPermission();
-      } catch {
-        // Fallback for older browsers (e.g. legacy Safari <= 15)
-        result = await new Promise<NotificationPermission>((resolve) => {
-          try {
-            Notification.requestPermission((p) => resolve(p));
-          } catch {
-            resolve(Notification.permission);
-          }
-        });
-      }
+      const result = await Notification.requestPermission();
       return result === 'granted';
     } catch {
       return false;
@@ -180,36 +157,6 @@ export class NotificationService {
 
   hasPermission(): boolean {
     return this.getPermissionState() === 'granted';
-  }
-
-  /**
-   * Helper to dispatch messages to the active Service Worker or controller with fallback.
-   */
-  private sendWorkerMessage(message: unknown): void {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-
-    const syncWorker =
-      this.cachedRegistration?.active || navigator.serviceWorker?.controller;
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage(message);
-        return;
-      } catch {
-        // Fallback to async retrieval below
-      }
-    }
-
-    this.getActiveRegistration().then((reg) => {
-      const worker = reg?.active || navigator.serviceWorker?.controller;
-      if (worker) {
-        try {
-          worker.postMessage(message);
-        } catch {
-          // Ignore
-        }
-      }
-    });
   }
 
   private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
@@ -254,12 +201,20 @@ export class NotificationService {
     }
   }
 
+  private async getPushManager(): Promise<PushManager | null> {
+    const reg = await this.getActiveRegistration();
+    if (reg?.pushManager) return reg.pushManager;
+    // Declarative Web Push (Safari 18.4+ / 18.5+) exposes window.pushManager directly
+    const windowPushManager = (window as unknown as { pushManager?: PushManager }).pushManager;
+    return windowPushManager ?? null;
+  }
+
   async getPushSubscriptionState(): Promise<PushSubscription | null> {
     if (!this.isPushSupported()) return null;
     try {
-      const reg = await this.getActiveRegistration();
-      if (!reg?.pushManager) return null;
-      return await reg.pushManager.getSubscription();
+      const pushManager = await this.getPushManager();
+      if (!pushManager) return null;
+      return await pushManager.getSubscription();
     } catch {
       return null;
     }
@@ -294,14 +249,14 @@ export class NotificationService {
 
     const run = async (): Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> => {
       try {
-        const reg = await this.getActiveRegistration();
-        if (!reg?.pushManager) {
+        const pushManager = await this.getPushManager();
+        if (!pushManager) {
           this.setPushStatus('unsupported');
-          return { ok: false, status: 'unsupported', reason: 'Service Worker unavailable' };
+          return { ok: false, status: 'unsupported', reason: 'PushManager unavailable' };
         }
 
         const expectedKeyBytes = urlBase64ToUint8Array(trimmedKey);
-        let subscription = await reg.pushManager.getSubscription();
+        let subscription = await pushManager.getSubscription();
 
         // If VAPID public key rotated or differs, cleanly replace the stale subscription
         if (subscription?.options?.applicationServerKey) {
@@ -317,23 +272,15 @@ export class NotificationService {
         }
 
         if (!subscription) {
-          subscription = await reg.pushManager.subscribe({
+          subscription = await pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: expectedKeyBytes as BufferSource,
           });
         }
 
         const subJson = typeof subscription.toJSON === 'function' ? subscription.toJSON() : {};
-        const p256dh =
-          subJson.keys?.p256dh ||
-          (typeof subscription.getKey === 'function'
-            ? arrayBufferToBase64Url(subscription.getKey('p256dh'))
-            : '');
-        const auth =
-          subJson.keys?.auth ||
-          (typeof subscription.getKey === 'function'
-            ? arrayBufferToBase64Url(subscription.getKey('auth'))
-            : '');
+        const p256dh = subJson.keys?.p256dh || '';
+        const auth = subJson.keys?.auth || '';
 
         if (!subscription.endpoint || !p256dh || !auth) {
           this.setPushStatus('error');
@@ -347,6 +294,7 @@ export class NotificationService {
           auth,
           userAgent: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 256) : undefined,
           isMobile: isMobileDevice(),
+          origin: typeof window !== 'undefined' ? window.location?.origin : undefined,
         });
 
         this.setPushStatus('active');
@@ -384,14 +332,10 @@ export class NotificationService {
     this.setPushStatus('unsubscribed');
   }
 
-  private markSessionNotifiedInWorker(sessionId?: string | null): void {
-    if (!sessionId) return;
-    this.sendWorkerMessage({
-      type: 'MARK_SESSION_NOTIFIED',
-      sessionId,
-    });
-  }
-
+  /**
+   * Local OS notification dispatch for signed-out, offline, or manual test alerts.
+   * Uses native OS defaults for sound, vibration, banner persistence, and tag coalescing.
+   */
   async notify(
     title: string,
     body: string,
@@ -407,17 +351,6 @@ export class NotificationService {
       return true;
     }
 
-    if (!silent) {
-      try {
-        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-          navigator.vibrate([250, 100, 250]);
-        }
-      } catch {
-        // Ignore vibration errors
-      }
-    }
-
-    const mobile = isMobileDevice();
     const notifTag = isManualTest
       ? `pomodor-test-${Date.now()}`
       : sessionRunId
@@ -429,59 +362,26 @@ export class NotificationService {
       icon: '/icon-192.png',
       badge: '/badge-72.png',
       tag: notifTag,
-      timestamp: Date.now(),
-      renotify: !silent,
       silent,
-      ...(silent ? {} : { vibrate: [250, 100, 250] }),
-      ...(mobile ? {} : { requireInteraction: true }),
-    } as NotificationOptions;
+    };
 
-    // 1. Direct ServiceWorkerRegistration dispatch (standard for PWA & mobile)
+    // 1. Standard ServiceWorkerRegistration dispatch (works on desktop, Android, & iOS PWAs)
     try {
       const reg = this.cachedRegistration?.active
         ? this.cachedRegistration
         : await this.getActiveRegistration();
-      if (reg && reg.active && typeof reg.showNotification === 'function') {
-        if (!isManualTest && sessionRunId && typeof reg.getNotifications === 'function') {
-          try {
-            const existingSameTag = await reg.getNotifications({ tag: notifTag });
-            if (existingSameTag.length > 0) {
-              this.lastNotifiedSessionId = sessionRunId;
-              this.markSessionNotifiedInWorker(sessionRunId);
-              return true;
-            }
-          } catch {
-            // Ignore getNotifications check failure
-          }
-        }
-
-        // Clean up older Pomodor notifications BEFORE posting the new one so Android's
-        // wearable bridge never gets interrupted by a trailing notif.close().
-        if (typeof reg.getNotifications === 'function') {
-          try {
-            const existing = await reg.getNotifications();
-            for (const n of existing) {
-              if (n.tag !== notifTag) {
-                n.close();
-              }
-            }
-          } catch {
-            // Ignore cleanup errors
-          }
-        }
-
+      if (reg?.active && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, options);
         if (sessionRunId) {
           this.lastNotifiedSessionId = sessionRunId;
         }
-        this.markSessionNotifiedInWorker(sessionRunId);
         return true;
       }
     } catch (err) {
       console.warn('reg.showNotification failed, trying Window Notification:', err);
     }
 
-    // 2. Window Notification constructor fallback
+    // 2. Window Notification constructor fallback (desktop browsers without an active SW)
     try {
       if (typeof Notification === 'function') {
         const notif = new Notification(title, {
@@ -501,7 +401,6 @@ export class NotificationService {
         if (sessionRunId) {
           this.lastNotifiedSessionId = sessionRunId;
         }
-        this.markSessionNotifiedInWorker(sessionRunId);
         return true;
       }
     } catch (err) {

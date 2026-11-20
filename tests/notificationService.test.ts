@@ -72,6 +72,7 @@ describe("NotificationService & Service Worker mobile behavior", () => {
     vi.stubGlobal("window", {
       PushManager: function () {},
       Notification: mockNotification,
+      location: { origin: "https://dev-focus-timer.sondrelassen.workers.dev" },
     });
     vi.stubGlobal("navigator", mockNavigator);
     vi.stubGlobal("Notification", mockNotification);
@@ -79,11 +80,8 @@ describe("NotificationService & Service Worker mobile behavior", () => {
     return { reg, calls, postMessage, showNotification, getNotifications, pushManager };
   }
 
-  it("closes older notifications BEFORE calling showNotification, uses badge-72.png, and omits requireInteraction on mobile", async () => {
-    const oldNotif = { tag: "pomodor-session-old", close: vi.fn() };
-    const { calls, showNotification } = setupBrowserMocks({
-      existingNotifications: [oldNotif],
-    });
+  it("dispatches clean native OS notifications with standard options and no custom SW messaging or vibration", async () => {
+    const { showNotification, postMessage } = setupBrowserMocks();
 
     const svc = new NotificationService();
     const ok = await svc.notify(
@@ -96,31 +94,21 @@ describe("NotificationService & Service Worker mobile behavior", () => {
     expect(ok).toBe(true);
     expect(showNotification).toHaveBeenCalledTimes(1);
     const [, options] = showNotification.mock.calls[0];
-    expect(options.badge).toBe("/badge-72.png");
-    expect(options.tag).toBe("pomodor-session-run-42");
-    expect((options as any).requireInteraction).toBeUndefined();
-
-    const closeIdx = calls.indexOf("close:pomodor-session-old");
-    const showIdx = calls.indexOf("show:pomodor-session-run-42");
-    expect(closeIdx).toBeGreaterThan(-1);
-    expect(showIdx).toBeGreaterThan(closeIdx);
-  });
-
-  it("keeps requireInteraction: true on desktop browsers", async () => {
-    const { showNotification } = setupBrowserMocks({
-      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/125.0.0.0 Safari/537.36",
-      maxTouchPoints: 0,
+    expect(options).toEqual({
+      body: "Your focus timer has finished. Time for a break.",
+      icon: "/icon-192.png",
+      badge: "/badge-72.png",
+      tag: "pomodor-session-run-42",
+      silent: false,
     });
-
-    const svc = new NotificationService();
-    await svc.notify("Done", "Break time", false, "run-desktop-1");
-
-    const [, options] = showNotification.mock.calls[0];
-    expect((options as any).requireInteraction).toBe(true);
-    expect(options.badge).toBe("/badge-72.png");
+    expect((options as any).requireInteraction).toBeUndefined();
+    expect((options as any).renotify).toBeUndefined();
+    expect((options as any).vibrate).toBeUndefined();
+    expect(postMessage).not.toHaveBeenCalled();
+    expect((navigator as any).vibrate).not.toHaveBeenCalled();
   });
 
-  it("subscribes to PushManager with applicationServerKey, handles key rotation, and registers with backend", async () => {
+  it("subscribes to PushManager with applicationServerKey, handles key rotation, and registers origin with backend", async () => {
     const vapidKeyBytes = new Uint8Array(65);
     vapidKeyBytes[0] = 0x04;
     vapidKeyBytes.fill(0x11, 1);
@@ -170,54 +158,90 @@ describe("NotificationService & Service Worker mobile behavior", () => {
         p256dh: "FRESH_P256DH",
         auth: "FRESH_AUTH",
         isMobile: true,
+        origin: "https://dev-focus-timer.sondrelassen.workers.dev",
       })
     );
   });
 
-  describe("public/sw.js push, staleness, and Safari compliance", () => {
+  it("supports Safari Declarative Web Push window.pushManager when no Service Worker registration exists", async () => {
+    const vapidKeyBytes = new Uint8Array(65);
+    vapidKeyBytes[0] = 0x04;
+    vapidKeyBytes.fill(0x33, 1);
+    const vapidB64u = btoa(String.fromCharCode(...vapidKeyBytes))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    const windowSub = {
+      endpoint: "https://web.push.apple.com/declarative-tok",
+      toJSON: () => ({
+        keys: { p256dh: "APPLE_P256DH", auth: "APPLE_AUTH" },
+      }),
+    };
+    const windowPushManager = {
+      getSubscription: vi.fn(async () => null),
+      subscribe: vi.fn(async () => windowSub),
+    };
+
+    const mockNotification: any = function () {};
+    mockNotification.permission = "granted";
+    vi.stubGlobal("window", {
+      pushManager: windowPushManager,
+      Notification: mockNotification,
+      location: { origin: "https://focus-timer.sondrelassen.workers.dev" },
+    });
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.5 Safari/605.1.15",
+      maxTouchPoints: 0,
+    });
+    vi.stubGlobal("Notification", mockNotification);
+
+    const registerFn = vi.fn(async () => "sub-apple-1");
+    const svc = new NotificationService();
+    expect(svc.isPushSupported()).toBe(true);
+
+    const res = await svc.syncPushSubscription({
+      vapidPublicKey: vapidB64u,
+      deviceId: "mac-safari-1",
+      registerFn,
+    });
+
+    expect(res).toEqual({ ok: true, status: "active" });
+    expect(windowPushManager.subscribe).toHaveBeenCalledTimes(1);
+    expect(registerFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: "mac-safari-1",
+        endpoint: "https://web.push.apple.com/declarative-tok",
+        origin: "https://focus-timer.sondrelassen.workers.dev",
+      })
+    );
+  });
+
+  describe("public/sw.js Declarative Web Push fallback and notificationclick", () => {
     const swSource = fs.readFileSync(
       path.resolve(process.cwd(), "public/sw.js"),
       "utf8"
     );
 
-    function createSwSandbox({
-      userAgent = "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/125.0.0.0 Mobile Safari/537.36",
-      visibleClient = false,
-    } = {}) {
+    function createSwSandbox({ existingClients = [] as Array<{ url: string; focus: ReturnType<typeof vi.fn> }> } = {}) {
       const listeners = new Map<string, (e: any) => void>();
-      const activeNotifications: Array<{ tag: string; close: () => void }> = [];
       const shownNotifications: Array<{ title: string; options: any }> = [];
+      const openWindow = vi.fn(async () => undefined);
 
       const selfObj: any = {
         location: { origin: "https://pomodor.example" },
-        navigator: { userAgent },
         addEventListener: (type: string, cb: (e: any) => void) => {
           listeners.set(type, cb);
         },
         skipWaiting: vi.fn(),
         clients: {
           claim: vi.fn(async () => undefined),
-          matchAll: vi.fn(async () =>
-            visibleClient ? [{ visibilityState: "visible", url: "https://pomodor.example/" }] : []
-          ),
+          matchAll: vi.fn(async () => existingClients),
+          openWindow,
         },
         registration: {
-          getNotifications: vi.fn(async (filter?: { tag?: string }) => {
-            if (filter?.tag) {
-              return activeNotifications.filter((n) => n.tag === filter.tag);
-            }
-            return [...activeNotifications];
-          }),
           showNotification: vi.fn(async (title: string, options: any) => {
             shownNotifications.push({ title, options });
-            const notifObj = {
-              tag: options.tag,
-              close: () => {
-                const idx = activeNotifications.indexOf(notifObj);
-                if (idx >= 0) activeNotifications.splice(idx, 1);
-              },
-            };
-            activeNotifications.push(notifObj);
           }),
         },
       };
@@ -227,8 +251,6 @@ describe("NotificationService & Service Worker mobile behavior", () => {
         URL,
         Date,
         Promise,
-        setTimeout,
-        clearTimeout,
         caches: undefined,
       });
       vm.runInContext(swSource, context);
@@ -248,94 +270,96 @@ describe("NotificationService & Service Worker mobile behavior", () => {
         await waitPromise;
       };
 
-      const dispatchMessage = async (data: Record<string, unknown>) => {
+      const dispatchNotificationClick = async (data?: Record<string, unknown>) => {
         let waitPromise: Promise<unknown> = Promise.resolve();
-        const cb = listeners.get("message")!;
+        const close = vi.fn();
+        const cb = listeners.get("notificationclick")!;
         cb({
-          data,
+          notification: { data, close },
           waitUntil: (p: Promise<unknown>) => {
             waitPromise = p;
           },
         });
         await waitPromise;
+        return { close };
       };
 
-      return { dispatchPush, dispatchMessage, shownNotifications, activeNotifications };
+      return { dispatchPush, dispatchNotificationClick, shownNotifications, openWindow };
     }
 
     beforeEach(() => {
       vi.useRealTimers();
     });
 
-    it("delivers background Web Push with badge-72.png and omits requireInteraction on Android", async () => {
-      const { dispatchPush, shownNotifications } = createSwSandbox({ visibleClient: false });
+    it("unwraps Declarative Web Push (web_push: 8030) payloads and displays standard OS notification", async () => {
+      const { dispatchPush, shownNotifications } = createSwSandbox();
       await dispatchPush({
-        title: "Pomodor — Focus session complete",
+        web_push: 8030,
+        mutable: false,
+        notification: {
+          title: "Pomodor — Focus session complete",
+          body: "Your focus timer has finished. Time for a break.",
+          navigate: "https://pomodor.example/",
+          icon: "https://pomodor.example/icon-192.png",
+          tag: "pomodor-session-run-sw-1",
+          silent: false,
+          timestamp: Date.now(),
+        },
+      });
+
+      expect(shownNotifications).toHaveLength(1);
+      expect(shownNotifications[0].title).toBe("Pomodor — Focus session complete");
+      expect(shownNotifications[0].options).toEqual({
         body: "Your focus timer has finished. Time for a break.",
-        sessionId: "run-sw-1",
-        isMobile: true,
+        icon: "https://pomodor.example/icon-192.png",
+        badge: "/badge-72.png",
+        tag: "pomodor-session-run-sw-1",
+        silent: false,
+        data: { navigate: "https://pomodor.example/" },
       });
-
-      expect(shownNotifications).toHaveLength(1);
-      expect(shownNotifications[0].options.badge).toBe("/badge-72.png");
-      expect(shownNotifications[0].options.tag).toBe("pomodor-session-run-sw-1");
       expect(shownNotifications[0].options.requireInteraction).toBeUndefined();
-      expect(shownNotifications[0].options.silent).toBe(false);
+      expect(shownNotifications[0].options.renotify).toBeUndefined();
+      expect(shownNotifications[0].options.vibrate).toBeUndefined();
     });
 
-    it("suppresses duplicate push on Chrome Android when foreground client already marked session notified", async () => {
-      const { dispatchPush, dispatchMessage, shownNotifications } = createSwSandbox({
-        visibleClient: true,
-      });
-
-      await dispatchMessage({ type: "MARK_SESSION_NOTIFIED", sessionId: "run-dup-1" });
-      await dispatchPush({
-        title: "Pomodor — Focus session complete",
-        body: "Your focus timer has finished.",
-        sessionId: "run-dup-1",
-      });
-
-      expect(shownNotifications).toHaveLength(0);
-    });
-
-    it("stays userVisibleOnly-compliant on pure Safari by posting silent update on duplicate push", async () => {
-      const { dispatchPush, dispatchMessage, shownNotifications } = createSwSandbox({
-        userAgent:
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-        visibleClient: true,
-      });
-
-      await dispatchMessage({ type: "MARK_SESSION_NOTIFIED", sessionId: "run-ios-1" });
-      await dispatchPush({
-        title: "Pomodor — Focus session complete",
-        body: "Your focus timer has finished.",
-        sessionId: "run-ios-1",
-      });
-
-      expect(shownNotifications).toHaveLength(1);
-      expect(shownNotifications[0].options.silent).toBe(true);
-      expect(shownNotifications[0].options.renotify).toBe(false);
-    });
-
-    it("propagates silent: true on Web Push and omits vibrate to comply with Notification spec", async () => {
-      const { dispatchPush, shownNotifications } = createSwSandbox({ visibleClient: false });
+    it("supports flat JSON fallback and propagates silent: true cleanly", async () => {
+      const { dispatchPush, shownNotifications } = createSwSandbox();
 
       await dispatchPush({
         title: "Pomodor — Focus session complete",
         body: "Muted alert",
-        sessionId: "run-silent-1",
-        isMobile: true,
+        tag: "pomodor-session-run-silent-1",
         silent: true,
       });
 
       expect(shownNotifications).toHaveLength(1);
       expect(shownNotifications[0].options.silent).toBe(true);
-      expect(shownNotifications[0].options.renotify).toBe(false);
+      expect(shownNotifications[0].options.tag).toBe("pomodor-session-run-silent-1");
       expect(shownNotifications[0].options.vibrate).toBeUndefined();
+      expect(shownNotifications[0].options.renotify).toBeUndefined();
+    });
+
+    it("focuses an existing same-origin tab or opens data.navigate on notificationclick", async () => {
+      const focus = vi.fn(async () => undefined);
+      const withTab = createSwSandbox({
+        existingClients: [{ url: "https://pomodor.example/", focus }],
+      });
+      const { close } = await withTab.dispatchNotificationClick({
+        navigate: "https://pomodor.example/",
+      });
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(withTab.openWindow).not.toHaveBeenCalled();
+
+      const withoutTab = createSwSandbox({ existingClients: [] });
+      await withoutTab.dispatchNotificationClick({
+        navigate: "https://pomodor.example/timer",
+      });
+      expect(withoutTab.openWindow).toHaveBeenCalledWith("https://pomodor.example/timer");
     });
   });
 
-  it("omits vibrate and skips navigator.vibrate when NotificationService.notify is called with silent: true", async () => {
+  it("propagates silent: true without custom vibrate or renotify flags", async () => {
     const { showNotification } = setupBrowserMocks();
 
     const svc = new NotificationService();
@@ -351,7 +375,7 @@ describe("NotificationService & Service Worker mobile behavior", () => {
     expect(showNotification).toHaveBeenCalledTimes(1);
     const [, options] = showNotification.mock.calls[0];
     expect(options.silent).toBe(true);
-    expect((options as any).renotify).toBe(false);
+    expect((options as any).renotify).toBeUndefined();
     expect((options as any).vibrate).toBeUndefined();
     expect((navigator as any).vibrate).not.toHaveBeenCalled();
   });

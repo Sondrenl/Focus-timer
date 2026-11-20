@@ -5,13 +5,6 @@ import { requireUser } from "./authHelper";
 
 export const MAX_PUSH_DEVICES_PER_USER = 10;
 
-export function isSubscriptionMobile(sub: { isMobile?: boolean; userAgent?: string }): boolean {
-  if (typeof sub.isMobile === "boolean") {
-    return sub.isMobile;
-  }
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(sub.userAgent || "");
-}
-
 export const ALLOWED_PUSH_DOMAINS = [
   "fcm.googleapis.com",
   "push.apple.com",
@@ -81,6 +74,27 @@ function validateEndpoint(endpoint: string): void {
   }
 }
 
+function sanitizeOrigin(rawOrigin: string | undefined): string | undefined {
+  if (!rawOrigin) return undefined;
+  const trimmed = rawOrigin.trim();
+  if (!trimmed || trimmed.length > 256) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (
+      (url.protocol === "https:" ||
+        (url.protocol === "http:" &&
+          (url.hostname === "localhost" || url.hostname === "127.0.0.1"))) &&
+      url.username === "" &&
+      url.password === ""
+    ) {
+      return url.origin;
+    }
+  } catch {
+    // Ignore malformed origin
+  }
+  return undefined;
+}
+
 function validateDeviceId(deviceId: string): void {
   if (!deviceId || deviceId.length > 128 || !/^[a-zA-Z0-9_.-]+$/.test(deviceId)) {
     throw new Error("Invalid deviceId format.");
@@ -110,6 +124,7 @@ export const register = mutation({
     auth: v.string(),
     userAgent: v.optional(v.string()),
     isMobile: v.optional(v.boolean()),
+    origin: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
@@ -119,6 +134,7 @@ export const register = mutation({
     validatePushKey(args.auth, "auth");
 
     const sanitizedUserAgent = args.userAgent ? args.userAgent.slice(0, 256) : undefined;
+    const sanitizedOrigin = sanitizeOrigin(args.origin);
     const now = new Date().toISOString();
 
     const sameEndpointSubs = await ctx.db
@@ -148,12 +164,14 @@ export const register = mutation({
 
     if (existing) {
       const nextIsMobile = args.isMobile ?? existing.isMobile;
+      const nextOrigin = sanitizedOrigin ?? existing.origin;
       const unchanged =
         existing.endpoint === args.endpoint &&
         existing.p256dh === args.p256dh &&
         existing.auth === args.auth &&
         existing.userAgent === sanitizedUserAgent &&
-        existing.isMobile === nextIsMobile;
+        existing.isMobile === nextIsMobile &&
+        existing.origin === nextOrigin;
 
       if (unchanged) {
         return existing._id;
@@ -165,6 +183,7 @@ export const register = mutation({
         auth: args.auth,
         userAgent: sanitizedUserAgent,
         isMobile: nextIsMobile,
+        origin: nextOrigin,
         updatedAt: now,
       });
       return existing._id;
@@ -191,6 +210,7 @@ export const register = mutation({
         auth: args.auth,
         userAgent: sanitizedUserAgent,
         isMobile: args.isMobile,
+        origin: sanitizedOrigin,
         updatedAt: now,
       });
     }

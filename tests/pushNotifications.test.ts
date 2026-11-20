@@ -3,12 +3,11 @@ import { convexTest } from "convex-test";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-import { isSubscriptionMobile } from "../convex/push";
 import { buildPushHTTPRequest } from "@pushforge/builder";
 
 const modules = import.meta.glob("../convex/**/*.*s");
 
-describe("Web Push Backend & Arbitration", () => {
+describe("Web Push Backend & Declarative Push", () => {
   const originalVapidPublic = process.env.VAPID_PUBLIC_KEY;
   const originalVapidPrivate = process.env.VAPID_PRIVATE_KEY;
 
@@ -60,7 +59,7 @@ describe("Web Push Backend & Arbitration", () => {
     expect(explicitKey).toBe("explicit-test-vapid-key");
   });
 
-  it("encrypts a high-urgency Web Push payload with @pushforge/builder using derived VAPID key", async () => {
+  it("encrypts a high-urgency Declarative Web Push (web_push: 8030) payload with @pushforge/builder", async () => {
     const vapidKp = await crypto.subtle.generateKey(
       { name: "ECDSA", namedCurve: "P-256" },
       true,
@@ -94,9 +93,17 @@ describe("Web Push Backend & Arbitration", () => {
       },
       message: {
         payload: {
-          title: "Pomodor — Focus session complete",
-          body: "Your focus timer has finished. Time for a break.",
-          sessionId: "run-test-123",
+          web_push: 8030,
+          mutable: false,
+          notification: {
+            title: "Pomodor — Focus session complete",
+            body: "Your focus timer has finished. Time for a break.",
+            navigate: "https://focus-timer.sondrelassen.workers.dev/",
+            icon: "https://focus-timer.sondrelassen.workers.dev/icon-192.png",
+            tag: "pomodor-session-run-test-123",
+            silent: false,
+            timestamp: Date.now(),
+          },
         },
         adminContact: "mailto:notifications@pomodor.app",
         options: {
@@ -119,7 +126,7 @@ describe("Web Push Backend & Arbitration", () => {
     expect(getHeader("Authorization")).toContain("vapid ");
   });
 
-  it("stores isMobile flag, fetches dispatch context, and prunes stale subscriptions by ID", async () => {
+  it("sanitizes & stores origin, fetches dispatch context, and prunes stale subscriptions by ID", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
 
@@ -130,6 +137,7 @@ describe("Web Push Backend & Arbitration", () => {
       auth: "AUTHKEY==",
       userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/125.0 Mobile",
       isMobile: true,
+      origin: "https://dev-focus-timer.sondrelassen.workers.dev/timer?foo=bar",
     });
 
     // Enable notifications as user does in settings
@@ -139,7 +147,35 @@ describe("Web Push Backend & Arbitration", () => {
     expect(ctxBefore.notificationsEnabled).toBe(true);
     expect(ctxBefore.subscriptions).toHaveLength(1);
     expect(ctxBefore.subscriptions[0].isMobile).toBe(true);
-    expect(isSubscriptionMobile(ctxBefore.subscriptions[0])).toBe(true);
+    expect(ctxBefore.subscriptions[0].origin).toBe(
+      "https://dev-focus-timer.sondrelassen.workers.dev"
+    );
+
+    // Invalid non-https origins never overwrite an existing valid origin
+    await asUser.mutation(api.push.register, {
+      deviceId: "android-pixel-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/android-token",
+      p256dh: "BM6hZ_VALID_KEY=",
+      auth: "AUTHKEY==",
+      isMobile: true,
+      origin: "http://evil.example.com",
+    });
+    const ctxSanitized = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(ctxSanitized.subscriptions[0].origin).toBe(
+      "https://dev-focus-timer.sondrelassen.workers.dev"
+    );
+
+    // Invalid non-https origins are stripped on fresh registrations
+    const badOriginSubId = await asUser.mutation(api.push.register, {
+      deviceId: "bad-origin-device",
+      endpoint: "https://fcm.googleapis.com/fcm/send/bad-origin-token",
+      p256dh: "BM6hZ_VALID_KEY=",
+      auth: "AUTHKEY==",
+      origin: "http://evil.example.com",
+    });
+    const badOriginDoc = await t.run(async (ctx) => ctx.db.get(badOriginSubId));
+    expect(badOriginDoc?.origin).toBeUndefined();
+    await t.mutation(internal.push.deleteSubscriptionById, { id: badOriginSubId });
 
     // Turning off notifications updates dispatch context
     await asUser.mutation(api.users.updateSettings, { notificationsEnabled: false });

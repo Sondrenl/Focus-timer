@@ -44,9 +44,17 @@ export const useTimerAlerts = ({
       const isSilent = !currentSettings.soundEnabled;
 
       if (wantsNotification) {
+        // When Web Push is active and online, Convex is the single authoritative OS notification
+        // sender (Declarative Web Push on Apple, Service Worker push fallback elsewhere).
+        // Skipping local notify() eliminates the client-vs-server notification race cleanly.
+        const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+        if (isOnline && notifications.getPushStatus() === 'active') {
+          return;
+        }
+
         const { title, body } = getCompletionNotificationCopy(completedSessionType);
 
-        // Let the OS notification service own the standard notification sound (or stay silent when muted).
+        // Signed-out, offline, or non-push device: dispatch a local OS notification.
         // Fall back to the in-app Web Audio chime only if OS notification delivery fails.
         void notifications
           .notify(title, body, false, currentRunId, { silent: isSilent })

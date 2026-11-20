@@ -127,6 +127,7 @@ export default defineSchema({
     auth: v.string(),
     userAgent: v.optional(v.string()),
     isMobile: v.optional(v.boolean()),
+    origin: v.optional(v.string()),
     updatedAt: v.string(),
   })
     .index("by_user_device", ["userId", "deviceId"])

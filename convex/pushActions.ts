@@ -5,7 +5,37 @@ import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { buildPushHTTPRequest } from "@pushforge/builder";
-import { isSubscriptionMobile } from "./push";
+
+const DEFAULT_APP_ORIGIN = "https://focus-timer.sondrelassen.workers.dev";
+
+type DeclarativePushPayload = {
+  web_push: 8030;
+  mutable: false;
+  notification: {
+    title: string;
+    body: string;
+    navigate: string;
+    icon: string;
+    tag: string;
+    silent: boolean;
+    timestamp: number;
+  };
+};
+
+function resolveAppOrigin(subOrigin?: string): string {
+  for (const candidate of [subOrigin, process.env.SITE_URL, DEFAULT_APP_ORIGIN]) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate.trim());
+      if (url.protocol === "https:") {
+        return url.origin;
+      }
+    } catch {
+      // Try next fallback
+    }
+  }
+  return DEFAULT_APP_ORIGIN;
+}
 
 function getCompletionCopy(sessionType: "WORK" | "SHORT_BREAK" | "LONG_BREAK") {
   if (sessionType === "WORK") {
@@ -36,10 +66,7 @@ async function dispatchPushToSubscriptions(
   params: {
     userId: Id<"users">;
     requireNotificationsEnabled: boolean;
-    buildPayload: (
-      isMobileSub: boolean,
-      soundEnabled: boolean
-    ) => Record<string, string | number | boolean>;
+    buildPayload: (appOrigin: string, soundEnabled: boolean) => DeclarativePushPayload;
     options: { ttl: number; urgency: "high"; topic: string };
   }
 ) {
@@ -68,7 +95,7 @@ async function dispatchPushToSubscriptions(
 
   await Promise.allSettled(
     dispatchCtx.subscriptions.map(async (sub: Doc<"push_subscriptions">) => {
-      const isMobileSub = isSubscriptionMobile(sub);
+      const appOrigin = resolveAppOrigin(sub.origin);
 
       try {
         const req = await buildPushHTTPRequest({
@@ -81,7 +108,7 @@ async function dispatchPushToSubscriptions(
             },
           },
           message: {
-            payload: params.buildPayload(isMobileSub, dispatchCtx.soundEnabled),
+            payload: params.buildPayload(appOrigin, dispatchCtx.soundEnabled),
             adminContact,
             options: params.options,
           },
@@ -130,14 +157,18 @@ export const sendTimerCompletionPush = internalAction({
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
       requireNotificationsEnabled: true,
-      buildPayload: (isMobileSub, soundEnabled) => ({
-        title,
-        body,
-        sessionId: args.timerRunId,
-        sessionType: args.sessionType,
-        completedAtMs: args.completedAtMs,
-        isMobile: isMobileSub,
-        silent: !soundEnabled,
+      buildPayload: (appOrigin, soundEnabled) => ({
+        web_push: 8030,
+        mutable: false,
+        notification: {
+          title,
+          body,
+          navigate: `${appOrigin}/`,
+          icon: `${appOrigin}/icon-192.png`,
+          tag: `pomodor-session-${args.timerRunId}`,
+          silent: !soundEnabled,
+          timestamp: args.completedAtMs,
+        },
       }),
       options: {
         ttl: 600,
@@ -157,15 +188,18 @@ export const sendTestPush = internalAction({
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
       requireNotificationsEnabled: false,
-      buildPayload: (isMobileSub, soundEnabled) => ({
-        title: "Pomodor — Test push alert",
-        body: "Background & lock-screen push notifications are active.",
-        sessionId: `test-push-${args.scheduledAtMs}`,
-        sessionType: "WORK",
-        completedAtMs: Date.now(),
-        isTest: true,
-        isMobile: isMobileSub,
-        silent: !soundEnabled,
+      buildPayload: (appOrigin, soundEnabled) => ({
+        web_push: 8030,
+        mutable: false,
+        notification: {
+          title: "Pomodor — Test push alert",
+          body: "Background & lock-screen push notifications are active.",
+          navigate: `${appOrigin}/`,
+          icon: `${appOrigin}/icon-192.png`,
+          tag: `pomodor-test-${args.scheduledAtMs}`,
+          silent: !soundEnabled,
+          timestamp: Date.now(),
+        },
       }),
       options: {
         ttl: 120,
