@@ -12,7 +12,6 @@ export function buildInsightContext(params: GenerateInsightsParams): InsightCont
     tags,
     periodType,
     totalFocusSeconds,
-    totalCoffeeCups,
     allSessions,
   } = params;
 
@@ -64,7 +63,6 @@ export function buildInsightContext(params: GenerateInsightsParams): InsightCont
     tags,
     periodType,
     totalFocusSeconds,
-    totalCoffeeCups,
     allSessions,
     tagMap,
     resolveValidTagId,

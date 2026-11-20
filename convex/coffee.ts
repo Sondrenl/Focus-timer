@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
+import { assertValidTagId, MAX_FUTURE_TIMESTAMP_SKEW_MS } from "./timerHelpers";
 
 /**
  * Returns coffee cups. Optionally filters by date (e.g. today "YYYY-MM-DD")
@@ -58,33 +59,41 @@ export const addCup = mutation({
       throw new Error("Invalid date format: must be YYYY-MM-DD.");
     }
 
-    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
-      throw new Error("Invalid tagId format.");
-    }
+    assertValidTagId(args.tagId);
 
     const cupsToday = await ctx.db
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id).eq("date", args.date))
-      .collect();
+      .take(50);
     if (cupsToday.length >= 50) {
       throw new Error("Maximum limit of 50 coffee cups per day reached.");
     }
 
-    const now = args.createdAt ?? new Date().toISOString();
+    const nowMs = Date.now();
+    const parsedCreatedMs =
+      args.createdAt && args.createdAt.length <= 64
+        ? new Date(args.createdAt).getTime()
+        : NaN;
+    if (!Number.isNaN(parsedCreatedMs) && parsedCreatedMs > nowMs + MAX_FUTURE_TIMESTAMP_SKEW_MS) {
+      throw new Error("createdAt timestamp cannot be in the future.");
+    }
+    const createdAt = !Number.isNaN(parsedCreatedMs)
+      ? new Date(parsedCreatedMs).toISOString()
+      : new Date(nowMs).toISOString();
     const sanitizedTagId = args.tagId || undefined;
 
     const cupId = await ctx.db.insert("coffee_cups", {
       userId: user._id,
       date: args.date,
       tagId: sanitizedTagId,
-      createdAt: now,
+      createdAt,
     });
 
     return {
       id: cupId,
       date: args.date,
       tagId: sanitizedTagId ?? null,
-      createdAt: now,
+      createdAt,
     };
   },
 });
@@ -119,7 +128,7 @@ export const removeCup = mutation({
     const cups = await ctx.db
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id).eq("date", date))
-      .collect();
+      .take(100);
 
     cups.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 

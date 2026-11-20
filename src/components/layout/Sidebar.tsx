@@ -1,7 +1,8 @@
 import React from 'react';
 import { Coffee, Tag, BarChart3, Settings, User } from 'lucide-react';
 import { EggTimerIcon } from '../ui/EggTimerIcon';
-import { useApp } from '../../context/AppContext';
+import { useNavigation } from '../../context/NavigationContext';
+import { useAuthProfile } from '../../context/AuthProfileContext';
 import { clsx } from 'clsx';
 
 interface SidebarProps {
@@ -13,7 +14,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpenOnMobile = false,
   onCloseMobile,
 }) => {
-  const { currentView, setCurrentView, profile, auth, isEffectiveAuthenticated } = useApp();
+  const { currentView, setCurrentView } = useNavigation();
+  const { profile, auth, isEffectiveAuthenticated } = useAuthProfile();
 
   // Navigation items without the duplicate timer item; the top title routes home
   const navItems = [

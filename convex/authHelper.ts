@@ -32,17 +32,24 @@ export async function getAuthenticatedUser(
     return null;
   }
 
-  const user = await ctx.db
+  let user = await ctx.db
     .query("users")
     .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
     .first();
+
+  if (!user && identity.subject && identity.subject !== identity.tokenIdentifier) {
+    user = await ctx.db
+      .query("users")
+      .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.subject))
+      .first();
+  }
 
   if (user) {
     return user;
   }
 
-  // Fallback: match by email (only if verified) for users migrated from Cloudflare D1 or pre-seeded
-  if (identity.email && identity.emailVerified !== false) {
+  // Fallback: match by email (only if explicitly verified) for users migrated from Cloudflare D1 or pre-seeded
+  if (identity.email && identity.emailVerified === true) {
     const existingByEmail = await ctx.db
       .query("users")
       .withIndex("email", (q) => q.eq("email", identity.email))
@@ -59,6 +66,11 @@ export async function getAuthenticatedUser(
           tokenIdentifier: identity.tokenIdentifier,
           avatarUrl: nextAvatar,
         });
+        return {
+          ...existingByEmail,
+          tokenIdentifier: identity.tokenIdentifier,
+          avatarUrl: nextAvatar,
+        };
       }
       return existingByEmail;
     }

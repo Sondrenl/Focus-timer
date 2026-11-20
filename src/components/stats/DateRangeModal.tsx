@@ -134,11 +134,15 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
         {/* Start Date & End Date Inputs */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 md:pt-2">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-md-on-surface-variant px-1">
-              Start Date (DD/MM/YYYY)
+            <label
+              htmlFor="custom-range-start-date"
+              className="text-xs font-semibold text-md-on-surface-variant px-1"
+            >
+              Start Date
             </label>
             <div className="relative">
               <input
+                id="custom-range-start-date"
                 type="date"
                 value={start}
                 onChange={(e) => {
@@ -151,11 +155,15 @@ export const DateRangeModal: React.FC<DateRangeModalProps> = ({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-md-on-surface-variant px-1">
-              End Date (DD/MM/YYYY)
+            <label
+              htmlFor="custom-range-end-date"
+              className="text-xs font-semibold text-md-on-surface-variant px-1"
+            >
+              End Date
             </label>
             <div className="relative">
               <input
+                id="custom-range-end-date"
                 type="date"
                 value={end}
                 onChange={(e) => {

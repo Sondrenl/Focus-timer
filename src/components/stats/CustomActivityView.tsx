@@ -1,36 +1,20 @@
 import React, { useMemo } from 'react';
 import { ActivityBarStat } from '../../hooks/useStatistics';
-import { formatDurationHoursMins, formatCompactDuration } from '../../utils/formatters';
-import { MONTH_NAMES, toDateKey } from '../../utils/dates';
+import { formatCompactDuration } from '../../utils/formatters';
+import { toDateKey } from '../../utils/dates';
 import { clsx } from 'clsx';
+import {
+  buildWeeklyRhythmGroups,
+  WeeklyRhythmBreakdown,
+} from './WeeklyRhythmBreakdown';
 
 interface CustomActivityViewProps {
   activityBars: ActivityBarStat[];
 }
 
-const SHORT_WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
-interface CustomWeekData {
-  weekNumber: number;
-  label: string;
-  totalSeconds: number;
-  sessionCount: number;
-  activeDaysCount: number;
-  isCurrentWeek: boolean;
-  days: {
-    dateKey: string;
-    dayNum: number;
-    weekdayIndex: number;
-    totalSeconds: number;
-    sessionCount: number;
-    isInRange: boolean;
-    isToday: boolean;
-  }[];
-}
-
 export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activityBars }) => {
   const totalDays = activityBars.length;
-  const todayKey = useMemo(() => toDateKey(new Date()), []);
+  const todayKey = toDateKey(new Date());
 
   const activeDaysCount = useMemo(() => {
     return activityBars.filter((b) => b.totalSeconds > 0).length;
@@ -53,96 +37,17 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
   }, [activityBars]);
 
   // Group into calendar weeks for ranges > 7 days
-  const weeklyGroups = useMemo<CustomWeekData[]>(() => {
+  const weeklyGroups = useMemo(() => {
     if (activityBars.length === 0) return [];
-
-    const weeks: CustomWeekData[] = [];
-    let currentWeekDays: CustomWeekData['days'] = [];
-    let weekIndex = 1;
-
-    for (let i = 0; i < activityBars.length; i++) {
-      const bar = activityBars[i];
-      const [y, m, d] = bar.key.split('-').map(Number);
-      const dateObj = new Date(y, m - 1, d);
-      const weekdayIndex = (dateObj.getDay() + 6) % 7; // Mon=0 .. Sun=6
-      const isToday = bar.key === todayKey;
-
-      // On first item, if not Monday, pad leading
-      if (i === 0 && weekdayIndex > 0) {
-        for (let pad = 0; pad < weekdayIndex; pad++) {
-          currentWeekDays.push({
-            dateKey: `pad-pre-${pad}`,
-            dayNum: 0,
-            weekdayIndex: pad,
-            totalSeconds: 0,
-            sessionCount: 0,
-            isInRange: false,
-            isToday: false,
-          });
-        }
-      }
-
-      currentWeekDays.push({
+    return buildWeeklyRhythmGroups(
+      activityBars.map((bar) => ({
         dateKey: bar.key,
-        dayNum: d,
-        weekdayIndex,
         totalSeconds: bar.totalSeconds,
         sessionCount: bar.sessionCount,
-        isInRange: true,
-        isToday,
-      });
-
-      // Close week on Sunday or last item
-      if (weekdayIndex === 6 || i === activityBars.length - 1) {
-        if (i === activityBars.length - 1 && weekdayIndex < 6) {
-          for (let pad = weekdayIndex + 1; pad <= 6; pad++) {
-            currentWeekDays.push({
-              dateKey: `pad-post-${pad}`,
-              dayNum: 0,
-              weekdayIndex: pad,
-              totalSeconds: 0,
-              sessionCount: 0,
-              isInRange: false,
-              isToday: false,
-            });
-          }
-        }
-
-        const inRangeDays = currentWeekDays.filter((d) => d.isInRange);
-        const sKey = inRangeDays[0]?.dateKey || '';
-        const eKey = inRangeDays[inRangeDays.length - 1]?.dateKey || '';
-        const formatShort = (key: string) => {
-          if (!key) return '';
-          const [, mNum, dNum] = key.split('-').map(Number);
-          return `${dNum} ${MONTH_NAMES[mNum - 1]?.slice(0, 3) || ''}`;
-        };
-
-        const weekSec = inRangeDays.reduce((acc, d) => acc + d.totalSeconds, 0);
-        const weekSes = inRangeDays.reduce((acc, d) => acc + d.sessionCount, 0);
-        const weekActive = inRangeDays.filter((d) => d.totalSeconds > 0).length;
-        const isCurrentWeek = inRangeDays.some((d) => d.isToday);
-
-        weeks.push({
-          weekNumber: weekIndex,
-          label: `${formatShort(sKey)} – ${formatShort(eKey)}`,
-          totalSeconds: weekSec,
-          sessionCount: weekSes,
-          activeDaysCount: weekActive,
-          isCurrentWeek,
-          days: currentWeekDays,
-        });
-
-        currentWeekDays = [];
-        weekIndex++;
-      }
-    }
-
-    return weeks.reverse();
+      })),
+      todayKey
+    );
   }, [activityBars, todayKey]);
-
-  const maxWeekSeconds = useMemo(() => {
-    return Math.max(1, ...weeklyGroups.map((w) => w.totalSeconds));
-  }, [weeklyGroups]);
 
   if (totalDays === 0 || totalFocusSeconds === 0) {
     return (
@@ -225,94 +130,8 @@ export const CustomActivityView: React.FC<CustomActivityViewProps> = ({ activity
           })}
         </div>
       ) : (
-        /* Weekly Habit & Focus Rhythm for Ranges > 7 days (Zero Day-Shading!) */
-        <div className="flex flex-col gap-2.5">
-          {weeklyGroups.map((week) => {
-            const widthPct = maxWeekSeconds > 0 ? Math.round((week.totalSeconds / maxWeekSeconds) * 100) : 0;
-
-            return (
-              <div
-                key={`custom-week-${week.weekNumber}`}
-                className={clsx(
-                  'p-3 sm:p-3.5 rounded-2xl border transition-colors flex flex-col gap-2.5',
-                  week.isCurrentWeek
-                    ? 'bg-md-primary/5 border-md-primary/30 ring-1 ring-md-primary/20'
-                    : 'bg-md-surface-container/40 border-md-outline-variant/20 hover:bg-md-surface-container/60'
-                )}
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="flex items-center gap-2.5 min-w-[140px] shrink-0">
-                    <span className="text-xs font-bold text-md-on-surface">
-                      Week {week.weekNumber}
-                    </span>
-                    <span className="text-[11px] font-medium text-md-outline">
-                      {week.label}
-                    </span>
-                    {week.isCurrentWeek && (
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-md-primary text-white leading-none">
-                        CURRENT
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Discrete Habit Pips */}
-                  <div className="flex items-center gap-1.5 self-start sm:self-auto">
-                    {week.days.map((d) => {
-                      const dayLetter = SHORT_WEEKDAYS[d.weekdayIndex];
-                      if (!d.isInRange) {
-                        return (
-                          <div
-                            key={d.dateKey}
-                            className="w-6 h-6 rounded-lg opacity-15 flex items-center justify-center text-[10px] text-md-outline"
-                          >
-                            {dayLetter}
-                          </div>
-                        );
-                      }
-
-                      const hasFocus = d.totalSeconds > 0;
-
-                      return (
-                        <div
-                          key={d.dateKey}
-                          title={hasFocus ? `${d.dateKey}: ${formatDurationHoursMins(d.totalSeconds)} (${d.sessionCount} sessions)` : `${d.dateKey}: No focus`}
-                          className={clsx(
-                            'w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all',
-                            hasFocus
-                              ? 'bg-md-primary text-white shadow-xs'
-                              : d.isToday
-                              ? 'border border-md-primary/60 text-md-primary'
-                              : 'bg-md-surface-container-high/80 text-md-outline/60'
-                          )}
-                        >
-                          {dayLetter}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Duration on Right */}
-                  <div className="text-left sm:text-right flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 min-w-[110px] shrink-0">
-                    <span className="text-xs font-bold tabular-nums text-md-on-surface">
-                      {week.totalSeconds > 0 ? formatDurationHoursMins(week.totalSeconds) : '0m'}
-                    </span>
-                    <span className="text-[10px] text-md-on-surface-variant font-medium">
-                      {week.sessionCount > 0 ? `${week.sessionCount} ${week.sessionCount === 1 ? 'session' : 'sessions'}` : '—'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Weekly Volume Bar */}
-                <div className="w-full h-1.5 bg-md-surface-container-highest/60 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-md-primary transition-all duration-500 ease-out"
-                    style={{ width: `${Math.max(week.totalSeconds > 0 ? 6 : 0, widthPct)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        /* Weekly Habit & Focus Rhythm for Ranges > 7 days */
+        <WeeklyRhythmBreakdown weeks={weeklyGroups} keyPrefix="custom-week" />
       )}
     </div>
   );

@@ -22,8 +22,6 @@ export function useSessionsData({
   const { isConvexConfigured, convexSessions, mutations: convexMutations } = convexSync;
 
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
-  const sessionsRef = useRef<CompletedSession[]>(sessions);
-  sessionsRef.current = sessions;
 
   const pendingAddsRef = useRef<Map<string, CompletedSession>>(new Map());
 
@@ -112,12 +110,20 @@ export function useSessionsData({
   // Multi-tab BroadcastChannel synchronization for sessions
   useEffect(() => {
     const unsubSessions = subscribeSessions((incomingSession) => {
-      sessionRepository.add(incomingSession);
+      const incomingMs = new Date(incomingSession.completedAt).getTime();
       setSessions((prev) => {
-        if (prev.some((s) => s.id === incomingSession.id)) return prev;
-        return [...prev, incomingSession].sort(
+        const isDuplicate = prev.some((s) => {
+          if (s.id === incomingSession.id) return true;
+          if (s.sessionType !== incomingSession.sessionType) return false;
+          const sMs = new Date(s.completedAt).getTime();
+          return !isNaN(sMs) && !isNaN(incomingMs) && Math.abs(sMs - incomingMs) <= 5000;
+        });
+        if (isDuplicate) return prev;
+        const next = [...prev, incomingSession].sort(
           (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
         );
+        sessionRepository.saveAll(next);
+        return next;
       });
     });
 
@@ -134,6 +140,18 @@ export function useSessionsData({
 
   const recordSession = useCallback(
     async (sessionData: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> => {
+      const existingAll = await sessionRepository.getAll();
+      const targetMs = new Date(sessionData.completedAt).getTime();
+      const existingDuplicate = existingAll.find((s) => {
+        if (sessionData.id && s.id === sessionData.id) return true;
+        if (s.sessionType !== sessionData.sessionType) return false;
+        const sMs = new Date(s.completedAt).getTime();
+        return !isNaN(sMs) && !isNaN(targetMs) && Math.abs(sMs - targetMs) <= 5000;
+      });
+      if (existingDuplicate) {
+        return existingDuplicate;
+      }
+
       const created = await sessionRepository.add(sessionData);
       if (!isSampleSessionId(created.id)) {
         pendingAddsRef.current.set(created.id, created);
@@ -141,10 +159,18 @@ export function useSessionsData({
 
       setSessions((prev) => {
         if (prev.some((s) => s.id === created.id)) return prev;
-        return [
-          ...prev.filter((s) => !isSampleSessionId(s.id)),
-          created,
-        ];
+        const base = prev.filter((s) => !isSampleSessionId(s.id));
+        const next = [...base, created];
+        if (base.length > 0) {
+          const lastMs = new Date(base[base.length - 1].completedAt).getTime();
+          const createdMs = new Date(created.completedAt).getTime();
+          if (!Number.isNaN(lastMs) && !Number.isNaN(createdMs) && createdMs < lastMs) {
+            next.sort(
+              (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+            );
+          }
+        }
+        return next;
       });
       broadcastSession(created);
 
@@ -196,7 +222,6 @@ export function useSessionsData({
   return {
     sessions,
     setSessions,
-    sessionsRef,
     isDemoEnvironment,
     recordSession,
     reloadSampleData,

@@ -1,15 +1,33 @@
 import { UserProfile, AuthState } from '../../types/user';
-import { RemoteTimerState, PeerPresence } from '../../types/timer';
 import { GoogleJwtPayload } from '../../types/auth';
-import { isMobileDevice } from '../../utils/environment';
-
-export type { RemoteTimerState, PeerPresence, GoogleJwtPayload };
-export { isMobileDevice };
 
 export const AUTH_TOKEN_KEY = 'auth_token_v2';
 export const AUTH_USER_KEY = 'auth_user_v2';
-const TOKEN_KEY = AUTH_TOKEN_KEY;
-const USER_KEY = AUTH_USER_KEY;
+export const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
+
+export function hasStoredConvexAuthSession(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const storage = window.localStorage;
+    if (!storage || typeof storage.length !== 'number' || typeof storage.key !== 'function') {
+      return false;
+    }
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key && (key.startsWith('__convexAuthRefreshToken') || key.startsWith('__convexAuthJWT'))) {
+        const val = storage.getItem(key);
+        if (val && val !== 'null' && val !== '""') {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return false;
+}
 
 export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
   try {
@@ -35,9 +53,12 @@ export function buildProfileFromJwt(
   const safeName = typeof payload.name === 'string' && payload.name.trim()
     ? payload.name.trim().slice(0, 50)
     : currentProfile.displayName;
-  const safeAvatarUrl = typeof payload.picture === 'string' && payload.picture.startsWith('https://')
-    ? payload.picture
-    : currentProfile.avatarUrl;
+  const safeAvatarUrl =
+    typeof payload.picture === 'string' &&
+    payload.picture.startsWith('https://') &&
+    payload.picture.length <= 2048
+      ? payload.picture
+      : currentProfile.avatarUrl;
 
   return {
     ...currentProfile,
@@ -61,14 +82,10 @@ export class AuthService {
     return AuthService.instance;
   }
 
-  public getServerNow(): number {
-    return Date.now();
-  }
-
   public getStoredToken(): string | null {
     try {
       return (
-        localStorage.getItem(TOKEN_KEY) ||
+        localStorage.getItem(AUTH_TOKEN_KEY) ||
         localStorage.getItem('auth_token_v1')
       );
     } catch {
@@ -79,7 +96,7 @@ export class AuthService {
   public getStoredUser(): UserProfile | null {
     try {
       const data =
-        localStorage.getItem(USER_KEY) ||
+        localStorage.getItem(AUTH_USER_KEY) ||
         localStorage.getItem('auth_user_v1');
       return data ? JSON.parse(data) : null;
     } catch {
@@ -96,27 +113,13 @@ export class AuthService {
   }
 
   public hasConvexAuthSession(): boolean {
-    if (typeof window === 'undefined') return false;
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.startsWith('__convexAuthRefreshToken') || key.startsWith('__convexAuthJWT'))) {
-          const val = localStorage.getItem(key);
-          if (val && val !== 'null' && val !== '""') {
-            return true;
-          }
-        }
-      }
-    } catch {
-      // Ignore
-    }
-    return false;
+    return hasStoredConvexAuthSession();
   }
 
   public saveAuthSession(token: string, user: UserProfile): void {
     try {
-      localStorage.setItem(TOKEN_KEY, token);
-      localStorage.setItem(USER_KEY, JSON.stringify(user));
+      localStorage.setItem(AUTH_TOKEN_KEY, token);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
     } catch (e) {
       console.warn('Could not persist auth to localStorage', e);
     }
@@ -141,9 +144,9 @@ export class AuthService {
 
   public logout(): void {
     try {
-      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
       localStorage.removeItem('auth_token_v1');
-      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(AUTH_USER_KEY);
       localStorage.removeItem('auth_user_v1');
 
       // Disable Google One Tap auto-selection to prevent automatic immediate re-login

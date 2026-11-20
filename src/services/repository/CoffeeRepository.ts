@@ -32,8 +32,9 @@ export class CoffeeRepository implements ICoffeeRepository {
 
   async getAll(): Promise<CoffeeCup[]> {
     const raw = this.storage.getItem<CoffeeCup[]>(COFFEE_STORAGE_KEY, []);
-    let needsMigration = false;
-    const sanitized = raw.map((c) => {
+    const list = Array.isArray(raw) ? raw : [];
+    let needsMigration = !Array.isArray(raw);
+    const sanitized = list.map((c) => {
       let date = c.date;
       if (!date) {
         needsMigration = true;

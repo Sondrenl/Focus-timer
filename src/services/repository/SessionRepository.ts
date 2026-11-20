@@ -66,7 +66,8 @@ export class SessionRepository implements ISessionRepository {
   }
 
   async getAll(): Promise<CompletedSession[]> {
-    const sessions = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+    const raw = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+    const sessions = Array.isArray(raw) ? raw : [];
     if (isProduction()) {
       const clean = sessions.filter((s) => !isSampleSessionId(s.id));
       if (clean.length !== sessions.length) {
@@ -96,9 +97,10 @@ export class SessionRepository implements ISessionRepository {
 
   async saveAll(sessions: CompletedSession[]): Promise<void> {
     return this.enqueue(async () => {
+      const safeList = Array.isArray(sessions) ? sessions : [];
       const toSave = isProduction()
-        ? sessions.filter((s) => !isSampleSessionId(s.id))
-        : sessions;
+        ? safeList.filter((s) => !isSampleSessionId(s.id))
+        : safeList;
       this.storage.setItem(SESSIONS_STORAGE_KEY, toSave);
     });
   }
@@ -108,7 +110,8 @@ export class SessionRepository implements ISessionRepository {
       return [];
     }
     return this.enqueue(async () => {
-      const existing = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+      const raw = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+      const existing = Array.isArray(raw) ? raw : [];
       const realSessions = existing.filter((s) => !isSampleSessionId(s.id));
       const samples = generateSampleSessions();
       const merged = [...realSessions, ...samples].sort(
@@ -121,7 +124,8 @@ export class SessionRepository implements ISessionRepository {
 
   async purgeSampleSessions(): Promise<CompletedSession[]> {
     return this.enqueue(async () => {
-      const existing = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+      const raw = this.storage.getItem<CompletedSession[]>(SESSIONS_STORAGE_KEY, []);
+      const existing = Array.isArray(raw) ? raw : [];
       const clean = existing.filter((s) => !isSampleSessionId(s.id));
       if (clean.length !== existing.length) {
         this.storage.setItem(SESSIONS_STORAGE_KEY, clean);

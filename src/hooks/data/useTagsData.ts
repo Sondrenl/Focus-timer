@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Tag, CreateTagInput, UpdateTagInput } from '../../types/tag';
+import { Tag, CreateTagInput, UpdateTagInput, DEFAULT_TAGS } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
 import { CoffeeCup } from '../../types/coffee';
 import {
   broadcastTags,
   subscribeTags,
   broadcastCoffeeCups,
+  subscribeReset,
 } from '../../services/timer/TimerBroadcast';
 import {
   tagRepository,
@@ -133,17 +134,35 @@ export function useTagsData({
     }
   }, [convexUser, isEffectiveAuthenticated, ensureValidActiveTag]);
 
-  // Multi-tab BroadcastChannel synchronization for tags
+  // Multi-tab BroadcastChannel synchronization for tags and factory resets
   useEffect(() => {
     const unsubTags = subscribeTags((incomingTags) => {
+      const incomingIds = new Set(incomingTags.map((t) => t.id));
+      const hadRemovedTags = tagsRef.current.some((t) => !incomingIds.has(t.id));
+
       tagRepository.saveAll(incomingTags);
       setTags(incomingTags);
       ensureValidActiveTag(incomingTags);
+
+      if (hadRemovedTags) {
+        void sessionRepository.getAll().then((reloadedSessions) => {
+          setSessions(reloadedSessions);
+        });
+        telemetryTracker.invalidateDraftCache();
+      }
     });
+
+    const unsubReset = subscribeReset((scope) => {
+      if (scope === 'factory-reset') {
+        setActiveTagId(DEFAULT_TAGS[0]?.id ?? null, { skipTelemetry: true });
+      }
+    });
+
     return () => {
       unsubTags();
+      unsubReset();
     };
-  }, [ensureValidActiveTag]);
+  }, [ensureValidActiveTag, setActiveTagId, setSessions]);
 
   const createTag = useCallback(
     async (input: CreateTagInput): Promise<Tag> => {
@@ -276,12 +295,10 @@ export function useTagsData({
   return {
     tags,
     setTags,
-    tagsRef,
     activeTags,
     activeTagId,
     setActiveTagId,
     consumeSkipTagTelemetry,
-    activeTagIdRef,
     createTag,
     updateTag,
     archiveTag,

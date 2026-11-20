@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
-import type { useApp } from '../AppContext';
-import { AuthService } from '../../services/auth/AuthService';
+import { SoundService } from '../../services/audio/SoundService';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { formatTime } from '../../utils/formatters';
@@ -30,6 +29,7 @@ interface UseTimerWorkerParams {
   status: TimerStatus;
   sessionType: SessionType;
   remainingSeconds: number;
+  keepAwake: boolean;
   statusRef: React.MutableRefObject<TimerStatus>;
   sessionTypeRef: React.MutableRefObject<SessionType>;
   currentCycleRef: React.MutableRefObject<number>;
@@ -43,16 +43,16 @@ interface UseTimerWorkerParams {
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
   onStaleExpiration: () => void;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
-  sound: ReturnType<typeof useApp>['sound'];
+  sound: SoundService;
   syncScheduledNotification: () => void;
   reportPresence: (isVisible: boolean) => void;
-  authService: AuthService;
 }
 
 export const useTimerWorker = ({
   status,
   sessionType,
   remainingSeconds,
+  keepAwake,
   statusRef,
   sessionTypeRef,
   currentCycleRef,
@@ -69,11 +69,10 @@ export const useTimerWorker = ({
   sound,
   syncScheduledNotification,
   reportPresence,
-  authService,
 }: UseTimerWorkerParams) => {
-  // Manage screen wake lock: keep screen awake while timer is actively running
+  // Manage screen wake lock: keep screen awake while timer is actively running if keepAwake is enabled
   useEffect(() => {
-    if (status === 'RUNNING') {
+    if (status === 'RUNNING' && keepAwake) {
       wakeLockService.acquire();
     } else {
       wakeLockService.release();
@@ -81,7 +80,7 @@ export const useTimerWorker = ({
     return () => {
       wakeLockService.release();
     };
-  }, [status]);
+  }, [status, keepAwake]);
 
   // Synchronize document tab title with timer progress, status, and remaining time
   useEffect(() => {
@@ -106,17 +105,17 @@ export const useTimerWorker = ({
     }
   }, [status, remainingSeconds, sessionType]);
 
-  // Main countdown tick execution
-  const executeTick = useCallback(() => {
+  // Main countdown tick execution; returns active diffSec if still running, or null if stopped/completed
+  const executeTick = useCallback((): number | null => {
     const currentStatus = statusRef.current;
     const nowWall = Date.now();
     lastTickWallMsRef.current = nowWall;
 
     if (currentStatus !== 'RUNNING' || targetEndTimeRef.current === null) {
-      return;
+      return null;
     }
 
-    const now = authService.getServerNow();
+    const now = Date.now();
     const target = targetEndTimeRef.current;
     const diffMs = target - now;
     const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
@@ -124,21 +123,21 @@ export const useTimerWorker = ({
     if (diffSec <= 0) {
       if (diffMs < -900_000) {
         onStaleExpiration();
-        return;
+        return null;
       }
       remainingSecondsRef.current = 0;
       setRemainingSeconds(0);
       const expiredLongAgo = diffMs < -60_000;
       handleCompleteRef.current(expiredLongAgo);
-      return;
+      return null;
     }
 
     if (diffSec !== remainingSecondsRef.current) {
       remainingSecondsRef.current = diffSec;
       setRemainingSeconds(diffSec);
     }
+    return diffSec;
   }, [
-    authService,
     statusRef,
     lastTickWallMsRef,
     targetEndTimeRef,
@@ -151,11 +150,12 @@ export const useTimerWorker = ({
   // Persistent Web Worker initialization
   useEffect(() => {
     let worker: Worker | null = null;
+    let workerUrl: string | null = null;
     let fallbackInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
       const blob = new Blob([WORKER_SCRIPT], { type: 'application/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
+      workerUrl = URL.createObjectURL(blob);
       worker = new Worker(workerUrl);
 
       worker.onmessage = (e) => {
@@ -166,6 +166,10 @@ export const useTimerWorker = ({
 
       worker.postMessage('START');
     } catch {
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+        workerUrl = null;
+      }
       fallbackInterval = setInterval(executeTick, 250);
     }
 
@@ -173,6 +177,9 @@ export const useTimerWorker = ({
       if (worker) {
         worker.postMessage('STOP');
         worker.terminate();
+      }
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
       }
       if (fallbackInterval) {
         clearInterval(fallbackInterval);
@@ -196,27 +203,8 @@ export const useTimerWorker = ({
       reportPresence(!isHidden);
 
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
-        const nowWall = Date.now();
-        lastTickWallMsRef.current = nowWall;
-
-        const now = authService.getServerNow();
-        const diffMs = targetEndTimeRef.current - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-        if (diffSec <= 0) {
-          if (diffMs < -900_000) {
-            onStaleExpiration();
-            return;
-          }
-          remainingSecondsRef.current = 0;
-          setRemainingSeconds(0);
-          const expiredLongAgo = diffMs < -60_000;
-          handleCompleteRef.current(expiredLongAgo);
-          return;
-        }
-
-        remainingSecondsRef.current = diffSec;
-        setRemainingSeconds(diffSec);
+        const diffSec = executeTick();
+        if (diffSec === null) return;
 
         syncScheduledNotification();
 
@@ -235,7 +223,7 @@ export const useTimerWorker = ({
           lastActiveAtMs: Date.now(),
           wasHidden: isHidden,
         };
-        saveTimerState(stateToSave, false);
+        saveTimerState(stateToSave);
       }
     };
 
@@ -252,14 +240,9 @@ export const useTimerWorker = ({
     sound,
     syncScheduledNotification,
     reportPresence,
-    authService,
+    executeTick,
     statusRef,
     targetEndTimeRef,
-    lastTickWallMsRef,
-    handleCompleteRef,
-    onStaleExpiration,
-    remainingSecondsRef,
-    setRemainingSeconds,
     sessionTypeRef,
     currentCycleRef,
     totalSecondsRef,
@@ -267,6 +250,16 @@ export const useTimerWorker = ({
     localUpdatedAtRef,
     activeTagIdRef,
   ]);
+
+  // Periodic presence heartbeat while tab is visible so peer presence stays within the 90s TTL
+  useEffect(() => {
+    const heartbeatInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        reportPresence(true);
+      }
+    }, 45_000);
+    return () => clearInterval(heartbeatInterval);
+  }, [reportPresence]);
 
   // Main-thread backup countdown timer
   useEffect(() => {

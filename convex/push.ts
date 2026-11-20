@@ -66,22 +66,10 @@ function validateEndpoint(endpoint: string): void {
   }
   try {
     const url = new URL(endpoint);
-    if (url.protocol !== "https:") {
+    if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || url.password !== "") {
       throw new Error();
     }
     const hostname = url.hostname.toLowerCase();
-    // Block private/loopback/cloud metadata hostnames and IPs
-    if (
-      hostname === "localhost" ||
-      hostname.endsWith(".localhost") ||
-      hostname === "127.0.0.1" ||
-      hostname === "169.254.169.254" ||
-      hostname.startsWith("10.") ||
-      hostname.startsWith("192.168.") ||
-      hostname.startsWith("172.16.")
-    ) {
-      throw new Error();
-    }
     const isAllowed = ALLOWED_PUSH_DOMAINS.some(
       (domain) => hostname === domain || hostname.endsWith("." + domain)
     );
@@ -133,6 +121,17 @@ export const register = mutation({
     const sanitizedUserAgent = args.userAgent ? args.userAgent.slice(0, 256) : undefined;
     const now = new Date().toISOString();
 
+    const sameEndpointSubs = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_endpoint", (q) => q.eq("endpoint", args.endpoint))
+      .take(50);
+
+    for (const doc of sameEndpointSubs) {
+      if (doc.userId !== user._id) {
+        await ctx.db.delete(doc._id);
+      }
+    }
+
     const existing = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_user_device", (q) =>
@@ -155,7 +154,7 @@ export const register = mutation({
       const allSubscriptions = await ctx.db
         .query("push_subscriptions")
         .withIndex("by_user_device", (q) => q.eq("userId", user._id))
-        .collect();
+        .take(50);
 
       if (allSubscriptions.length >= MAX_PUSH_DEVICES_PER_USER) {
         allSubscriptions.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
@@ -190,7 +189,7 @@ export const unregister = mutation({
       .withIndex("by_user_device", (q) =>
         q.eq("userId", user._id).eq("deviceId", args.deviceId)
       )
-      .collect();
+      .take(50);
 
     if (subscriptions.length > 0) {
       for (const sub of subscriptions) {

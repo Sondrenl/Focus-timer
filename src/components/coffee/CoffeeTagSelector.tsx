@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { TagSelectDropdown } from '../tags/TagSelectDropdown';
 
 export interface CoffeeTagSelectorProps {
@@ -11,7 +11,7 @@ export const CoffeeTagSelector: React.FC<CoffeeTagSelectorProps> = ({
   selectedTagId: controlledSelectedTagId,
   onSelectTagId: controlledOnSelectTagId,
 }) => {
-  const { activeTagId } = useApp();
+  const { activeTagId } = useData();
   const [internalTagId, setInternalTagId] = useState<string | null>(activeTagId);
 
   // Keep internal state synchronized with timer activeTagId

@@ -213,20 +213,6 @@ export const recordEvents = mutation({
         continue;
       }
 
-      // Deduplicate against server-emitted completion event for the same attemptId
-      if (normalized.eventType === "session_completed" && normalized.attemptId) {
-        const srvCompEvent = await ctx.db
-          .query("ml_events")
-          .withIndex("by_user_event", (q) =>
-            q.eq("userId", user._id).eq("eventId", `srv-comp-${normalized.attemptId}`)
-          )
-          .first();
-        if (srvCompEvent) {
-          skippedCount += 1;
-          continue;
-        }
-      }
-
       await ctx.db.insert("ml_events", {
         userId: user._id,
         ...normalized,
@@ -265,18 +251,7 @@ export const discardAttempt = mutation({
       await ctx.db.delete(existing._id);
     }
 
-    // Delete deterministic session_started event directly via index
-    const startEvt = await ctx.db
-      .query("ml_events")
-      .withIndex("by_user_event", (q) =>
-        q.eq("userId", user._id).eq("eventId", `evt-start-${args.attemptId}`)
-      )
-      .first();
-    if (startEvt) {
-      await ctx.db.delete(startEvt._id);
-    }
-
-    // Clean up any recent pause/resume/tag_changed events (or unlink coffee_logged) within a bounded scan
+    // Clean up any recent tag_changed events (or unlink coffee_logged) within a bounded scan
     const recentEvents = await ctx.db
       .query("ml_events")
       .withIndex("by_user_timestamp", (q) => q.eq("userId", user._id))

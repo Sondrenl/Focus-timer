@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { toDateKey, formatFriendlyDate, getDayRange, getWeekRange, getMonthRange } from '../src/utils/dates';
 
 describe('Date Utilities and Time Boundaries', () => {
-  it('converts Date to invariant YYYY-MM-DD key', () => {
+  it('converts Date and date-only strings to invariant YYYY-MM-DD key without UTC shift', () => {
     const d = new Date(2026, 10, 2, 14, 30, 0); // Month is 0-indexed (10 = November)
     expect(toDateKey(d)).toBe('2026-11-02');
+    expect(toDateKey('2026-11-02')).toBe('2026-11-02');
   });
 
   it('formats friendly date strings correctly', () => {

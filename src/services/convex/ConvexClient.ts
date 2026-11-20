@@ -1,13 +1,17 @@
 import { ConvexReactClient } from "convex/react";
-import { AUTH_TOKEN_KEY, parseGoogleJwt } from "../auth/AuthService";
+import { AUTH_TOKEN_KEY, parseGoogleJwt, hasStoredConvexAuthSession } from "../auth/AuthService";
+import { isProduction } from "../../utils/environment";
+
+export { hasStoredConvexAuthSession };
 
 export const PROD_CONVEX_URL = "https://acrobatic-oyster-97.convex.cloud";
 export const DEV_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";
 
-// Ensure production builds always point to production deployment even if .env.local has dev URL
+// Route production hostnames to prod Convex and local/preview/dev hostnames to dev Convex
+const useProdConvex = import.meta.env.PROD && isProduction();
 export const convexUrl =
   (typeof window !== "undefined" && (window as any).__CONVEX_URL__) ||
-  (import.meta.env.PROD
+  (useProdConvex
     ? (import.meta.env.VITE_CONVEX_PROD_URL ||
        (import.meta.env.VITE_CONVEX_URL && !import.meta.env.VITE_CONVEX_URL.includes("agile-seahorse")
          ? import.meta.env.VITE_CONVEX_URL
@@ -94,28 +98,6 @@ export function getValidAuthToken(
     console.warn("Error evaluating Convex auth token validity:", err);
     return undefined;
   }
-}
-
-export function hasStoredConvexAuthSession(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const storage = window.localStorage;
-    if (!storage || typeof storage.length !== "number" || typeof storage.key !== "function") {
-      return false;
-    }
-    for (let i = 0; i < storage.length; i++) {
-      const key = storage.key(i);
-      if (key && (key.startsWith("__convexAuthRefreshToken") || key.startsWith("__convexAuthJWT"))) {
-        const val = storage.getItem(key);
-        if (val && val !== "null" && val !== '""') {
-          return true;
-        }
-      }
-    }
-  } catch {
-    // Ignore storage access errors
-  }
-  return false;
 }
 
 // Eagerly restore legacy Google JWT auth ONLY if no persistent @convex-dev/auth session exists;

@@ -65,7 +65,8 @@ export const TimerDurationSection: React.FC<TimerDurationSectionProps> = ({
       value: workInput,
       setter: setWorkInput,
       fieldId: 'work' as const,
-      maxVal: 120,
+      inputId: 'timer-duration-work',
+      maxVal: 360,
       fallback: settings.workDurationMinutes || DEFAULT_SETTINGS.workDurationMinutes,
     },
     {
@@ -74,7 +75,8 @@ export const TimerDurationSection: React.FC<TimerDurationSectionProps> = ({
       value: shortBreakInput,
       setter: setShortBreakInput,
       fieldId: 'shortBreak' as const,
-      maxVal: 60,
+      inputId: 'timer-duration-short-break',
+      maxVal: 120,
       fallback: settings.shortBreakDurationMinutes || DEFAULT_SETTINGS.shortBreakDurationMinutes,
     },
     {
@@ -83,7 +85,8 @@ export const TimerDurationSection: React.FC<TimerDurationSectionProps> = ({
       value: longBreakInput,
       setter: setLongBreakInput,
       fieldId: 'longBreak' as const,
-      maxVal: 60,
+      inputId: 'timer-duration-long-break',
+      maxVal: 180,
       fallback: settings.longBreakDurationMinutes || DEFAULT_SETTINGS.longBreakDurationMinutes,
     },
   ];
@@ -116,11 +119,12 @@ export const TimerDurationSection: React.FC<TimerDurationSectionProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {durationFields.map((df) => (
             <div key={df.key} className="flex flex-col gap-2 p-3.5 rounded-2xl bg-md-surface-container/60 border border-md-outline-variant/15">
-              <label className="text-xs font-bold text-md-on-surface">
+              <label htmlFor={df.inputId} className="text-xs font-bold text-md-on-surface">
                 {df.label}
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id={df.inputId}
                   type="text"
                   inputMode="decimal"
                   value={df.value}
@@ -140,9 +144,12 @@ export const TimerDurationSection: React.FC<TimerDurationSectionProps> = ({
 
         {/* Long Break Interval */}
         <div className="flex items-center justify-between pt-2 border-t border-md-outline-variant/15">
-          <div className="text-sm font-semibold text-md-on-surface">Long Break Interval</div>
+          <label htmlFor="timer-long-break-interval" className="text-sm font-semibold text-md-on-surface">
+            Long Break Interval
+          </label>
           <div className="flex items-center gap-2">
             <input
+              id="timer-long-break-interval"
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"
@@ -172,9 +179,12 @@ export const TimerDurationSection: React.FC<TimerDurationSectionProps> = ({
         </div>
 
         <div className="flex items-center justify-between pt-2">
-          <div className="text-sm font-semibold text-md-on-surface">Target Time per Day</div>
+          <label htmlFor="timer-daily-goal" className="text-sm font-semibold text-md-on-surface">
+            Target Time per Day
+          </label>
           <div className="flex items-center gap-2">
             <input
+              id="timer-daily-goal"
               type="text"
               inputMode="numeric"
               pattern="[0-9]*"

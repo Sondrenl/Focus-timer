@@ -109,12 +109,16 @@ export const broadcastSession = (session: CompletedSession): void =>
 export const subscribeSessions = (callback: (session: CompletedSession) => void): (() => void) =>
   subscribePayload('SESSION', 'session', (p: any) => p && typeof p === 'object' && typeof p.id === 'string', callback);
 
-const localResetListeners = new Set<(scope: ResetScope) => void>();
+export interface ResetBroadcastMeta {
+  isRemoteTab: boolean;
+}
+
+const localResetListeners = new Set<(scope: ResetScope, meta: ResetBroadcastMeta) => void>();
 
 export const broadcastReset = (resetScope: ResetScope): void => {
   localResetListeners.forEach((fn) => {
     try {
-      fn(resetScope);
+      fn(resetScope, { isRemoteTab: false });
     } catch (err) {
       console.warn('Local reset listener error:', err);
     }
@@ -123,13 +127,15 @@ export const broadcastReset = (resetScope: ResetScope): void => {
   broadcastPayload('RESET', 'resetScope', resetScope);
 };
 
-export const subscribeReset = (callback: (scope: ResetScope) => void): (() => void) => {
+export const subscribeReset = (
+  callback: (scope: ResetScope, meta: ResetBroadcastMeta) => void
+): (() => void) => {
   localResetListeners.add(callback);
   const unsubscribeChannel = subscribePayload(
     'RESET',
     'resetScope',
     (p: any) => p === 'sessions-only' || p === 'factory-reset',
-    callback
+    (scope) => callback(scope, { isRemoteTab: true })
   );
 
   return () => {

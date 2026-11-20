@@ -1,4 +1,5 @@
 import { v, Infer } from "convex/values";
+import { MIN_DURATION_MINUTES } from "./defaultData";
 
 export const ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 export const TAG_ID_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -499,9 +500,9 @@ export function validateAndNormalizeAttempt(
 
   const ss = input.settingsSnapshot;
   if (
-    !isFiniteInRange(ss.workDurationMinutes, 1, 360) ||
-    !isFiniteInRange(ss.shortBreakDurationMinutes, 1, 360) ||
-    !isFiniteInRange(ss.longBreakDurationMinutes, 1, 360) ||
+    !isFiniteInRange(ss.workDurationMinutes, MIN_DURATION_MINUTES, 360) ||
+    !isFiniteInRange(ss.shortBreakDurationMinutes, MIN_DURATION_MINUTES, 360) ||
+    !isFiniteInRange(ss.longBreakDurationMinutes, MIN_DURATION_MINUTES, 360) ||
     !isFiniteInRange(ss.longBreakInterval, 1, 100)
   ) {
     return { ok: false, error: "Invalid settingsSnapshot values." };

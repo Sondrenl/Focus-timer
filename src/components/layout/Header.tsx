@@ -1,13 +1,13 @@
 import React from 'react';
 import { Menu, Volume2, VolumeX } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useAuthProfile } from '../../context/AuthProfileContext';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
-  const { settings, updateSettings } = useApp();
+  const { settings, updateSettings } = useAuthProfile();
 
   const toggleSound = () => {
     updateSettings({ soundEnabled: !settings.soundEnabled });

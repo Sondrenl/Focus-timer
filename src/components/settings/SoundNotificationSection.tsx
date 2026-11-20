@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card } from '../ui/Card';
 import { Switch } from '../ui/Switch';
 import { Volume2, Bell } from 'lucide-react';
@@ -38,6 +38,15 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
   );
   const [notifFeedback, setNotifFeedback] = useState<string | null>(null);
   const [isSchedulingTestPush, setIsSchedulingTestPush] = useState(false);
+  const notifFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (notifFeedbackTimeoutRef.current !== null) {
+        clearTimeout(notifFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const refreshPermission = () => {
@@ -54,7 +63,13 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
   const showNotifFeedback = (msg: string) => {
     setNotifFeedback(msg);
-    setTimeout(() => setNotifFeedback(null), 5000);
+    if (notifFeedbackTimeoutRef.current !== null) {
+      clearTimeout(notifFeedbackTimeoutRef.current);
+    }
+    notifFeedbackTimeoutRef.current = setTimeout(() => {
+      notifFeedbackTimeoutRef.current = null;
+      setNotifFeedback(null);
+    }, 5000);
   };
 
   const handleTestSound = () => {

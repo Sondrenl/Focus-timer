@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Coffee, Plus, Minus } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
 import { toDateKey } from '../../utils/dates';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
 export const CoffeeWorkspace: React.FC = () => {
-  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags, activeTagId } = useApp();
+  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags, activeTagId } = useData();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(activeTagId);
 
   // Mimic the timer's tag selector: coffee tag observes the timer tag, but not vice versa
@@ -85,8 +85,20 @@ export const CoffeeWorkspace: React.FC = () => {
   // Keyboard shortcut listener (+ / = to add cup, - to remove cup)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input or textarea
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+      if (e.metaKey || e.ctrlKey || e.altKey) {
+        return;
+      }
+
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName) ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (document.querySelector('[role="dialog"], [role="listbox"]')) {
         return;
       }
 
@@ -171,7 +183,7 @@ export const CoffeeWorkspace: React.FC = () => {
         <button
           onClick={handleAdd}
           className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative shrink-0"
-          style={{ backgroundColor: currentTagColor }}
+          style={{ backgroundColor: sanitizeHexColor(currentTagColor, '#8D6E63') }}
           aria-label={`Add cup of coffee with tag ${currentTagName}`}
           title={`Add cup (${currentTagName})`}
         >
@@ -221,7 +233,7 @@ export const CoffeeWorkspace: React.FC = () => {
               const isSelected = selectedTagId === item.tagId;
               return (
                 <button
-                  key={item.name}
+                  key={item.tagId ?? 'untagged'}
                   onClick={() => setSelectedTagId(item.tagId)}
                   className={`flex items-center gap-2 md:gap-1.5 min-h-[40px] md:min-h-0 px-3.5 py-1.5 md:px-2.5 md:py-1 rounded-full text-xs font-semibold transition-all border ${
                     isSelected

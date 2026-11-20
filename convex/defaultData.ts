@@ -1,6 +1,13 @@
 /**
- * Single source of truth for initial defaults shared between Convex and Frontend
+ * Single source of truth for initial defaults and shared limits between Convex and Frontend
  */
+export const MIN_DURATION_MINUTES = 0.01;
+export const MAX_WORK_DURATION_MINUTES = 360;
+export const MAX_SHORT_BREAK_MINUTES = 120;
+export const MAX_LONG_BREAK_MINUTES = 180;
+export const MAX_LONG_BREAK_INTERVAL = 20;
+export const MAX_DAILY_GOAL_MINUTES = 1440;
+
 export const DEFAULT_SETTINGS = {
   workDurationMinutes: 25,
   shortBreakDurationMinutes: 5,

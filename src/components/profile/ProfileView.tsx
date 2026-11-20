@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useAuthProfile } from '../../context/AuthProfileContext';
+import { useData } from '../../context/DataContext';
 import { ProfileSummaryCard } from './ProfileSummaryCard';
 import { CloudSyncCard } from './CloudSyncCard';
 import { DataManagementCard } from './DataManagementCard';
@@ -9,6 +10,13 @@ export const ProfileView: React.FC = () => {
   const {
     profile,
     updateProfile,
+    auth,
+    isEffectiveAuthenticated,
+    loginWithGoogle,
+    logout,
+    syncWithCloud,
+  } = useAuthProfile();
+  const {
     sessions,
     tags,
     coffeeCups,
@@ -17,12 +25,7 @@ export const ProfileView: React.FC = () => {
     resetAllData,
     reloadSampleData,
     isDemoEnvironment,
-    auth,
-    isEffectiveAuthenticated,
-    loginWithGoogle,
-    logout,
-    syncWithCloud,
-  } = useApp();
+  } = useData();
 
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

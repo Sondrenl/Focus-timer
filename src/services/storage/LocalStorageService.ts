@@ -26,12 +26,23 @@ export class LocalStorageService implements IStorageService {
     }
   }
 
+  private isQuotaExceededError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const e = err as { name?: string; code?: number };
+    return (
+      e.name === 'QuotaExceededError' ||
+      e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      e.code === 22 ||
+      e.code === 1014
+    );
+  }
+
   getItem<T>(key: string, defaultValue: T): T {
     const fullKey = `${this.prefix}${key}`;
     try {
       let raw: string | null = null;
       if (this.isLocalStorageAvailable) {
-        raw = window.localStorage.getItem(fullKey);
+        raw = this.memoryCache.get(fullKey) ?? window.localStorage.getItem(fullKey);
       } else {
         raw = this.memoryCache.get(fullKey) ?? null;
       }
@@ -48,25 +59,36 @@ export class LocalStorageService implements IStorageService {
 
   setItem<T>(key: string, value: T): void {
     const fullKey = `${this.prefix}${key}`;
+    let serialized: string;
     try {
-      const serialized = JSON.stringify(value);
-      if (this.isLocalStorageAvailable) {
-        window.localStorage.setItem(fullKey, serialized);
-      } else {
-        this.memoryCache.set(fullKey, serialized);
-      }
+      serialized = JSON.stringify(value);
     } catch (err) {
-      console.error(`Error writing key "${key}" to storage:`, err);
+      console.error(`Error serializing key "${key}" for storage:`, err);
+      return;
+    }
+
+    if (this.isLocalStorageAvailable) {
+      try {
+        window.localStorage.setItem(fullKey, serialized);
+        this.memoryCache.delete(fullKey);
+      } catch (err) {
+        this.memoryCache.set(fullKey, serialized);
+        console.error(`Error writing key "${key}" to storage:`, err);
+        if (this.isQuotaExceededError(err)) {
+          throw err;
+        }
+      }
+    } else {
+      this.memoryCache.set(fullKey, serialized);
     }
   }
 
   removeItem(key: string): void {
     const fullKey = `${this.prefix}${key}`;
     try {
+      this.memoryCache.delete(fullKey);
       if (this.isLocalStorageAvailable) {
         window.localStorage.removeItem(fullKey);
-      } else {
-        this.memoryCache.delete(fullKey);
       }
     } catch (err) {
       console.error(`Error removing key "${key}" from storage:`, err);
@@ -75,6 +97,7 @@ export class LocalStorageService implements IStorageService {
 
   clear(): void {
     try {
+      this.memoryCache.clear();
       if (this.isLocalStorageAvailable) {
         const keysToRemove: string[] = [];
         for (let i = 0; i < window.localStorage.length; i++) {
@@ -84,8 +107,6 @@ export class LocalStorageService implements IStorageService {
           }
         }
         keysToRemove.forEach((k) => window.localStorage.removeItem(k));
-      } else {
-        this.memoryCache.clear();
       }
     } catch (err) {
       console.error('Error clearing app storage:', err);

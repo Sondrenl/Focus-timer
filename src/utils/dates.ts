@@ -1,8 +1,24 @@
+const DATE_ONLY_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function parseDateInput(date: Date | string): Date {
+  if (typeof date === 'string') {
+    const match = DATE_ONLY_REGEX.exec(date.trim());
+    if (match) {
+      return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+    }
+    return new Date(date);
+  }
+  return date;
+}
+
 /**
  * Returns formatted date key 'YYYY-MM-DD'
  */
 export function toDateKey(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  if (typeof date === 'string' && DATE_ONLY_REGEX.test(date.trim())) {
+    return date.trim();
+  }
+  const d = parseDateInput(date);
   const year = d.getFullYear();
   const month = (d.getMonth() + 1).toString().padStart(2, '0');
   const day = d.getDate().toString().padStart(2, '0');
@@ -41,7 +57,7 @@ export const MONTH_NAMES = [
  * Returns friendly formatted date with day first, e.g. "Mon, 12 Oct" or "12 Oct 2026"
  */
 export function formatFriendlyDate(dateStr: string | Date, includeYear = false): string {
-  const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  const d = parseDateInput(dateStr);
   const day = d.getDate();
   const month = MONTH_NAMES[d.getMonth()].slice(0, 3);
   const weekday = WEEKDAY_NAMES[d.getDay()].slice(0, 3);

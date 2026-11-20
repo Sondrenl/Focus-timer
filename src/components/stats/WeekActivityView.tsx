@@ -12,7 +12,7 @@ export const WeekActivityView: React.FC<WeekActivityViewProps> = ({ activityBars
   const [hoveredDayKey, setHoveredDayKey] = useState<string | null>(null);
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
-  const todayKey = useMemo(() => toDateKey(new Date()), []);
+  const todayKey = toDateKey(new Date());
 
   const dayMap = useMemo(() => {
     const map = new Map<string, ActivityBarStat>();

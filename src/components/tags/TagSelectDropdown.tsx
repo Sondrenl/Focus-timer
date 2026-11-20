@@ -1,27 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Plus, Tag as TagIcon } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { TagFormModal } from './TagFormModal';
+import { sanitizeHexColor } from '../../utils/colors';
 import { clsx } from 'clsx';
 
 export interface TagSelectDropdownProps {
   selectedTagId: string | null;
   onSelectTagId: (tagId: string | null) => void;
   variant?: 'timer' | 'coffee';
-  unassignedLabel?: string;
-  unassignedIcon?: 'dot' | 'tag';
-  menuTitle?: string;
 }
 
 export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
   selectedTagId,
   onSelectTagId,
   variant = 'timer',
-  unassignedLabel = 'No Tag',
-  unassignedIcon = 'tag',
-  menuTitle = variant === 'coffee' ? 'Choose Tag for Cup' : 'Tags',
 }) => {
-  const { activeTags } = useApp();
+  const { activeTags } = useData();
   const [isOpen, setIsOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -32,17 +27,29 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
         setIsOpen(false);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
     document.addEventListener('pointerdown', handleClickOutside);
-    return () => document.removeEventListener('pointerdown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   const currentTag = activeTags.find((t) => t.id === selectedTagId);
+  const menuTitle = variant === 'coffee' ? 'Choose Tag for Cup' : 'Tags';
 
   return (
     <div className="relative inline-block" ref={dropdownRef}>
       {/* Trigger Button */}
       <button
         type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
         onClick={() => setIsOpen(!isOpen)}
         className={clsx(
           'flex items-center gap-3 md:gap-2.5 min-h-[48px] md:min-h-0 px-5 py-2.5 md:px-4 md:py-2 rounded-2xl md:rounded-full transition-colors duration-150 border text-sm font-semibold md:font-medium text-md-on-surface shadow-xs select-none touch-manipulation',
@@ -55,7 +62,7 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
           <>
             <span
               className="w-3.5 h-3.5 md:w-3 md:h-3 rounded-full shrink-0 shadow-xs"
-              style={{ backgroundColor: currentTag.color }}
+              style={{ backgroundColor: sanitizeHexColor(currentTag.color) }}
             />
             <span className="font-bold md:font-semibold text-md-on-surface truncate max-w-[200px] md:max-w-none">
               {currentTag.name}
@@ -63,13 +70,9 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
           </>
         ) : (
           <>
-            {unassignedIcon === 'tag' ? (
-              <TagIcon className="w-4 h-4 md:w-3.5 md:h-3.5 text-md-outline shrink-0" />
-            ) : (
-              <span className="w-3.5 h-3.5 md:w-3 md:h-3 rounded-full shrink-0 shadow-xs bg-[#8C8690]" />
-            )}
+            <TagIcon className="w-4 h-4 md:w-3.5 md:h-3.5 text-md-outline shrink-0" />
             <span className="font-bold md:font-semibold text-md-on-surface">
-              {unassignedLabel}
+              No Tag
             </span>
           </>
         )}
@@ -83,7 +86,10 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-white border border-md-outline-variant rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30">
+        <div
+          role="listbox"
+          className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-white border border-md-outline-variant rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30"
+        >
           <div className="text-xs font-semibold text-md-on-surface-variant uppercase tracking-wider px-3 py-2 md:py-1.5">
             {menuTitle}
           </div>
@@ -92,6 +98,8 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
             {/* Unassigned / No Tag Option */}
             <button
               type="button"
+              role="option"
+              aria-selected={selectedTagId === null}
               onClick={() => {
                 onSelectTagId(null);
                 setIsOpen(false);
@@ -104,12 +112,8 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
               )}
             >
               <div className="flex items-center gap-3 md:gap-2.5 truncate">
-                {unassignedIcon === 'tag' ? (
-                  <TagIcon className="w-4 h-4 md:w-3.5 md:h-3.5 text-md-outline shrink-0" />
-                ) : (
-                  <span className="w-3.5 h-3.5 md:w-3 md:h-3 rounded-full shrink-0 bg-[#8C8690]" />
-                )}
-                <span className="truncate">{unassignedLabel}</span>
+                <TagIcon className="w-4 h-4 md:w-3.5 md:h-3.5 text-md-outline shrink-0" />
+                <span className="truncate">No Tag</span>
               </div>
               {selectedTagId === null && (
                 <span className="text-xs text-md-primary font-bold">
@@ -124,6 +128,8 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
               return (
                 <button
                   type="button"
+                  role="option"
+                  aria-selected={isSelected}
                   key={tag.id}
                   onClick={() => {
                     onSelectTagId(tag.id);
@@ -139,7 +145,7 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
                   <div className="flex items-center gap-3 md:gap-2.5 truncate">
                     <span
                       className="w-3.5 h-3.5 md:w-3 md:h-3 rounded-full shrink-0 shadow-xs"
-                      style={{ backgroundColor: tag.color }}
+                      style={{ backgroundColor: sanitizeHexColor(tag.color) }}
                     />
                     <span className="truncate">{tag.name}</span>
                   </div>

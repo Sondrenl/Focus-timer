@@ -41,26 +41,35 @@ export function generateCoreFocusInsights(
       if (durSec <= 0) return;
 
       const endSec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
-      const startSec = Math.max(0, endSec - durSec);
+      const rawStartSec = endSec - durSec;
+      const intervals: [number, number][] =
+        rawStartSec >= 0
+          ? [[rawStartSec, endSec]]
+          : [
+              [0, endSec],
+              [86400 + rawStartSec, 86400],
+            ];
 
-      for (let k = 0; k < 48; k++) {
-        const slotStart = k * 1800;
-        const slotEnd = (k + 1) * 1800;
-        const overlapStart = Math.max(startSec, slotStart);
-        const overlapEnd = Math.min(endSec, slotEnd);
-        if (overlapEnd > overlapStart) {
-          slotSeconds[k] += overlapEnd - overlapStart;
+      for (const [intStart, intEnd] of intervals) {
+        for (let k = 0; k < 48; k++) {
+          const slotStart = k * 1800;
+          const slotEnd = (k + 1) * 1800;
+          const overlapStart = Math.max(intStart, slotStart);
+          const overlapEnd = Math.min(intEnd, slotEnd);
+          if (overlapEnd > overlapStart) {
+            slotSeconds[k] += overlapEnd - overlapStart;
+          }
         }
       }
     });
 
-    // 5 slots = 2.5 hours sliding window
+    // 5 slots = 2.5 hours sliding window (supports midnight wrap-around)
     let bestSlot = -1;
     let maxWindowSec = 0;
-    for (let k = 0; k <= 43; k++) {
+    for (let k = 0; k < 48; k++) {
       let winSec = 0;
       for (let j = 0; j < 5; j++) {
-        winSec += slotSeconds[k + j];
+        winSec += slotSeconds[(k + j) % 48];
       }
       if (winSec > maxWindowSec) {
         maxWindowSec = winSec;
@@ -74,7 +83,7 @@ export function generateCoreFocusInsights(
       if (pct >= 28) {
         const startH = Math.floor(bestSlot / 2);
         const startM = (bestSlot % 2) * 30;
-        const endSlot = bestSlot + 5;
+        const endSlot = (bestSlot + 5) % 48;
         const endH = Math.floor(endSlot / 2);
         const endM = (endSlot % 2) * 30;
         const pad = (n: number) => n.toString().padStart(2, '0');
@@ -257,12 +266,17 @@ export function generateCoreFocusInsights(
           ((highestAvgWeekdaySec - avgActiveDaySec) / avgActiveDaySec) * 100
         );
         const bestDayTotalSec = weekdaySeconds[bestDayIdx];
+        const bestDayOccurrences = weekdayDates[bestDayIdx].size;
+        const durationDetail =
+          bestDayOccurrences > 1
+            ? `an average of ${formatDurationHoursMins(Math.round(highestAvgWeekdaySec))} (${formatDurationHoursMins(bestDayTotalSec)} total)`
+            : formatDurationHoursMins(bestDayTotalSec);
         insights.push({
           id: 'powerhouse-day',
           type: 'powerhouse-day',
           badge: 'Productivity Rhythm',
           headline: `${WEEKDAY_NAMES[bestDayIdx]} is your Powerhouse Day`,
-          description: `You logged ${formatDurationHoursMins(bestDayTotalSec)} on ${WEEKDAY_NAMES[bestDayIdx]}s (+${pctAbove}% above your typical active day in this period).`,
+          description: `You logged ${durationDetail} on ${WEEKDAY_NAMES[bestDayIdx]}s (+${pctAbove}% above your typical active day in this period).`,
           iconName: 'calendar',
           score: 93,
         });
@@ -382,9 +396,11 @@ export function generateCoreFocusInsights(
     const dayTagsMap = new Map<string, Set<string>>();
     sessions.forEach((s) => {
       if (!s.completedAt || s.durationSeconds <= 0) return;
+      const validTagId = resolveValidTagId(s.tagId);
+      if (!validTagId) return;
       const key = toDateKey(s.completedAt);
       const set = dayTagsMap.get(key) || new Set<string>();
-      set.add(resolveValidTagId(s.tagId) || 'unassigned');
+      set.add(validTagId);
       dayTagsMap.set(key, set);
     });
 
@@ -398,7 +414,7 @@ export function generateCoreFocusInsights(
       const sec = focus ? focus.seconds : 0;
       if (sec === 0) return;
 
-      if (tagSet.size === 1 && !tagSet.has('unassigned')) {
+      if (tagSet.size === 1) {
         singleTagSec += sec;
         singleTagDays += 1;
       } else if (tagSet.size >= 2) {

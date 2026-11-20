@@ -61,22 +61,16 @@ export function computeDayTimeRangeBreakdown(
       const m = endDate.getMonth();
       const d = endDate.getDate();
 
-      const atHour = (dayOffset: number, hour: number) =>
-        new Date(y, m, d + dayOffset, hour, 0, 0, 0).getTime();
+      const atHour = (hour: number) => new Date(y, m, d, hour, 0, 0, 0).getTime();
 
-      // Contiguous local-time windows covering up to 24h before midnight through end of completion day
+      // Contiguous local-time windows strictly covering Day D's [00:00, 24:00]
       const windows: { id: DayTimeRangeId; start: number; end: number }[] = [
-        { id: 'night', start: atHour(-1, 0), end: atHour(-1, 6) },
-        { id: 'morning', start: atHour(-1, 6), end: atHour(-1, 10) },
-        { id: 'midday', start: atHour(-1, 10), end: atHour(-1, 14) },
-        { id: 'afternoon', start: atHour(-1, 14), end: atHour(-1, 18) },
-        { id: 'evening', start: atHour(-1, 18), end: atHour(-1, 22) },
-        { id: 'night', start: atHour(-1, 22), end: atHour(0, 6) },
-        { id: 'morning', start: atHour(0, 6), end: atHour(0, 10) },
-        { id: 'midday', start: atHour(0, 10), end: atHour(0, 14) },
-        { id: 'afternoon', start: atHour(0, 14), end: atHour(0, 18) },
-        { id: 'evening', start: atHour(0, 18), end: atHour(0, 22) },
-        { id: 'night', start: atHour(0, 22), end: atHour(1, 0) },
+        { id: 'night', start: atHour(0), end: atHour(6) },
+        { id: 'morning', start: atHour(6), end: atHour(10) },
+        { id: 'midday', start: atHour(10), end: atHour(14) },
+        { id: 'afternoon', start: atHour(14), end: atHour(18) },
+        { id: 'evening', start: atHour(18), end: atHour(22) },
+        { id: 'night', start: atHour(22), end: atHour(24) },
       ];
 
       for (const win of windows) {

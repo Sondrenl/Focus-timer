@@ -9,6 +9,8 @@ import { CompletedSession } from '../../types/session';
 import { Tag } from '../../types/tag';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { toDateKey } from '../../utils/dates';
+import { isProduction } from '../../utils/environment';
+import { isSampleSessionId } from '../../services/repository/SessionRepository';
 
 const AVATAR_EMOJI_OPTIONS = [
   '🍅', '⚡', '☕', '🚀', '🧠', '🔥', '🎯', '📚', '💻', '🧘', '🌱', '⭐',
@@ -32,23 +34,26 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
   isAuthenticated,
   userEmail,
 }) => {
+  const displayName = profile.displayName || 'Focus Practitioner';
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [editName, setEditName] = useState(isAuthenticated ? profile.displayName : 'Focus Practitioner');
+  const [editName, setEditName] = useState(displayName);
   const [editEmoji, setEditEmoji] = useState(profile.avatarEmoji);
-  const [editGoalMinutes, setEditGoalMinutes] = useState(profile.dailyGoalMinutes);
+  const [editGoalInput, setEditGoalInput] = useState(String(profile.dailyGoalMinutes));
 
   const openEditModal = () => {
-    setEditName(isAuthenticated ? profile.displayName : 'Focus Practitioner');
+    setEditName(profile.displayName || 'Focus Practitioner');
     setEditEmoji(profile.avatarEmoji);
-    setEditGoalMinutes(profile.dailyGoalMinutes);
+    setEditGoalInput(String(profile.dailyGoalMinutes));
     setIsEditingProfile(true);
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     const safeDisplayName = editName.trim().slice(0, 50) || 'Focus Practitioner';
-    const parsedMinutes = Number(editGoalMinutes);
-    const safeGoal = !isNaN(parsedMinutes) ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes))) : 120;
+    const parsedMinutes = parseInt(editGoalInput, 10);
+    const safeGoal = !Number.isNaN(parsedMinutes)
+      ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes)))
+      : profile.dailyGoalMinutes || 120;
     await updateProfile({
       displayName: safeDisplayName,
       avatarEmoji: editEmoji.trim().slice(0, 10),
@@ -57,18 +62,34 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
     setIsEditingProfile(false);
   };
 
+  const shouldExcludeSample = isProduction() || isAuthenticated;
+  const workSessions = sessions.filter(
+    (s) => s.sessionType === 'WORK' && (!shouldExcludeSample || !isSampleSessionId(s.id))
+  );
+
   // Total Focus Time in seconds (Work sessions only)
-  const totalFocusSeconds = sessions
-    .filter((s) => s.sessionType === 'WORK')
-    .reduce((acc, curr) => acc + curr.durationSeconds, 0);
+  const totalFocusSeconds = workSessions.reduce(
+    (acc, curr) => acc + Math.max(0, curr.durationSeconds),
+    0
+  );
 
   // Today's Focus Time in minutes (local calendar date)
   const todayStr = toDateKey(new Date());
-  const todayFocusSeconds = sessions
-    .filter((s) => s.sessionType === 'WORK' && toDateKey(s.completedAt) === todayStr)
-    .reduce((acc, curr) => acc + curr.durationSeconds, 0);
-  const todayFocusMinutes = Math.round(todayFocusSeconds / 60);
-  const goalProgressPercent = Math.min(100, Math.round((todayFocusMinutes / (profile.dailyGoalMinutes || 120)) * 100));
+  const todayFocusSeconds = workSessions
+    .filter((s) => toDateKey(s.completedAt) === todayStr)
+    .reduce((acc, curr) => acc + Math.max(0, curr.durationSeconds), 0);
+  const todayFocusMinutes = Math.floor(todayFocusSeconds / 60);
+  const dailyGoalMinutes = profile.dailyGoalMinutes || 120;
+  const goalProgressPercent = Math.min(
+    100,
+    Math.floor((todayFocusSeconds / (dailyGoalMinutes * 60)) * 100)
+  );
+  const activeTagsCount = tags.filter((t) => !t.isArchived).length;
+  const parsedDraftGoal = parseInt(editGoalInput, 10);
+  const previewGoalMinutes =
+    !Number.isNaN(parsedDraftGoal) && parsedDraftGoal >= 1
+      ? Math.min(1440, parsedDraftGoal)
+      : dailyGoalMinutes;
 
   return (
     <>
@@ -82,7 +103,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
               ) : isAuthenticated && profile.avatarUrl && profile.avatarUrl.startsWith('https://') ? (
                 <img
                   src={profile.avatarUrl}
-                  alt={isAuthenticated ? profile.displayName : 'Focus Practitioner'}
+                  alt={displayName}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -104,7 +125,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-xl font-bold text-md-on-surface">
-                  {isAuthenticated ? profile.displayName : 'Focus Practitioner'}
+                  {displayName}
                 </h3>
                 {isAuthenticated && userEmail ? (
                   <span className="inline-flex items-center gap-1 text-xs text-md-on-surface-variant font-mono mt-0.5">
@@ -167,13 +188,13 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
               </div>
               <div>
                 <span className="block font-bold text-sm text-md-on-surface">
-                  {sessions.filter((s) => s.sessionType === 'WORK').length}
+                  {workSessions.length}
                 </span>
                 Pomodoros Completed
               </div>
               <div>
                 <span className="block font-bold text-sm text-md-on-surface">
-                  {tags.length}
+                  {activeTagsCount}
                 </span>
                 Tags Created
               </div>
@@ -197,7 +218,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               placeholder="Your name or handle"
-              maxLength={30}
+              maxLength={50}
             />
           </div>
 
@@ -240,14 +261,13 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
             </label>
             <Input
               type="number"
-              min={15}
+              min={1}
               max={1440}
-              step={15}
-              value={editGoalMinutes}
-              onChange={(e) => setEditGoalMinutes(parseInt(e.target.value) || 120)}
+              value={editGoalInput}
+              onChange={(e) => setEditGoalInput(e.target.value)}
             />
             <span className="text-[11px] text-md-outline">
-              Goal: {(editGoalMinutes / 60).toFixed(1)} hours per day
+              Goal: {(previewGoalMinutes / 60).toFixed(1)} hours per day
             </span>
           </div>
 

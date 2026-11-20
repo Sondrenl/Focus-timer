@@ -70,7 +70,6 @@ export interface InterestingStat {
     | 'zap'
     | 'sparkles'
     | 'target'
-    | 'clock'
     | 'flame'
     | 'trending-up'
     | 'layers'
@@ -88,7 +87,6 @@ export interface GenerateInsightsParams {
   tags: Tag[];
   periodType: string;
   totalFocusSeconds: number;
-  totalCoffeeCups: number;
   allSessions?: CompletedSession[];
 }
 
@@ -103,7 +101,6 @@ export interface InsightContext {
   tags: Tag[];
   periodType: string;
   totalFocusSeconds: number;
-  totalCoffeeCups: number;
   allSessions?: CompletedSession[];
   tagMap: Map<string, Tag>;
   resolveValidTagId: (tagId: string | null | undefined) => string | null;

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
-import { useApp } from '../context/AppContext';
+import { useData } from '../context/DataContext';
+import { useAuthProfile } from '../context/AuthProfileContext';
 import { isProduction } from '../utils/environment';
 import { toDateKey } from '../utils/dates';
 import {
@@ -40,7 +41,8 @@ export type {
 };
 
 export function useStatistics() {
-  const { sessions, tags, coffeeCups, isEffectiveAuthenticated } = useApp();
+  const { sessions, tags, coffeeCups } = useData();
+  const { isEffectiveAuthenticated } = useAuthProfile();
 
   const [periodType, setPeriodType] = useState<TimePeriodType>('week');
   const [referenceDate, setReferenceDate] = useState<Date>(() => new Date());
@@ -130,6 +132,7 @@ export function useStatistics() {
       sanitizedCustomRange,
       todayKey,
       tags,
+      shouldExcludeSample,
     });
 
     const candidateInsights = generateAllPeriodInsights({
@@ -138,7 +141,6 @@ export function useStatistics() {
       tags,
       periodType,
       totalFocusSeconds,
-      totalCoffeeCups,
       allSessions: periodAllSessions,
     });
 

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -8,21 +8,78 @@ interface ModalProps {
   children: React.ReactNode;
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export const Modal: React.FC<ModalProps> = ({
   isOpen,
   onClose,
   title,
   children,
 }) => {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
+    if (!isOpen) return;
+
+    previouslyFocusedRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const dialogEl = dialogRef.current;
+    if (dialogEl && !dialogEl.contains(document.activeElement)) {
+      const focusable = Array.from(
+        dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+      ).filter((el) => el.getAttribute('aria-hidden') !== 'true');
+      (focusable[0] ?? dialogEl).focus();
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
-        onClose();
+      if (e.key === 'Escape') {
+        onCloseRef.current();
+        return;
+      }
+
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusable = Array.from(
+          dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+        ).filter((el) => el.getAttribute('aria-hidden') !== 'true');
+
+        if (focusable.length === 0) {
+          e.preventDefault();
+          dialogRef.current.focus();
+          return;
+        }
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+
+        if (e.shiftKey) {
+          if (active === first || !dialogRef.current.contains(active)) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !dialogRef.current.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      const prev = previouslyFocusedRef.current;
+      previouslyFocusedRef.current = null;
+      if (prev && prev.isConnected) {
+        prev.focus();
+      }
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -43,9 +100,16 @@ export const Modal: React.FC<ModalProps> = ({
       />
 
       {/* M3 Dialog Container - anchored near top on mobile so virtual keyboards never cover lower half, centered on desktop */}
-      <div className="relative w-full max-w-md bg-md-surface-container-high rounded-3xl p-4 md:p-6 shadow-elevation-3 z-10 max-h-[calc(100dvh-1.5rem)] md:max-h-none overflow-y-auto md:overflow-visible animate-in fade-in zoom-in-95 duration-150">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative w-full max-w-md bg-md-surface-container-high rounded-3xl p-4 md:p-6 shadow-elevation-3 z-10 max-h-[calc(100dvh-1.5rem)] md:max-h-none overflow-y-auto md:overflow-visible animate-in fade-in zoom-in-95 duration-150 focus:outline-none"
+      >
         <div className="flex items-center justify-between pb-2.5 md:pb-3 mb-3 border-b border-md-outline-variant/30">
-          <h2 className="text-lg md:text-xl font-bold text-md-on-surface">{title}</h2>
+          <h2 id={titleId} className="text-lg md:text-xl font-bold text-md-on-surface">{title}</h2>
           <button
             type="button"
             onClick={onClose}

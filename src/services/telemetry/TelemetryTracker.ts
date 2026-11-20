@@ -2,7 +2,6 @@ import {
   AttemptOutcome,
   MlEvent,
   MlTelemetryExport,
-  PauseInterval,
   SessionAttempt,
   SettingsSnapshot,
 } from '../../types/telemetry';
@@ -14,13 +13,21 @@ import {
   TelemetryRepository,
 } from '../repository/TelemetryRepository';
 import {
-  buildLocalTimeContext,
   buildSettingsSnapshot,
-  computeCoffeeContextAt,
-  computePriorAttemptContext,
-  getDeviceClass,
   getMinimumAbortTelemetrySeconds,
 } from '../../utils/telemetryContext';
+import {
+  buildBaseTelemetryEvent,
+  computeCoffeeLoggingMetrics,
+  createInitialAttemptDraft,
+  finalizeAttemptFromDraft,
+  finalizeStaleAttemptDraft,
+  generateTelemetryId,
+  pauseAttemptDraft,
+  resumeAttemptDraft,
+  synthesizeRemoteAttempt,
+  toNullableTelemetryId,
+} from './telemetryBuilders';
 
 export interface TelemetryCloudSink {
   upsertAttempt: (attempt: SessionAttempt) => Promise<unknown>;
@@ -28,23 +35,10 @@ export interface TelemetryCloudSink {
   discardAttempt?: (attemptId: string) => Promise<unknown>;
 }
 
-function generateId(prefix: string): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function toNullableId(id?: string | null): string | null {
-  return id && id.trim().length > 0 ? id : null;
-}
-
-const MAX_PAUSE_INTERVALS = 50;
-
 /**
  * Passive, cookie-free ML telemetry orchestrator.
- * Captures timer attempt lifecycles, pause dynamics, setting adjustments, and coffee context
- * in localStorage (via TelemetryRepository) and optional authenticated Convex sync.
+ * Coordinates attempt lifecycles, pause dynamics, setting adjustments, and coffee context
+ * across localStorage (via TelemetryRepository) and optional authenticated Convex sync.
  */
 export class TelemetryTracker {
   private repo: TelemetryRepository;
@@ -87,27 +81,6 @@ export class TelemetryTracker {
     this.cloudSink.recordEvents(events).catch((err) => {
       console.warn('[Telemetry] Failed to sync events to cloud:', err);
     });
-  }
-
-  private buildBaseEvent(
-    eventType: MlEvent['eventType'],
-    dateOrMs: Date | number = new Date(),
-    eventId?: string
-  ): MlEvent {
-    const t = buildLocalTimeContext(dateOrMs);
-    return {
-      eventId: eventId ?? generateId('evt'),
-      eventType,
-      timestamp: t.timestamp,
-      timestampMs: t.timestampMs,
-      utcOffsetMinutes: t.utcOffsetMinutes,
-      ianaTimezone: t.ianaTimezone,
-      localDate: t.localDate,
-      localHour: t.localHour,
-      localMinuteOfDay: t.localMinuteOfDay,
-      localDayOfWeek: t.localDayOfWeek,
-      deviceClass: getDeviceClass(),
-    };
   }
 
   /**
@@ -156,10 +129,8 @@ export class TelemetryTracker {
   }): Promise<void> {
     return this.enqueue(async () => {
       const nowMs = params.nowMs ?? Date.now();
-      const timeCtx = buildLocalTimeContext(nowMs);
       const existingDraft = await this.ensureDraftLoaded();
 
-      // If resuming an existing paused draft with the same attemptId, delegate to resume logic
       if (
         existingDraft &&
         existingDraft.attempt.attemptId === params.attemptId &&
@@ -169,7 +140,6 @@ export class TelemetryTracker {
         return;
       }
 
-      // Finalize any older orphaned draft with a different attemptId before computing prior context
       if (
         existingDraft &&
         existingDraft.attempt.status === 'in_progress' &&
@@ -178,79 +148,18 @@ export class TelemetryTracker {
         await this.finalizeDraftStaleInternal(existingDraft, nowMs);
       }
 
-      const [priorAttempts] = await Promise.all([this.repo.getAttempts()]);
-      const coffeeMetrics = computeCoffeeContextAt(
-        params.coffeeCups,
-        timeCtx.localDate,
-        nowMs
-      );
-      const priorMetrics = computePriorAttemptContext(
+      const priorAttempts = await this.repo.getAttempts();
+      const draft = createInitialAttemptDraft({
+        ...params,
         priorAttempts,
-        timeCtx.localDate,
-        nowMs
-      );
-
-      const cleanTagId = toNullableId(params.tagId);
-      const settingsSnap = buildSettingsSnapshot(params.settings);
-      const plannedSec = Math.max(1, Math.round(params.plannedDurationSeconds));
-
-      const attempt: SessionAttempt = {
-        attemptId: params.attemptId,
-        sessionType: params.sessionType,
-        status: 'in_progress',
-        wasStarted: true,
-        plannedDurationSeconds: plannedSec,
-        actualActiveSeconds: 0,
-        remainingSecondsAtEnd: plannedSec,
-        completionRatio: 0,
-        startedAt: timeCtx.timestamp,
-        endedAt: null,
-        utcOffsetMinutes: timeCtx.utcOffsetMinutes,
-        ianaTimezone: timeCtx.ianaTimezone,
-        localDate: timeCtx.localDate,
-        localHour: timeCtx.localHour,
-        localMinuteOfDay: timeCtx.localMinuteOfDay,
-        localDayOfWeek: timeCtx.localDayOfWeek,
-        cycleIndex: params.cycleIndex,
-        longBreakInterval: params.settings.longBreakInterval,
-        autoStarted: params.autoStarted,
-        initialTagId: cleanTagId,
-        tagId: cleanTagId,
-        tagChangedMidRun: false,
-        pauseCount: 0,
-        totalPausedSeconds: 0,
-        pauseIntervals: [],
-        timeSincePreviousAttemptSeconds: priorMetrics.timeSincePreviousAttemptSeconds,
-        previousAttemptType: priorMetrics.previousAttemptType,
-        previousAttemptOutcome: priorMetrics.previousAttemptOutcome,
-        workSessionsCompletedToday: priorMetrics.workSessionsCompletedToday,
-        workActiveSecondsToday: priorMetrics.workActiveSecondsToday,
-        skipsToday: priorMetrics.skipsToday,
-        coffeeCupsTodayAtStart: coffeeMetrics.coffeeCupsToday,
-        minutesSinceLastCoffeeAtStart: coffeeMetrics.minutesSinceLastCoffee,
-        coffeeLoggedDuringRun: 0,
-        dailyGoalMinutes: params.dailyGoalMinutes || 120,
-        settingsSnapshot: settingsSnap,
-        deviceClass: getDeviceClass(),
-        tabBackgroundedCount: 0,
-        completionLatencySeconds: null,
-        source: 'client',
-        updatedAtMs: nowMs,
-      };
-
-      const draft: ActiveAttemptDraft = {
-        attempt,
-        activeSegmentStartMs: nowMs,
-        accumulatedActiveMs: 0,
-        currentPauseStartMs: null,
-        targetEndTimeMs: params.targetEndTimeMs,
-      };
+        nowMs,
+      });
 
       this.activeDraft = draft;
       this.draftLoaded = true;
       await this.repo.saveActiveDraft(draft);
-      await this.repo.upsertAttempt(attempt);
-      this.pushAttemptToCloud(attempt);
+      await this.repo.upsertAttempt(draft.attempt);
+      this.pushAttemptToCloud(draft.attempt);
     });
   }
 
@@ -260,47 +169,14 @@ export class TelemetryTracker {
     targetEndTimeMs: number | null
   ): Promise<void> {
     if (draft.activeSegmentStartMs !== null && draft.currentPauseStartMs === null) {
-      return; // Already running
+      return;
     }
 
-    const timeCtx = buildLocalTimeContext(nowMs);
-    let pauseDurationSeconds = 0;
-    const updatedPauses = [...draft.attempt.pauseIntervals];
-
-    if (draft.currentPauseStartMs !== null) {
-      pauseDurationSeconds = Math.max(
-        0,
-        Math.round((nowMs - draft.currentPauseStartMs) / 1000)
-      );
-      if (updatedPauses.length > 0) {
-        const lastIdx = updatedPauses.length - 1;
-        updatedPauses[lastIdx] = {
-          ...updatedPauses[lastIdx],
-          resumedAt: timeCtx.timestamp,
-          durationSeconds: pauseDurationSeconds,
-        };
-      }
-    }
-
-    const updatedAttempt: SessionAttempt = {
-      ...draft.attempt,
-      totalPausedSeconds: draft.attempt.totalPausedSeconds + pauseDurationSeconds,
-      pauseIntervals: updatedPauses,
-      updatedAtMs: nowMs,
-    };
-
-    const nextDraft: ActiveAttemptDraft = {
-      attempt: updatedAttempt,
-      activeSegmentStartMs: nowMs,
-      accumulatedActiveMs: draft.accumulatedActiveMs,
-      currentPauseStartMs: null,
-      targetEndTimeMs,
-    };
-
+    const nextDraft = resumeAttemptDraft(draft, nowMs, targetEndTimeMs);
     this.activeDraft = nextDraft;
     await this.repo.saveActiveDraft(nextDraft);
-    await this.repo.upsertAttempt(updatedAttempt);
-    this.pushAttemptToCloud(updatedAttempt);
+    await this.repo.upsertAttempt(nextDraft.attempt);
+    this.pushAttemptToCloud(nextDraft.attempt);
   }
 
   async onSessionPaused(params: {
@@ -312,52 +188,18 @@ export class TelemetryTracker {
       const nowMs = params.nowMs ?? Date.now();
       const draft = await this.ensureDraftLoaded();
       if (!draft || draft.attempt.status !== 'in_progress') return;
-      if (draft.currentPauseStartMs !== null) return; // Already paused
+      if (draft.currentPauseStartMs !== null) return;
 
-      const timeCtx = buildLocalTimeContext(nowMs);
-      const segmentMs =
-        draft.activeSegmentStartMs !== null ? Math.max(0, nowMs - draft.activeSegmentStartMs) : 0;
-      const accumulatedActiveMs = draft.accumulatedActiveMs + segmentMs;
-      const elapsedActiveSeconds = Math.max(0, Math.round(accumulatedActiveMs / 1000));
-
-      const nextTagId =
-        params.tagId !== undefined ? toNullableId(params.tagId) : draft.attempt.tagId;
-      const tagChangedMidRun =
-        draft.attempt.tagChangedMidRun || nextTagId !== draft.attempt.initialTagId;
-
-      const pauseEntry: PauseInterval = {
-        pausedAt: timeCtx.timestamp,
-        elapsedActiveSecondsAtPause: elapsedActiveSeconds,
-        remainingSecondsAtPause: Math.max(0, Math.round(params.remainingSeconds)),
-      };
-
-      const nextPauses =
-        draft.attempt.pauseIntervals.length < MAX_PAUSE_INTERVALS
-          ? [...draft.attempt.pauseIntervals, pauseEntry]
-          : draft.attempt.pauseIntervals;
-
-      const updatedAttempt: SessionAttempt = {
-        ...draft.attempt,
-        tagId: nextTagId,
-        tagChangedMidRun,
-        actualActiveSeconds: elapsedActiveSeconds,
-        pauseCount: draft.attempt.pauseCount + 1,
-        pauseIntervals: nextPauses,
-        updatedAtMs: nowMs,
-      };
-
-      const nextDraft: ActiveAttemptDraft = {
-        attempt: updatedAttempt,
-        activeSegmentStartMs: null,
-        accumulatedActiveMs,
-        currentPauseStartMs: nowMs,
-        targetEndTimeMs: null,
-      };
+      const nextDraft = pauseAttemptDraft(draft, {
+        remainingSeconds: params.remainingSeconds,
+        tagId: params.tagId,
+        nowMs,
+      });
 
       this.activeDraft = nextDraft;
       await this.repo.saveActiveDraft(nextDraft);
-      await this.repo.upsertAttempt(updatedAttempt);
-      this.pushAttemptToCloud(updatedAttempt);
+      await this.repo.upsertAttempt(nextDraft.attempt);
+      this.pushAttemptToCloud(nextDraft.attempt);
     });
   }
 
@@ -391,16 +233,13 @@ export class TelemetryTracker {
     if (!params.wasStarted) return;
     return this.enqueue(async () => {
       const nowMs = params.nowMs ?? Date.now();
-      const timeCtx = buildLocalTimeContext(nowMs);
       const draft = await this.ensureDraftLoaded();
 
       const draftMatchesAttempt =
         Boolean(draft) &&
         draft!.attempt.status === 'in_progress' &&
-        params.wasStarted &&
         (!params.attemptId || draft!.attempt.attemptId === params.attemptId);
 
-      // Finalize any older orphaned local draft before finalizing a different attemptId
       if (
         draft &&
         draft.attempt.status === 'in_progress' &&
@@ -413,169 +252,37 @@ export class TelemetryTracker {
       const resolvedAttemptId =
         params.attemptId ||
         (draftMatchesAttempt ? draft!.attempt.attemptId : null) ||
-        generateId(params.wasStarted ? 'att' : 'idle');
+        generateTelemetryId('att');
 
-      const cleanTagId = toNullableId(params.tagId);
+      const cleanTagId = toNullableTelemetryId(params.tagId);
       const plannedSec = Math.max(1, Math.round(params.plannedDurationSeconds));
       const remainingSec = Math.max(0, Math.round(params.remainingSecondsAtEnd));
 
-      let finalizedAttempt: SessionAttempt;
-
-      if (draftMatchesAttempt && draft) {
-        const effectiveTargetEnd = params.targetEndTimeMs ?? draft.targetEndTimeMs;
-        const shouldCapAtTargetEnd =
-          (params.outcome === 'completed' || params.outcome === 'abandoned_stale') &&
-          effectiveTargetEnd !== null &&
-          effectiveTargetEnd < nowMs;
-
-        let accumulatedActiveMs = draft.accumulatedActiveMs;
-        if (draft.activeSegmentStartMs !== null) {
-          // Cap active segment end to targetEndTimeMs if completed or stale-abandoned after sleep
-          const effectiveEndMs = shouldCapAtTargetEnd ? effectiveTargetEnd! : nowMs;
-          accumulatedActiveMs += Math.max(0, effectiveEndMs - draft.activeSegmentStartMs);
-        }
-
-        let totalPausedSeconds = draft.attempt.totalPausedSeconds;
-        const updatedPauses = [...draft.attempt.pauseIntervals];
-        if (draft.currentPauseStartMs !== null) {
-          const extraPauseSec = Math.max(
-            0,
-            Math.round((nowMs - draft.currentPauseStartMs) / 1000)
-          );
-          totalPausedSeconds += extraPauseSec;
-          if (updatedPauses.length > 0) {
-            const lastIdx = updatedPauses.length - 1;
-            updatedPauses[lastIdx] = {
-              ...updatedPauses[lastIdx],
-              resumedAt: timeCtx.timestamp,
-              durationSeconds: extraPauseSec,
-            };
-          }
-        }
-
-        const wallActiveSec = Math.round(accumulatedActiveMs / 1000);
-        const nominalElapsedSec = Math.max(0, plannedSec - remainingSec);
-        const rawActiveSec = wallActiveSec > 0 ? wallActiveSec : nominalElapsedSec;
-        const actualActiveSeconds =
-          params.outcome === 'completed'
-            ? Math.max(1, wallActiveSec > 0 ? Math.min(wallActiveSec, plannedSec) : plannedSec)
-            : Math.max(0, Math.min(plannedSec, rawActiveSec));
-
-        const completionLatencySeconds =
-          params.outcome === 'completed' && effectiveTargetEnd !== null
-            ? Math.max(0, Math.round((nowMs - effectiveTargetEnd) / 1000))
-            : null;
-
-        const endedMs = shouldCapAtTargetEnd ? effectiveTargetEnd! : nowMs;
-        const remainingSecondsAtEnd =
-          params.outcome === 'completed'
-            ? 0
-            : params.outcome === 'abandoned_stale'
-            ? Math.max(0, plannedSec - actualActiveSeconds)
-            : remainingSec;
-
-        finalizedAttempt = {
-          ...draft.attempt,
-          status: params.outcome,
-          endedAt: new Date(endedMs).toISOString(),
-          tagId: cleanTagId,
-          tagChangedMidRun:
-            draft.attempt.tagChangedMidRun || cleanTagId !== draft.attempt.initialTagId,
-          actualActiveSeconds,
-          remainingSecondsAtEnd,
-          completionRatio: Number(
-            Math.min(1, actualActiveSeconds / plannedSec).toFixed(4)
-          ),
-          totalPausedSeconds,
-          pauseIntervals: updatedPauses,
-          completionLatencySeconds,
-          source: 'client',
-          updatedAtMs: nowMs,
-        };
-      } else {
-        // Synthesize attempt for runs originated on another tab/device
-        const effectiveTargetEnd = params.targetEndTimeMs ?? null;
-        const shouldCapAtTargetEnd =
-          (params.outcome === 'completed' || params.outcome === 'abandoned_stale') &&
-          effectiveTargetEnd !== null &&
-          effectiveTargetEnd < nowMs;
-        const endedMs = shouldCapAtTargetEnd ? effectiveTargetEnd! : nowMs;
-        const endedCtx = buildLocalTimeContext(endedMs);
-
-        const priorAttempts = await this.repo.getAttempts();
-        const coffeeMetrics = computeCoffeeContextAt(
-          params.coffeeCups,
-          endedCtx.localDate,
-          endedMs
-        );
-        const priorMetrics = computePriorAttemptContext(
-          priorAttempts,
-          endedCtx.localDate,
-          endedMs
-        );
-        const actualActiveSeconds = !params.wasStarted
-          ? 0
-          : params.outcome === 'completed'
-          ? plannedSec
-          : Math.max(0, Math.min(plannedSec, plannedSec - remainingSec));
-        const remainingSecondsAtEnd =
-          params.outcome === 'completed'
-            ? 0
-            : params.outcome === 'abandoned_stale'
-            ? Math.max(0, plannedSec - actualActiveSeconds)
-            : remainingSec;
-
-        finalizedAttempt = {
-          attemptId: resolvedAttemptId,
-          sessionType: params.sessionType,
-          status: params.outcome,
-          wasStarted: params.wasStarted,
-          plannedDurationSeconds: plannedSec,
-          actualActiveSeconds,
-          remainingSecondsAtEnd,
-          completionRatio: Number(
-            Math.min(1, actualActiveSeconds / plannedSec).toFixed(4)
-          ),
-          startedAt: params.wasStarted
-            ? new Date(endedMs - actualActiveSeconds * 1000).toISOString()
-            : null,
-          endedAt: endedCtx.timestamp,
-          utcOffsetMinutes: endedCtx.utcOffsetMinutes,
-          ianaTimezone: endedCtx.ianaTimezone,
-          localDate: endedCtx.localDate,
-          localHour: endedCtx.localHour,
-          localMinuteOfDay: endedCtx.localMinuteOfDay,
-          localDayOfWeek: endedCtx.localDayOfWeek,
-          cycleIndex: params.cycleIndex,
-          longBreakInterval: params.settings.longBreakInterval,
-          autoStarted: false,
-          initialTagId: cleanTagId,
-          tagId: cleanTagId,
-          tagChangedMidRun: false,
-          pauseCount: 0,
-          totalPausedSeconds: 0,
-          pauseIntervals: [],
-          timeSincePreviousAttemptSeconds: priorMetrics.timeSincePreviousAttemptSeconds,
-          previousAttemptType: priorMetrics.previousAttemptType,
-          previousAttemptOutcome: priorMetrics.previousAttemptOutcome,
-          workSessionsCompletedToday: priorMetrics.workSessionsCompletedToday,
-          workActiveSecondsToday: priorMetrics.workActiveSecondsToday,
-          skipsToday: priorMetrics.skipsToday,
-          coffeeCupsTodayAtStart: coffeeMetrics.coffeeCupsToday,
-          minutesSinceLastCoffeeAtStart: coffeeMetrics.minutesSinceLastCoffee,
-          coffeeLoggedDuringRun: 0,
-          dailyGoalMinutes: params.dailyGoalMinutes || 120,
-          settingsSnapshot: buildSettingsSnapshot(params.settings),
-          deviceClass: getDeviceClass(),
-          tabBackgroundedCount: 0,
-          completionLatencySeconds:
-            params.outcome === 'completed' && effectiveTargetEnd !== null
-              ? Math.max(0, Math.round((nowMs - effectiveTargetEnd) / 1000))
-              : null,
-          source: 'client',
-          updatedAtMs: nowMs,
-        };
-      }
+      const finalizedAttempt =
+        draftMatchesAttempt && draft
+          ? finalizeAttemptFromDraft(draft, {
+              outcome: params.outcome,
+              plannedSec,
+              remainingSec,
+              cleanTagId,
+              targetEndTimeMs: params.targetEndTimeMs,
+              nowMs,
+            })
+          : synthesizeRemoteAttempt({
+              resolvedAttemptId,
+              outcome: params.outcome,
+              sessionType: params.sessionType,
+              plannedSec,
+              remainingSec,
+              cycleIndex: params.cycleIndex,
+              cleanTagId,
+              settings: params.settings,
+              dailyGoalMinutes: params.dailyGoalMinutes,
+              coffeeCups: params.coffeeCups,
+              priorAttempts: await this.repo.getAttempts(),
+              targetEndTimeMs: params.targetEndTimeMs,
+              nowMs,
+            });
 
       const isAbortOutcome =
         params.outcome === 'skipped' ||
@@ -609,7 +316,7 @@ export class TelemetryTracker {
     return this.enqueue(async () => {
       const draft = await this.ensureDraftLoaded();
       if (!draft || draft.attempt.status !== 'in_progress') return;
-      if (draft.activeSegmentStartMs === null) return; // Not actively running
+      if (draft.activeSegmentStartMs === null) return;
 
       const nextDraft: ActiveAttemptDraft = {
         ...draft,
@@ -633,8 +340,8 @@ export class TelemetryTracker {
     sessionType: SessionType;
     attemptId?: string | null;
   }): Promise<void> {
-    const prevClean = toNullableId(params.previousTagId);
-    const nextClean = toNullableId(params.nextTagId);
+    const prevClean = toNullableTelemetryId(params.previousTagId);
+    const nextClean = toNullableTelemetryId(params.nextTagId);
     if (prevClean === nextClean) return;
 
     return this.enqueue(async () => {
@@ -661,7 +368,7 @@ export class TelemetryTracker {
       }
 
       const evt: MlEvent = {
-        ...this.buildBaseEvent('tag_changed', nowMs),
+        ...buildBaseTelemetryEvent('tag_changed', nowMs),
         attemptId: resolvedAttemptId,
         sessionType: params.sessionType,
         activeTimerStatus: params.timerStatus,
@@ -710,45 +417,21 @@ export class TelemetryTracker {
         this.pushAttemptToCloud(nextDraft.attempt);
       }
 
-      const cupsOnDate = params.allCupsAfterAdd.filter((c) => c.date === params.cup.date);
-      const cupIndexToday = cupsOnDate.length;
-
-      let prevCupMs: number | null = null;
-      for (const c of params.allCupsAfterAdd) {
-        if (c.id === params.cup.id) continue;
-        const ms = Date.parse(c.createdAt);
-        if (!Number.isNaN(ms) && ms <= nowMs) {
-          if (prevCupMs === null || ms > prevCupMs) {
-            prevCupMs = ms;
-          }
-        }
-      }
-      const minutesSincePreviousCup =
-        prevCupMs !== null ? Math.max(0, Math.round((nowMs - prevCupMs) / 60000)) : null;
-
       const attempts = await this.repo.getAttempts();
-      let lastWorkEndMs: number | null = null;
-      for (const att of attempts) {
-        if (att.sessionType === 'WORK' && att.status !== 'in_progress' && att.endedAt) {
-          const ms = Date.parse(att.endedAt);
-          if (!Number.isNaN(ms) && ms <= nowMs) {
-            if (lastWorkEndMs === null || ms > lastWorkEndMs) {
-              lastWorkEndMs = ms;
-            }
-          }
-        }
-      }
-      const minutesSinceLastWorkEnd =
-        lastWorkEndMs !== null
-          ? Math.max(0, Math.round((nowMs - lastWorkEndMs) / 60000))
-          : null;
+      const { cupIndexToday, minutesSincePreviousCup, minutesSinceLastWorkEnd } =
+        computeCoffeeLoggingMetrics({
+          cup: params.cup,
+          allCupsAfterAdd: params.allCupsAfterAdd,
+          attempts,
+          nowMs,
+        });
 
       const evt: MlEvent = {
-        ...this.buildBaseEvent('coffee_logged', nowMs),
+        ...buildBaseTelemetryEvent('coffee_logged', nowMs),
         attemptId: activeAttemptId,
         sessionType: params.activeSessionType,
         activeTimerStatus: params.timerStatus,
-        tagId: toNullableId(params.cup.tagId),
+        tagId: toNullableTelemetryId(params.cup.tagId),
         cupId: params.cup.id,
         cupDate: params.cup.date,
         cupIndexToday,
@@ -758,6 +441,24 @@ export class TelemetryTracker {
       };
       await this.repo.recordEvent(evt);
       this.pushEventsToCloud([evt]);
+    });
+  }
+
+  async reconcileCoffeeCupId(localCupId: string, serverCupId: string): Promise<void> {
+    if (!localCupId || !serverCupId || localCupId === serverCupId) return;
+    return this.enqueue(async () => {
+      const events = await this.repo.getEvents();
+      let changed = false;
+      const updated = events.map((evt) => {
+        if (evt.eventType === 'coffee_logged' && evt.cupId === localCupId) {
+          changed = true;
+          return { ...evt, cupId: serverCupId };
+        }
+        return evt;
+      });
+      if (changed) {
+        await this.repo.saveEvents(updated);
+      }
     });
   }
 
@@ -804,8 +505,8 @@ export class TelemetryTracker {
       }
 
       const evt: MlEvent = {
-        ...this.buildBaseEvent('coffee_removed', nowMs),
-        tagId: toNullableId(cup.tagId),
+        ...buildBaseTelemetryEvent('coffee_removed', nowMs),
+        tagId: toNullableTelemetryId(cup.tagId),
         cupId: cup.id,
         cupDate: cup.date,
         source: 'client',
@@ -835,7 +536,7 @@ export class TelemetryTracker {
     return this.enqueue(async () => {
       const nowMs = Date.now();
       const evt: MlEvent = {
-        ...this.buildBaseEvent('settings_changed', nowMs),
+        ...buildBaseTelemetryEvent('settings_changed', nowMs),
         changedFields,
         previousSettings: prevSnap,
         newSettings: nextSnap,
@@ -854,7 +555,7 @@ export class TelemetryTracker {
     return this.enqueue(async () => {
       const nowMs = Date.now();
       const evt: MlEvent = {
-        ...this.buildBaseEvent('daily_goal_changed', nowMs),
+        ...buildBaseTelemetryEvent('daily_goal_changed', nowMs),
         previousDailyGoalMinutes: params.previousGoalMinutes,
         newDailyGoalMinutes: params.newGoalMinutes,
         source: 'client',
@@ -877,55 +578,7 @@ export class TelemetryTracker {
     draft: ActiveAttemptDraft,
     nowMs: number
   ): Promise<void> {
-    const timeCtx = buildLocalTimeContext(nowMs);
-    let accumulatedActiveMs = draft.accumulatedActiveMs;
-    if (draft.activeSegmentStartMs !== null) {
-      const capMs =
-        draft.targetEndTimeMs !== null && draft.targetEndTimeMs < nowMs
-          ? draft.targetEndTimeMs
-          : nowMs;
-      accumulatedActiveMs += Math.max(0, capMs - draft.activeSegmentStartMs);
-    }
-
-    let totalPausedSeconds = draft.attempt.totalPausedSeconds;
-    const updatedPauses = [...draft.attempt.pauseIntervals];
-    if (draft.currentPauseStartMs !== null) {
-      const extraPauseSec = Math.max(
-        0,
-        Math.round((nowMs - draft.currentPauseStartMs) / 1000)
-      );
-      totalPausedSeconds += extraPauseSec;
-      if (updatedPauses.length > 0) {
-        const lastIdx = updatedPauses.length - 1;
-        updatedPauses[lastIdx] = {
-          ...updatedPauses[lastIdx],
-          resumedAt: timeCtx.timestamp,
-          durationSeconds: extraPauseSec,
-        };
-      }
-    }
-
-    const plannedSec = Math.max(1, draft.attempt.plannedDurationSeconds);
-    const wallActiveSec = Math.max(0, Math.min(plannedSec, Math.round(accumulatedActiveMs / 1000)));
-    const remainingSecondsAtEnd = Math.max(0, plannedSec - wallActiveSec);
-    const endedMs =
-      draft.targetEndTimeMs !== null && draft.targetEndTimeMs < nowMs
-        ? draft.targetEndTimeMs
-        : nowMs;
-
-    const finalizedAttempt: SessionAttempt = {
-      ...draft.attempt,
-      status: 'abandoned_stale',
-      endedAt: new Date(endedMs).toISOString(),
-      actualActiveSeconds: wallActiveSec,
-      remainingSecondsAtEnd,
-      completionRatio: Number(Math.min(1, wallActiveSec / plannedSec).toFixed(4)),
-      totalPausedSeconds,
-      pauseIntervals: updatedPauses,
-      source: 'client',
-      updatedAtMs: nowMs,
-    };
-
+    const finalizedAttempt = finalizeStaleAttemptDraft(draft, nowMs);
     this.activeDraft = null;
     this.draftLoaded = true;
     await this.repo.saveActiveDraft(null);

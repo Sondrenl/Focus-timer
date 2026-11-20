@@ -31,4 +31,7 @@ export interface PeerPresence {
   desktopVisible: boolean;
   mobileActive: boolean;
   mobileVisible: boolean;
+  lastSeenMs?: number;
+  desktopLastSeenMs?: number;
+  mobileLastSeenMs?: number;
 }

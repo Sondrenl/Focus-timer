@@ -48,7 +48,9 @@ export function getLastSessionCompletedAt(
 export function getLastSessionCompletedAtFromStorage(): number | null {
   if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
-    const raw = window.localStorage.getItem('sessions_v1');
+    const raw =
+      window.localStorage.getItem('pomodor:sessions_v1') ??
+      window.localStorage.getItem('sessions_v1');
     if (!raw) return null;
     const sessions = JSON.parse(raw);
     return getLastSessionCompletedAt(sessions);

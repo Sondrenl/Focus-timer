@@ -163,7 +163,12 @@ describe("Security Hardening & Input Validation", () => {
       asUser.mutation(api.users.updateSettings, {
         workDurationMinutes: 500,
       })
-    ).rejects.toThrow("workDurationMinutes must be between 1 and 360.");
+    ).rejects.toThrow("workDurationMinutes must be between 0.01 and 360.");
+
+    // Fractional sub-minute duration (0.5 min = 30s) is allowed consistently with the UI
+    await asUser.mutation(api.users.updateSettings, {
+      workDurationMinutes: 0.5,
+    });
 
     await expect(
       asUser.mutation(api.users.updateSettings, {
@@ -268,6 +273,53 @@ describe("Security Hardening & Input Validation", () => {
     // Device 1 should have been pruned
     expect(subs.some((s) => s.deviceId === "device-1")).toBe(false);
     expect(subs.some((s) => s.deviceId === "device-11")).toBe(true);
+  });
+
+  it("removes another user's push subscription when a different account registers the same endpoint", async () => {
+    const t = convexTest(schema, modules);
+    const { userId: userAId, asUser: asUserA } = await createAuthenticatedTestUser(t);
+
+    const userBId = await t.run(async (ctx) => {
+      return await ctx.db.insert("users", {
+        tokenIdentifier: "test-provider|user-b",
+        email: "user-b@example.com",
+        displayName: "User B",
+        dailyGoalMinutes: 120,
+      });
+    });
+    const asUserB = t.withIdentity({
+      tokenIdentifier: "test-provider|user-b",
+      subject: "user-b",
+      email: "user-b@example.com",
+      emailVerified: true,
+    });
+
+    const sharedEndpoint = "https://fcm.googleapis.com/fcm/send/shared-browser-endpoint";
+
+    await asUserA.mutation(api.push.register, {
+      deviceId: "shared-browser-device",
+      endpoint: sharedEndpoint,
+      p256dh: "BM6hZ/VALID=",
+      auth: "AUTHKEY==",
+    });
+
+    await asUserB.mutation(api.push.register, {
+      deviceId: "shared-browser-device",
+      endpoint: sharedEndpoint,
+      p256dh: "BM6hZ/VALID=",
+      auth: "AUTHKEY==",
+    });
+
+    const subsForEndpoint = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_endpoint", (q) => q.eq("endpoint", sharedEndpoint))
+        .collect();
+    });
+
+    expect(subsForEndpoint).toHaveLength(1);
+    expect(subsForEndpoint[0].userId).toBe(userBId);
+    expect(subsForEndpoint[0].userId).not.toBe(userAId);
   });
 
   it("rejects oversized backup imports", async () => {

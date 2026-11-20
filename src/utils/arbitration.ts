@@ -1,12 +1,6 @@
-import { SessionType } from '../types/timer';
+import { PeerPresence, SessionType } from '../types/timer';
 
-export interface PeerPresenceState {
-  desktopActive: boolean;
-  desktopVisible: boolean;
-  mobileActive: boolean;
-  mobileVisible: boolean;
-  lastSeenMs?: number;
-}
+export type PeerPresenceState = PeerPresence;
 
 export const PRESENCE_TTL_MS = 90_000; // 90 seconds freshness TTL
 
@@ -27,13 +21,15 @@ export function evaluateDeviceAlert({
   type: SessionType;
   now?: number;
 }): boolean {
-  // If peer presence is stale (older than 90s), treat peer as inactive/offline
-  const isPeerFresh = typeof peer.lastSeenMs === 'number'
-    ? now - peer.lastSeenMs < PRESENCE_TTL_MS
-    : true; // Backward compatibility if lastSeenMs is not provided
+  // Prefer device-specific desktopLastSeenMs when available so a mobile heartbeat
+  // cannot artificially refresh a stale desktop presence (and vice versa).
+  const desktopSeenMs =
+    typeof peer.desktopLastSeenMs === 'number' ? peer.desktopLastSeenMs : peer.lastSeenMs;
+  const isDesktopFresh =
+    typeof desktopSeenMs === 'number' ? now - desktopSeenMs < PRESENCE_TTL_MS : true;
 
-  const peerDesktopActive = isPeerFresh && peer.desktopActive;
-  const peerDesktopVisible = isPeerFresh && peer.desktopVisible;
+  const peerDesktopActive = isDesktopFresh && peer.desktopActive;
+  const peerDesktopVisible = isDesktopFresh && peer.desktopVisible;
 
   if (isMobile) {
     if (isVisible) return true;

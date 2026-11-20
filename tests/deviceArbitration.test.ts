@@ -116,5 +116,27 @@ describe('Multi-Device Alert Arbitration', () => {
       // Should NOT be suppressed because desktop presence has expired!
       expect(mobileAlerts).toBe(true);
     });
+
+    it('does NOT allow a fresh mobileLastSeenMs to keep a stale desktopLastSeenMs (>90s) alive', () => {
+      const now = 1_000_000;
+      const staleDesktopWithFreshMobile: PeerPresenceState = {
+        desktopActive: true,
+        desktopVisible: true,
+        mobileActive: true,
+        mobileVisible: false,
+        desktopLastSeenMs: now - 120_000, // Desktop went dark 2 minutes ago
+        mobileLastSeenMs: now - 5_000, // Mobile sent heartbeat 5s ago
+        lastSeenMs: now - 5_000,
+      };
+
+      const mobileAlerts = evaluateDeviceAlert({
+        isMobile: true,
+        isVisible: false,
+        peer: staleDesktopWithFreshMobile,
+        type: 'WORK',
+        now,
+      });
+      expect(mobileAlerts).toBe(true);
+    });
   });
 });

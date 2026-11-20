@@ -84,6 +84,8 @@ export default defineSchema({
         mobileActive: v.boolean(),
         mobileVisible: v.boolean(),
         lastSeenMs: v.number(),
+        desktopLastSeenMs: v.optional(v.number()),
+        mobileLastSeenMs: v.optional(v.number()),
       })
     ),
   }).index("by_user", ["userId"]),
@@ -126,7 +128,9 @@ export default defineSchema({
     userAgent: v.optional(v.string()),
     isMobile: v.optional(v.boolean()),
     updatedAt: v.string(),
-  }).index("by_user_device", ["userId", "deviceId"]),
+  })
+    .index("by_user_device", ["userId", "deviceId"])
+    .index("by_endpoint", ["endpoint"]),
 
   // 6. Passive ML Telemetry: Run-level session attempts
   session_attempts: defineTable({

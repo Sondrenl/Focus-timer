@@ -257,7 +257,11 @@ export class TelemetryRepository implements ITelemetryRepository {
       if (!draft) {
         this.storage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
       } else {
-        this.storage.setItem(ACTIVE_DRAFT_STORAGE_KEY, draft);
+        try {
+          this.storage.setItem(ACTIVE_DRAFT_STORAGE_KEY, draft);
+        } catch {
+          // Ignore storage quota errors so telemetry queue continues safely
+        }
       }
     });
   }
@@ -327,23 +331,27 @@ export class TelemetryRepository implements ITelemetryRepository {
 
       const draft = await this.getActiveDraft();
       if (draft && (draft.attempt.tagId === tagId || draft.attempt.initialTagId === tagId)) {
-        this.storage.setItem(ACTIVE_DRAFT_STORAGE_KEY, {
-          ...draft,
-          attempt: {
-            ...draft.attempt,
-            tagId: draft.attempt.tagId === tagId ? null : draft.attempt.tagId,
-            initialTagId:
-              draft.attempt.initialTagId === tagId ? null : draft.attempt.initialTagId,
-          },
-        });
+        try {
+          this.storage.setItem(ACTIVE_DRAFT_STORAGE_KEY, {
+            ...draft,
+            attempt: {
+              ...draft.attempt,
+              tagId: draft.attempt.tagId === tagId ? null : draft.attempt.tagId,
+              initialTagId:
+                draft.attempt.initialTagId === tagId ? null : draft.attempt.initialTagId,
+            },
+          });
+        } catch {
+          // Ignore storage quota errors
+        }
       }
     });
   }
 
   async clear(): Promise<void> {
     return this.enqueue(async () => {
-      this.storage.setItem(ATTEMPTS_STORAGE_KEY, []);
-      this.storage.setItem(EVENTS_STORAGE_KEY, []);
+      this.safeSetArray(ATTEMPTS_STORAGE_KEY, [], MAX_LOCAL_ATTEMPTS);
+      this.safeSetArray(EVENTS_STORAGE_KEY, [], MAX_LOCAL_EVENTS);
       this.storage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
     });
   }

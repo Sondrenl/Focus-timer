@@ -16,6 +16,7 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeDotRef = useRef<HTMLDivElement>(null);
+  const scrollCueTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -45,8 +46,21 @@ export const CycleIndicator: React.FC<CycleIndicatorProps> = ({
         block: 'nearest',
       });
       // Allow scroll animation to finish before updating indicators
-      setTimeout(updateScrollCues, 350);
+      if (scrollCueTimeoutRef.current !== null) {
+        clearTimeout(scrollCueTimeoutRef.current);
+      }
+      scrollCueTimeoutRef.current = setTimeout(() => {
+        scrollCueTimeoutRef.current = null;
+        updateScrollCues();
+      }, 350);
     }
+
+    return () => {
+      if (scrollCueTimeoutRef.current !== null) {
+        clearTimeout(scrollCueTimeoutRef.current);
+        scrollCueTimeoutRef.current = null;
+      }
+    };
   }, [currentCycle, sessionType]);
 
   // Scroll container smoothly by an offset

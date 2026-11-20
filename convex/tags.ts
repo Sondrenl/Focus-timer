@@ -1,10 +1,25 @@
 import { v } from "convex/values";
-import { mutation } from "./_generated/server";
+import { mutation, internalMutation, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { requireUser, DEFAULT_TAGS } from "./authHelper";
+import { assertValidTagId } from "./timerHelpers";
 
 const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 export const MAX_TAGS_PER_USER = 100;
 export const MAX_TAG_NAME_LENGTH = 50;
+
+// Keep per-transaction reads and writes safely under Convex limits (16,384 reads / 4,096 writes)
+const TAG_CLEANUP_BATCH_SIZE = 500;
+const RESET_CONTINUATION_PAGE_SIZE = 1000;
+const DEFAULT_TAG_ID_SET = new Set(DEFAULT_TAGS.map((t) => t.id));
+
+const resetCleanupStageValidator = v.union(
+  v.literal("sessions"),
+  v.literal("coffee_cups"),
+  v.literal("session_attempts"),
+  v.literal("ml_events")
+);
 
 export function sanitizeTagColor(color: string): string {
   const trimmed = color.trim();
@@ -22,6 +37,86 @@ export function validateTagName(name: string): string {
   return trimmed;
 }
 
+async function clearRemovedTagBatch(
+  ctx: MutationCtx,
+  params: {
+    userId: Id<"users">;
+    tagId: string;
+    mlEventsCursor: string | null;
+    mlEventsDone: boolean;
+  }
+): Promise<{ hasMore: boolean; nextMlEventsCursor: string | null; mlEventsDone: boolean }> {
+  const sessionsWithTag = await ctx.db
+    .query("sessions")
+    .withIndex("by_user_tag", (q) => q.eq("userId", params.userId).eq("tagId", params.tagId))
+    .take(TAG_CLEANUP_BATCH_SIZE);
+  for (const s of sessionsWithTag) {
+    await ctx.db.patch(s._id, { tagId: undefined });
+  }
+
+  const cupsWithTag = await ctx.db
+    .query("coffee_cups")
+    .withIndex("by_user_tag", (q) => q.eq("userId", params.userId).eq("tagId", params.tagId))
+    .take(TAG_CLEANUP_BATCH_SIZE);
+  for (const c of cupsWithTag) {
+    await ctx.db.patch(c._id, { tagId: undefined });
+  }
+
+  const attemptsWithTag = await ctx.db
+    .query("session_attempts")
+    .withIndex("by_user_tag", (q) => q.eq("userId", params.userId).eq("tagId", params.tagId))
+    .take(TAG_CLEANUP_BATCH_SIZE);
+  for (const a of attemptsWithTag) {
+    await ctx.db.patch(a._id, { tagId: undefined });
+  }
+
+  const attemptsWithInitialTag = await ctx.db
+    .query("session_attempts")
+    .withIndex("by_user_initial_tag", (q) =>
+      q.eq("userId", params.userId).eq("initialTagId", params.tagId)
+    )
+    .take(TAG_CLEANUP_BATCH_SIZE);
+  for (const a of attemptsWithInitialTag) {
+    await ctx.db.patch(a._id, { initialTagId: undefined });
+  }
+
+  let mlEventsDone = params.mlEventsDone;
+  let nextMlEventsCursor: string | null = params.mlEventsCursor;
+
+  if (!mlEventsDone) {
+    const mlEventsPage = await ctx.db
+      .query("ml_events")
+      .withIndex("by_user_timestamp", (q) => q.eq("userId", params.userId))
+      .order("desc")
+      .paginate({ numItems: TAG_CLEANUP_BATCH_SIZE, cursor: params.mlEventsCursor });
+
+    for (const evt of mlEventsPage.page) {
+      const clearTag = evt.tagId === params.tagId;
+      const clearFrom = evt.fromTagId === params.tagId;
+      const clearTo = evt.toTagId === params.tagId;
+      if (clearTag || clearFrom || clearTo) {
+        await ctx.db.patch(evt._id, {
+          ...(clearTag ? { tagId: undefined } : {}),
+          ...(clearFrom ? { fromTagId: undefined } : {}),
+          ...(clearTo ? { toTagId: undefined } : {}),
+        });
+      }
+    }
+
+    mlEventsDone = mlEventsPage.isDone;
+    nextMlEventsCursor = mlEventsPage.isDone ? null : mlEventsPage.continueCursor;
+  }
+
+  const hasMore =
+    sessionsWithTag.length === TAG_CLEANUP_BATCH_SIZE ||
+    cupsWithTag.length === TAG_CLEANUP_BATCH_SIZE ||
+    attemptsWithTag.length === TAG_CLEANUP_BATCH_SIZE ||
+    attemptsWithInitialTag.length === TAG_CLEANUP_BATCH_SIZE ||
+    !mlEventsDone;
+
+  return { hasMore, nextMlEventsCursor, mlEventsDone };
+}
+
 export const create = mutation({
   args: {
     id: v.optional(v.string()),
@@ -30,8 +125,8 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
-    if (args.id !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
-      throw new Error("Invalid tag id format.");
+    if (args.id !== undefined) {
+      assertValidTagId(args.id, "Invalid tag id format.", true);
     }
     const now = new Date().toISOString();
     const sanitizedName = validateTagName(args.name);
@@ -70,9 +165,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
-      throw new Error("Invalid tag id format.");
-    }
+    assertValidTagId(args.id, "Invalid tag id format.", true);
     const now = new Date().toISOString();
     const currentTags = user.tags ?? DEFAULT_TAGS;
 
@@ -120,9 +213,7 @@ export const remove = mutation({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
-      throw new Error("Invalid tag id format.");
-    }
+    assertValidTagId(args.id, "Invalid tag id format.", true);
     const currentTags = user.tags ?? DEFAULT_TAGS;
     const filtered = currentTags.filter((t) => t.id !== args.id);
 
@@ -130,23 +221,6 @@ export const remove = mutation({
       await ctx.db.patch(user._id, {
         tags: filtered,
       });
-    }
-
-    // Clear orphaned tagId references in sessions, coffee_cups, active_timers, and session_attempts using indexes
-    const sessionsWithTag = await ctx.db
-      .query("sessions")
-      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
-      .take(4096);
-    for (const s of sessionsWithTag) {
-      await ctx.db.patch(s._id, { tagId: undefined });
-    }
-
-    const cupsWithTag = await ctx.db
-      .query("coffee_cups")
-      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
-      .take(4096);
-    for (const c of cupsWithTag) {
-      await ctx.db.patch(c._id, { tagId: undefined });
     }
 
     const activeTimer = await ctx.db
@@ -157,25 +231,53 @@ export const remove = mutation({
       await ctx.db.patch(activeTimer._id, { tagId: undefined });
     }
 
-    const attemptsWithTag = await ctx.db
-      .query("session_attempts")
-      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
-      .take(4096);
-    for (const a of attemptsWithTag) {
-      await ctx.db.patch(a._id, { tagId: undefined });
-    }
+    // Clear orphaned tagId references in bounded batches and schedule continuation if needed
+    const batchResult = await clearRemovedTagBatch(ctx, {
+      userId: user._id,
+      tagId: args.id,
+      mlEventsCursor: null,
+      mlEventsDone: false,
+    });
 
-    const attemptsWithInitialTag = await ctx.db
-      .query("session_attempts")
-      .withIndex("by_user_initial_tag", (q) =>
-        q.eq("userId", user._id).eq("initialTagId", args.id)
-      )
-      .take(4096);
-    for (const a of attemptsWithInitialTag) {
-      await ctx.db.patch(a._id, { initialTagId: undefined });
+    if (batchResult.hasMore) {
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupRemovedTagBatch, {
+        userId: user._id,
+        tagId: args.id,
+        mlEventsCursor: batchResult.nextMlEventsCursor,
+        mlEventsDone: batchResult.mlEventsDone,
+      });
     }
 
     return true;
+  },
+});
+
+export const cleanupRemovedTagBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    tagId: v.string(),
+    mlEventsCursor: v.union(v.string(), v.null()),
+    mlEventsDone: v.boolean(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const batchResult = await clearRemovedTagBatch(ctx, {
+      userId: args.userId,
+      tagId: args.tagId,
+      mlEventsCursor: args.mlEventsCursor,
+      mlEventsDone: args.mlEventsDone,
+    });
+
+    if (batchResult.hasMore) {
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupRemovedTagBatch, {
+        userId: args.userId,
+        tagId: args.tagId,
+        mlEventsCursor: batchResult.nextMlEventsCursor,
+        mlEventsDone: batchResult.mlEventsDone,
+      });
+    }
+
+    return null;
   },
 });
 
@@ -193,7 +295,6 @@ export const resetToDefaults = mutation({
   ),
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const defaultTagIds = new Set(DEFAULT_TAGS.map((t) => t.id));
 
     await ctx.db.patch(user._id, {
       tags: DEFAULT_TAGS,
@@ -202,9 +303,10 @@ export const resetToDefaults = mutation({
     const userSessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .take(4096);
+      .order("desc")
+      .take(TAG_CLEANUP_BATCH_SIZE);
     for (const s of userSessions) {
-      if (s.tagId && !defaultTagIds.has(s.tagId)) {
+      if (s.tagId && !DEFAULT_TAG_ID_SET.has(s.tagId)) {
         await ctx.db.patch(s._id, { tagId: undefined });
       }
     }
@@ -212,9 +314,10 @@ export const resetToDefaults = mutation({
     const userCups = await ctx.db
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-      .take(4096);
+      .order("desc")
+      .take(TAG_CLEANUP_BATCH_SIZE);
     for (const c of userCups) {
-      if (c.tagId && !defaultTagIds.has(c.tagId)) {
+      if (c.tagId && !DEFAULT_TAG_ID_SET.has(c.tagId)) {
         await ctx.db.patch(c._id, { tagId: undefined });
       }
     }
@@ -223,17 +326,18 @@ export const resetToDefaults = mutation({
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .unique();
-    if (activeTimer && activeTimer.tagId && !defaultTagIds.has(activeTimer.tagId)) {
+    if (activeTimer && activeTimer.tagId && !DEFAULT_TAG_ID_SET.has(activeTimer.tagId)) {
       await ctx.db.patch(activeTimer._id, { tagId: undefined });
     }
 
     const attempts = await ctx.db
       .query("session_attempts")
       .withIndex("by_user_ended", (q) => q.eq("userId", user._id))
-      .take(4096);
+      .order("desc")
+      .take(TAG_CLEANUP_BATCH_SIZE);
     for (const a of attempts) {
-      const clearTag = Boolean(a.tagId && !defaultTagIds.has(a.tagId));
-      const clearInitialTag = Boolean(a.initialTagId && !defaultTagIds.has(a.initialTagId));
+      const clearTag = Boolean(a.tagId && !DEFAULT_TAG_ID_SET.has(a.tagId));
+      const clearInitialTag = Boolean(a.initialTagId && !DEFAULT_TAG_ID_SET.has(a.initialTagId));
       if (clearTag || clearInitialTag) {
         await ctx.db.patch(a._id, {
           ...(clearTag ? { tagId: undefined } : {}),
@@ -242,6 +346,178 @@ export const resetToDefaults = mutation({
       }
     }
 
+    const userEvents = await ctx.db
+      .query("ml_events")
+      .withIndex("by_user_timestamp", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .take(TAG_CLEANUP_BATCH_SIZE);
+    for (const evt of userEvents) {
+      const clearTag = Boolean(evt.tagId && !DEFAULT_TAG_ID_SET.has(evt.tagId));
+      const clearFrom = Boolean(evt.fromTagId && !DEFAULT_TAG_ID_SET.has(evt.fromTagId));
+      const clearTo = Boolean(evt.toTagId && !DEFAULT_TAG_ID_SET.has(evt.toTagId));
+      if (clearTag || clearFrom || clearTo) {
+        await ctx.db.patch(evt._id, {
+          ...(clearTag ? { tagId: undefined } : {}),
+          ...(clearFrom ? { fromTagId: undefined } : {}),
+          ...(clearTo ? { toTagId: undefined } : {}),
+        });
+      }
+    }
+
+    const hitBatchLimit =
+      userSessions.length === TAG_CLEANUP_BATCH_SIZE ||
+      userCups.length === TAG_CLEANUP_BATCH_SIZE ||
+      attempts.length === TAG_CLEANUP_BATCH_SIZE ||
+      userEvents.length === TAG_CLEANUP_BATCH_SIZE;
+
+    if (hitBatchLimit) {
+      const initialStage =
+        userSessions.length === TAG_CLEANUP_BATCH_SIZE
+          ? "sessions"
+          : userCups.length === TAG_CLEANUP_BATCH_SIZE
+            ? "coffee_cups"
+            : attempts.length === TAG_CLEANUP_BATCH_SIZE
+              ? "session_attempts"
+              : "ml_events";
+
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+        userId: user._id,
+        stage: initialStage,
+        cursor: null,
+      });
+    }
+
     return DEFAULT_TAGS;
+  },
+});
+
+export const cleanupResetTagsBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    stage: resetCleanupStageValidator,
+    cursor: v.union(v.string(), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    if (args.stage === "sessions") {
+      const page = await ctx.db
+        .query("sessions")
+        .withIndex("by_user_completed", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
+
+      for (const s of page.page) {
+        if (s.tagId && !DEFAULT_TAG_ID_SET.has(s.tagId)) {
+          await ctx.db.patch(s._id, { tagId: undefined });
+        }
+      }
+
+      if (!page.isDone) {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "sessions",
+          cursor: page.continueCursor,
+        });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "coffee_cups",
+          cursor: null,
+        });
+      }
+      return null;
+    }
+
+    if (args.stage === "coffee_cups") {
+      const page = await ctx.db
+        .query("coffee_cups")
+        .withIndex("by_user_date", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
+
+      for (const c of page.page) {
+        if (c.tagId && !DEFAULT_TAG_ID_SET.has(c.tagId)) {
+          await ctx.db.patch(c._id, { tagId: undefined });
+        }
+      }
+
+      if (!page.isDone) {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "coffee_cups",
+          cursor: page.continueCursor,
+        });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "session_attempts",
+          cursor: null,
+        });
+      }
+      return null;
+    }
+
+    if (args.stage === "session_attempts") {
+      const page = await ctx.db
+        .query("session_attempts")
+        .withIndex("by_user_ended", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
+
+      for (const a of page.page) {
+        const clearTag = Boolean(a.tagId && !DEFAULT_TAG_ID_SET.has(a.tagId));
+        const clearInitialTag = Boolean(a.initialTagId && !DEFAULT_TAG_ID_SET.has(a.initialTagId));
+        if (clearTag || clearInitialTag) {
+          await ctx.db.patch(a._id, {
+            ...(clearTag ? { tagId: undefined } : {}),
+            ...(clearInitialTag ? { initialTagId: undefined } : {}),
+          });
+        }
+      }
+
+      if (!page.isDone) {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "session_attempts",
+          cursor: page.continueCursor,
+        });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "ml_events",
+          cursor: null,
+        });
+      }
+      return null;
+    }
+
+    const page = await ctx.db
+      .query("ml_events")
+      .withIndex("by_user_timestamp", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
+
+    for (const evt of page.page) {
+      const clearTag = Boolean(evt.tagId && !DEFAULT_TAG_ID_SET.has(evt.tagId));
+      const clearFrom = Boolean(evt.fromTagId && !DEFAULT_TAG_ID_SET.has(evt.fromTagId));
+      const clearTo = Boolean(evt.toTagId && !DEFAULT_TAG_ID_SET.has(evt.toTagId));
+      if (clearTag || clearFrom || clearTo) {
+        await ctx.db.patch(evt._id, {
+          ...(clearTag ? { tagId: undefined } : {}),
+          ...(clearFrom ? { fromTagId: undefined } : {}),
+          ...(clearTo ? { toTagId: undefined } : {}),
+        });
+      }
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+        userId: args.userId,
+        stage: "ml_events",
+        cursor: page.continueCursor,
+      });
+    }
+
+    return null;
   },
 });

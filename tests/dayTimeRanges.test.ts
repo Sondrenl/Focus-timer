@@ -42,15 +42,25 @@ describe('computeDayTimeRangeBreakdown', () => {
     expect(byId.night).toBe(25 * 60);
   });
 
-  it('attributes a session crossing midnight (23:50 to 00:15) entirely to Night', () => {
+  it('attributes only the Day D [00:00, 24:00] overlap for a session crossing midnight (23:50 to 00:15)', () => {
     const sessions = [makeWorkSession('s1', '2026-11-15T00:15:00', 25)];
     const result = computeDayTimeRangeBreakdown(sessions);
     const byId = Object.fromEntries(result.map((r) => [r.id, r.totalSeconds]));
 
-    expect(byId.night).toBe(25 * 60);
+    expect(byId.night).toBe(15 * 60);
     expect(byId.morning).toBe(0);
     expect(byId.midday).toBe(0);
     expect(byId.afternoon).toBe(0);
+    expect(byId.evening).toBe(0);
+  });
+
+  it('does not fold yesterday evening minutes into today evening for long cross-midnight sessions', () => {
+    // 2026-11-14 21:30 to 2026-11-15 00:30 (180m total, only 30m falls on Day D)
+    const sessions = [makeWorkSession('s1', '2026-11-15T00:30:00', 180)];
+    const result = computeDayTimeRangeBreakdown(sessions);
+    const byId = Object.fromEntries(result.map((r) => [r.id, r.totalSeconds]));
+
+    expect(byId.night).toBe(30 * 60);
     expect(byId.evening).toBe(0);
   });
 

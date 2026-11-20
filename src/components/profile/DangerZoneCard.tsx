@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -31,6 +31,15 @@ export const DangerZoneCard: React.FC<DangerZoneCardProps> = ({
 }) => {
   const [resetModalScope, setResetModalScope] = useState<'sessions-only' | 'factory-reset' | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (statusTimeoutRef.current !== null) {
+        clearTimeout(statusTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleConfirmReset = async () => {
     if (!resetModalScope || isResetting) return;
@@ -44,7 +53,13 @@ export const DangerZoneCard: React.FC<DangerZoneCardProps> = ({
           ? 'Focus and coffee history permanently cleared.'
           : 'Factory reset complete! All data has been reset to defaults.'
       );
-      setTimeout(() => onStatusMessage(null), 4000);
+      if (statusTimeoutRef.current !== null) {
+        clearTimeout(statusTimeoutRef.current);
+      }
+      statusTimeoutRef.current = setTimeout(() => {
+        statusTimeoutRef.current = null;
+        onStatusMessage(null);
+      }, 4000);
     } catch {
       onErrorMessage('An error occurred while resetting data.');
     } finally {

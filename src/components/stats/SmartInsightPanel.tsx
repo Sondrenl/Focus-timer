@@ -6,7 +6,6 @@ import {
   Zap,
   Sparkles,
   Target,
-  Clock,
   Flame,
   TrendingUp,
   Layers,
@@ -29,7 +28,6 @@ const INSIGHT_ICONS: Record<
   zap: { Icon: Zap, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-600/10' },
   'trending-up': { Icon: TrendingUp, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-600/10' },
   target: { Icon: Target, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-600/10' },
-  clock: { Icon: Clock, color: 'text-indigo-600 dark:text-indigo-400', bg: 'bg-indigo-600/10' },
   flame: { Icon: Flame, color: 'text-orange-600 dark:text-orange-400', bg: 'bg-orange-600/10' },
   layers: { Icon: Layers, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-600/10' },
   sparkles: { Icon: Sparkles, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-600/10' },
@@ -70,6 +68,11 @@ export const SmartInsightPanel: React.FC<SmartInsightPanelProps> = ({ insight })
           </div>
 
           <div className="flex-1 min-w-0">
+            {currentInsight.badge && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide bg-md-primary/10 text-md-primary mb-1.5">
+                {currentInsight.badge}
+              </span>
+            )}
             <h4 className="text-base sm:text-lg font-bold text-md-on-surface tracking-tight leading-snug">
               {currentInsight.headline}
             </h4>

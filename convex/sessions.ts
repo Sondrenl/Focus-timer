@@ -1,6 +1,11 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
+import {
+  assertValidTagId,
+  MAX_FUTURE_TIMESTAMP_SKEW_MS,
+  recordCompletedSessionIfNotDuplicate,
+} from "./timerHelpers";
 
 interface SessionData {
   tagId?: string | null;
@@ -87,49 +92,25 @@ export const record = mutation({
       throw new Error("Invalid durationSeconds: must be a positive finite number up to 7 days.");
     }
 
-    if (args.tagId && (args.tagId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(args.tagId))) {
-      throw new Error("Invalid tagId format.");
-    }
+    assertValidTagId(args.tagId);
 
+    const nowMs = Date.now();
     const parsedMs = args.completedAt ? new Date(args.completedAt).getTime() : NaN;
-    if (!isNaN(parsedMs) && parsedMs > Date.now() + 86400_000) {
+    if (!Number.isNaN(parsedMs) && parsedMs > nowMs + MAX_FUTURE_TIMESTAMP_SKEW_MS) {
       throw new Error("completedAt timestamp cannot be in the future.");
     }
-    const completedAtMs = !isNaN(parsedMs) ? parsedMs : Date.now();
-    const completedAt = !isNaN(parsedMs)
-      ? args.completedAt!
-      : new Date(completedAtMs).toISOString();
+    const completedAtMs = !Number.isNaN(parsedMs) ? parsedMs : nowMs;
     const sanitizedTagId = args.tagId || undefined;
 
-    const recent = await ctx.db
-      .query("sessions")
-      .withIndex("by_user_completed", (q) =>
-        q
-          .eq("userId", user._id)
-          .gte("completedAt", new Date(completedAtMs - 45000).toISOString())
-          .lte("completedAt", new Date(completedAtMs + 45000).toISOString())
-      )
-      .collect();
-
-    const duplicate = recent.find((s) => s.sessionType === args.sessionType);
-    if (duplicate) {
-      return formatSessionRecord(duplicate._id, duplicate);
-    }
-
-    const sessionId = await ctx.db.insert("sessions", {
+    const recorded = await recordCompletedSessionIfNotDuplicate(ctx, {
       userId: user._id,
       tagId: sanitizedTagId,
       sessionType: args.sessionType,
       durationSeconds: args.durationSeconds,
-      completedAt,
+      completedAtMs,
     });
 
-    return formatSessionRecord(sessionId, {
-      tagId: sanitizedTagId,
-      sessionType: args.sessionType,
-      durationSeconds: args.durationSeconds,
-      completedAt,
-    });
+    return formatSessionRecord(recorded.id, recorded);
   },
 });
 

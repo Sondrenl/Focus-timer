@@ -4,7 +4,6 @@ import { sanitizeHexColor } from '../../utils/colors';
 
 export interface ITagRepository {
   getAll(): Promise<Tag[]>;
-  getActive(): Promise<Tag[]>;
   create(input: CreateTagInput): Promise<Tag>;
   update(id: string, updates: UpdateTagInput): Promise<Tag | null>;
   archive(id: string): Promise<Tag | null>;
@@ -85,11 +84,6 @@ export class TagRepository implements ITagRepository {
     return tags;
   }
 
-  async getActive(): Promise<Tag[]> {
-    const all = await this.getAll();
-    return all.filter((tag) => !tag.isArchived);
-  }
-
   async create(input: CreateTagInput): Promise<Tag> {
     return this.enqueue(async () => {
       const all = await this.getAll();
@@ -161,7 +155,14 @@ export class TagRepository implements ITagRepository {
 
   async saveAll(tags: Tag[]): Promise<void> {
     return this.enqueue(async () => {
-      this.storage.setItem(TAGS_STORAGE_KEY, tags);
+      const safeList = (Array.isArray(tags) ? tags : []).slice(0, MAX_TAGS_LIMIT).map((t) => ({
+        ...t,
+        name: typeof t.name === 'string' ? t.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || 'Tag' : 'Tag',
+        color: sanitizeHexColor(t.color),
+        isArchived: Boolean(t.isArchived),
+        updatedAt: t.updatedAt || t.createdAt || EPOCH_ISO,
+      }));
+      this.storage.setItem(TAGS_STORAGE_KEY, safeList);
     });
   }
 

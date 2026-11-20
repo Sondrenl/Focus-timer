@@ -2,14 +2,12 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import { SessionType, TimerStatus, RemoteTimerState, PeerPresence } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
 import { CoffeeCup } from '../../types/coffee';
-import type { useApp } from '../AppContext';
-import { AuthService } from '../../services/auth/AuthService';
+import { NotificationService } from '../../services/notification/NotificationService';
 import { broadcastTimerState } from '../../services/timer/TimerBroadcast';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { useConvexTimer } from '../../services/convex/useConvexTimer';
 import { IS_MOBILE } from './timerPersistence';
-import { getLogicalDayKey } from '../../utils/newDayCheck';
-import { evaluateDeviceAlert } from '../../utils/arbitration';
+import { getLogicalDayKey, INACTIVITY_THRESHOLD_MS } from '../../utils/newDayCheck';
 import { telemetryTracker } from '../services';
 
 interface UseTimerCloudSyncParams {
@@ -42,9 +40,8 @@ interface UseTimerCloudSyncParams {
   setActiveTagId?: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
   getDurationForType: (type: SessionType) => number;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
-  sound: ReturnType<typeof useApp>['sound'];
-  notifications: ReturnType<typeof useApp>['notifications'];
-  authService: AuthService;
+  syncScheduledNotification: () => void;
+  notifications: NotificationService;
 }
 
 export interface ResetTimerOptions {
@@ -108,9 +105,8 @@ export const useTimerCloudSync = ({
   setActiveTagId,
   getDurationForType,
   dispatchCompletionAlert,
-  sound,
+  syncScheduledNotification,
   notifications,
-  authService,
 }: UseTimerCloudSyncParams) => {
   const isConvexQueryAuthReady =
     !isAuthenticated || !isConvexAuthLoading || Boolean(isConvexAuthAuthenticated);
@@ -253,7 +249,7 @@ export const useTimerCloudSync = ({
         last &&
         last.isMobile === IS_MOBILE &&
         last.isVisible === isVisible &&
-        now - last.time < 60000
+        now - last.time < 40000
       ) {
         return;
       }
@@ -323,7 +319,7 @@ export const useTimerCloudSync = ({
         return;
       }
 
-      const now = authService.getServerNow();
+      const now = Date.now();
 
       // Trigger completion alert when remote signals completion or advances to next interval at end time
       // Never fire alerts if completion happened >60s ago (e.g. waking up from OS Doze/sleep).
@@ -353,10 +349,14 @@ export const useTimerCloudSync = ({
 
       if (remote.status === 'RUNNING' && remote.targetEndTime) {
         const diffMs = remote.targetEndTime - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+        const rawDiffSec = Math.max(0, Math.ceil(diffMs / 1000));
+        const diffSec =
+          remote.totalSeconds > 0 ? Math.min(remote.totalSeconds, rawDiffSec) : rawDiffSec;
 
         if (diffSec > 0) {
-          wakeLockService.acquire();
+          if (settingsRef.current.keepAwake !== false) {
+            wakeLockService.acquire();
+          }
 
           sessionTypeRef.current = remote.sessionType;
           currentCycleRef.current = remote.currentCycle || 1;
@@ -378,23 +378,7 @@ export const useTimerCloudSync = ({
           setStatus('RUNNING');
           lastTickWallMsRef.current = Date.now();
 
-          if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
-            const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-            const shouldAlert = evaluateDeviceAlert({
-              isMobile: IS_MOBILE,
-              isVisible,
-              peer: peerPresenceRef.current,
-              type: remote.sessionType,
-            });
-            notifications.scheduleTimerNotification(
-              Date.now() + diffSec * 1000,
-              remote.sessionType,
-              shouldAlert,
-              remote.timerRunId
-            );
-          } else {
-            notifications.cancelScheduledNotification();
-          }
+          syncScheduledNotification();
         } else {
           if (diffMs < -900000) {
             const dur = getDurationForType(remote.sessionType);
@@ -469,9 +453,16 @@ export const useTimerCloudSync = ({
         }
       } else if (remote.status === 'PAUSED') {
         const PAUSED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-        if (nowMs - remote.updatedAtMs > PAUSED_TTL_MS) {
-          const dur = getDurationForType(remote.sessionType);
-          const cycle = remote.currentCycle || 1;
+        const isPausedFromPreviousDay =
+          getLogicalDayKey(remote.updatedAtMs) !== getLogicalDayKey(nowMs) &&
+          nowMs - remote.updatedAtMs >= INACTIVITY_THRESHOLD_MS;
+        const isPausedExpired = nowMs - remote.updatedAtMs > PAUSED_TTL_MS;
+        if (isPausedFromPreviousDay || isPausedExpired) {
+          const resolvedSessionType: SessionType = isPausedFromPreviousDay
+            ? 'WORK'
+            : remote.sessionType;
+          const resolvedCycle = isPausedFromPreviousDay ? 1 : (remote.currentCycle || 1);
+          const dur = getDurationForType(resolvedSessionType);
           const staleRunId = remote.timerRunId || null;
 
           if (staleRunId && !finalizedStaleRunIdsRef.current.has(staleRunId)) {
@@ -482,7 +473,7 @@ export const useTimerCloudSync = ({
               sessionType: remote.sessionType,
               plannedDurationSeconds: remote.totalSeconds || dur,
               remainingSecondsAtEnd: remote.remainingSeconds,
-              cycleIndex: cycle,
+              cycleIndex: remote.currentCycle || 1,
               tagId: remote.activeTagId ?? null,
               settings: settingsRef.current,
               dailyGoalMinutes: profileRef?.current.dailyGoalMinutes ?? 120,
@@ -492,30 +483,44 @@ export const useTimerCloudSync = ({
             });
           }
 
-          sessionTypeRef.current = remote.sessionType;
-          currentCycleRef.current = cycle;
+          sessionTypeRef.current = resolvedSessionType;
+          currentCycleRef.current = resolvedCycle;
           totalSecondsRef.current = dur;
           remainingSecondsRef.current = dur;
           statusRef.current = 'IDLE';
-          setSessionType(remote.sessionType);
-          setCurrentCycle(cycle);
+          setSessionType(resolvedSessionType);
+          setCurrentCycle(resolvedCycle);
           setTotalSeconds(dur);
           setRemainingSeconds(dur);
           setStatus('IDLE');
           targetEndTimeRef.current = null;
           setTargetEndTime(null);
           timerRunIdRef.current = null;
+          if (remote.activeTagId !== undefined && setActiveTagId) {
+            prevActiveTagIdRef.current = remote.activeTagId;
+            setActiveTagId(remote.activeTagId, { skipTelemetry: true });
+          }
+          notifications.cancelScheduledNotification();
           wakeLockService.release();
 
-          convexTimerMutationsRef.current
-            .resetTimer({
-              sessionType: remote.sessionType,
-              durationSeconds: dur,
-              currentCycle: cycle,
-              tagId: remote.activeTagId || undefined,
+          publishLocalTimerState(
+            {
+              sessionType: resolvedSessionType,
+              status: 'IDLE',
+              remainingSeconds: dur,
+              totalSeconds: dur,
+              targetEndTime: null,
+              currentCycle: resolvedCycle,
+              activeTagId: remote.activeTagId ?? null,
+              timerRunId: null,
+              updatedAtMs: nowMs,
+            },
+            false,
+            {
               onlyIfNotRunning: true,
-            })
-            .catch(() => {});
+              expectedUpdatedAtMs: remote.updatedAtMs,
+            }
+          );
           return;
         }
 
@@ -582,12 +587,12 @@ export const useTimerCloudSync = ({
       }
     },
     [
-      authService,
       setActiveTagId,
-      sound,
       notifications,
       getDurationForType,
       dispatchCompletionAlert,
+      syncScheduledNotification,
+      publishLocalTimerState,
       lastLocalActionWallMsRef,
       localUpdatedAtRef,
       statusRef,

@@ -15,6 +15,9 @@ describe('Time and Duration Formatters', () => {
     expect(formatDurationHoursMins(5400)).toBe('1h 30m');
     expect(formatDurationHoursMins(1500)).toBe('25m');
     expect(formatDurationHoursMins(0)).toBe('0m');
+    expect(formatDurationHoursMins(3575)).toBe('1h');
+    expect(formatDurationHoursMins(7175)).toBe('2h');
+    expect(formatDurationHoursMins(10)).toBe('1m');
   });
 
   it('formats compact duration for dense mobile calendar cells', () => {

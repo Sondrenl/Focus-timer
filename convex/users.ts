@@ -1,6 +1,14 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import { getAuthenticatedUser, requireUser, DEFAULT_SETTINGS, DEFAULT_TAGS } from "./authHelper";
+import {
+  MIN_DURATION_MINUTES,
+  MAX_WORK_DURATION_MINUTES,
+  MAX_SHORT_BREAK_MINUTES,
+  MAX_LONG_BREAK_MINUTES,
+  MAX_LONG_BREAK_INTERVAL,
+  MAX_DAILY_GOAL_MINUTES,
+} from "./defaultData";
 
 /**
  * Returns the currently authenticated user with their embedded preferences and tags.
@@ -18,7 +26,7 @@ export const current = query({
       displayName: user.displayName || user.name || user.email?.split("@")[0] || "Focus Practitioner",
       avatarUrl: user.avatarUrl || user.image,
       avatarEmoji: user.avatarEmoji || "",
-      dailyGoalMinutes: user.dailyGoalMinutes || 120,
+      dailyGoalMinutes: user.dailyGoalMinutes ?? 120,
       createdAt: user.createdAt || new Date(user._creationTime).toISOString(),
       settings: user.settings || DEFAULT_SETTINGS,
       tags: user.tags ?? DEFAULT_TAGS,
@@ -47,16 +55,20 @@ export const updateProfile = mutation({
     }
     if (args.avatarEmoji !== undefined) {
       const trimmedEmoji = args.avatarEmoji.trim();
-      if (trimmedEmoji.length > 10) {
-        throw new Error("Avatar emoji cannot exceed 10 characters.");
+      if (trimmedEmoji.length > 32) {
+        throw new Error("Avatar emoji cannot exceed 32 characters.");
       }
       if (trimmedEmoji !== user.avatarEmoji) {
         updates.avatarEmoji = trimmedEmoji;
       }
     }
     if (args.dailyGoalMinutes !== undefined) {
-      if (!Number.isFinite(args.dailyGoalMinutes) || args.dailyGoalMinutes < 1 || args.dailyGoalMinutes > 1440) {
-        throw new Error("Daily goal minutes must be between 1 and 1440.");
+      if (
+        !Number.isFinite(args.dailyGoalMinutes) ||
+        args.dailyGoalMinutes < 1 ||
+        args.dailyGoalMinutes > MAX_DAILY_GOAL_MINUTES
+      ) {
+        throw new Error(`Daily goal minutes must be between 1 and ${MAX_DAILY_GOAL_MINUTES}.`);
       }
       if (args.dailyGoalMinutes !== user.dailyGoalMinutes) {
         updates.dailyGoalMinutes = args.dailyGoalMinutes;
@@ -87,17 +99,43 @@ export const updateSettings = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
 
-    if (args.workDurationMinutes !== undefined && (!Number.isFinite(args.workDurationMinutes) || args.workDurationMinutes < 1 || args.workDurationMinutes > 360)) {
-      throw new Error("workDurationMinutes must be between 1 and 360.");
+    if (
+      args.workDurationMinutes !== undefined &&
+      (!Number.isFinite(args.workDurationMinutes) ||
+        args.workDurationMinutes < MIN_DURATION_MINUTES ||
+        args.workDurationMinutes > MAX_WORK_DURATION_MINUTES)
+    ) {
+      throw new Error(
+        `workDurationMinutes must be between ${MIN_DURATION_MINUTES} and ${MAX_WORK_DURATION_MINUTES}.`
+      );
     }
-    if (args.shortBreakDurationMinutes !== undefined && (!Number.isFinite(args.shortBreakDurationMinutes) || args.shortBreakDurationMinutes < 1 || args.shortBreakDurationMinutes > 120)) {
-      throw new Error("shortBreakDurationMinutes must be between 1 and 120.");
+    if (
+      args.shortBreakDurationMinutes !== undefined &&
+      (!Number.isFinite(args.shortBreakDurationMinutes) ||
+        args.shortBreakDurationMinutes < MIN_DURATION_MINUTES ||
+        args.shortBreakDurationMinutes > MAX_SHORT_BREAK_MINUTES)
+    ) {
+      throw new Error(
+        `shortBreakDurationMinutes must be between ${MIN_DURATION_MINUTES} and ${MAX_SHORT_BREAK_MINUTES}.`
+      );
     }
-    if (args.longBreakDurationMinutes !== undefined && (!Number.isFinite(args.longBreakDurationMinutes) || args.longBreakDurationMinutes < 1 || args.longBreakDurationMinutes > 180)) {
-      throw new Error("longBreakDurationMinutes must be between 1 and 180.");
+    if (
+      args.longBreakDurationMinutes !== undefined &&
+      (!Number.isFinite(args.longBreakDurationMinutes) ||
+        args.longBreakDurationMinutes < MIN_DURATION_MINUTES ||
+        args.longBreakDurationMinutes > MAX_LONG_BREAK_MINUTES)
+    ) {
+      throw new Error(
+        `longBreakDurationMinutes must be between ${MIN_DURATION_MINUTES} and ${MAX_LONG_BREAK_MINUTES}.`
+      );
     }
-    if (args.longBreakInterval !== undefined && (!Number.isFinite(args.longBreakInterval) || args.longBreakInterval < 1 || args.longBreakInterval > 20)) {
-      throw new Error("longBreakInterval must be between 1 and 20.");
+    if (
+      args.longBreakInterval !== undefined &&
+      (!Number.isFinite(args.longBreakInterval) ||
+        args.longBreakInterval < 1 ||
+        args.longBreakInterval > MAX_LONG_BREAK_INTERVAL)
+    ) {
+      throw new Error(`longBreakInterval must be between 1 and ${MAX_LONG_BREAK_INTERVAL}.`);
     }
     if (args.soundVolume !== undefined && (!Number.isFinite(args.soundVolume) || args.soundVolume < 0 || args.soundVolume > 1)) {
       throw new Error("soundVolume must be between 0 and 1.");
@@ -150,8 +188,10 @@ export const getOrCreateUserForAuth = internalMutation({
       .withIndex("email", (q) => q.eq("email", args.email))
       .first();
 
+    const safeAvatar = args.avatarUrl && args.avatarUrl.startsWith("https://") ? args.avatarUrl : undefined;
+
     if (existingByEmail) {
-      const patchData: Record<string, any> = {};
+      const patchData: Record<string, unknown> = {};
       if (!existingByEmail.emailVerificationTime) {
         patchData.emailVerificationTime = Date.now();
       }
@@ -161,7 +201,6 @@ export const getOrCreateUserForAuth = internalMutation({
       if (!existingByEmail.name && args.name) {
         patchData.name = args.name;
       }
-      const safeAvatar = args.avatarUrl && args.avatarUrl.startsWith("https://") ? args.avatarUrl : undefined;
       if (safeAvatar && existingByEmail.avatarUrl !== safeAvatar) {
         patchData.avatarUrl = safeAvatar;
         patchData.image = safeAvatar;
@@ -182,16 +221,16 @@ export const getOrCreateUserForAuth = internalMutation({
       .first();
 
     if (existingByToken) {
-      const patchData: Record<string, any> = {};
+      const patchData: Record<string, unknown> = {};
       if (existingByToken.email !== args.email) {
         patchData.email = args.email;
       }
       if (!existingByToken.emailVerificationTime) {
         patchData.emailVerificationTime = Date.now();
       }
-      if (args.avatarUrl && existingByToken.avatarUrl !== args.avatarUrl) {
-        patchData.avatarUrl = args.avatarUrl;
-        patchData.image = args.avatarUrl;
+      if (safeAvatar && existingByToken.avatarUrl !== safeAvatar) {
+        patchData.avatarUrl = safeAvatar;
+        patchData.image = safeAvatar;
       }
       if (Object.keys(patchData).length > 0) {
         await ctx.db.patch(existingByToken._id, patchData);
@@ -205,8 +244,8 @@ export const getOrCreateUserForAuth = internalMutation({
       email: args.email,
       name: args.name,
       displayName: args.name,
-      avatarUrl: args.avatarUrl,
-      image: args.avatarUrl,
+      avatarUrl: safeAvatar,
+      image: safeAvatar,
       avatarEmoji: "",
       dailyGoalMinutes: 120,
       createdAt: now,

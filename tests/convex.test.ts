@@ -432,4 +432,174 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(active?.currentCycle).toBe(2);
     expect(active?.timerRunId).toBe("auto-work-run-2");
   });
+
+  it("reconciles session_attempts to completed on client timer.complete and increments cycle on SHORT_BREAK server completion", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    // 1. Start WORK timer (with 1s remaining so it is within the 5s completion window) and insert an in_progress session_attempt
+    await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      remainingSeconds: 1,
+      totalSeconds: 1500,
+      currentCycle: 1,
+      tagId: "tag-study",
+      timerRunId: "run-attempt-reconcile",
+    });
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("session_attempts", {
+        userId,
+        attemptId: "run-attempt-reconcile",
+        sessionType: "WORK",
+        status: "in_progress",
+        wasStarted: true,
+        plannedDurationSeconds: 1500,
+        actualActiveSeconds: 300,
+        remainingSecondsAtEnd: 1200,
+        completionRatio: 0.2,
+        startedAt: "2026-11-18T10:00:00.000Z",
+        utcOffsetMinutes: 60,
+        ianaTimezone: "Europe/Oslo",
+        localDate: "2026-11-18",
+        localHour: 11,
+        localMinuteOfDay: 660,
+        localDayOfWeek: 3,
+        cycleIndex: 1,
+        longBreakInterval: 4,
+        autoStarted: false,
+        initialTagId: "tag-study",
+        tagId: "tag-study",
+        tagChangedMidRun: false,
+        pauseCount: 0,
+        totalPausedSeconds: 0,
+        pauseIntervals: [],
+        workSessionsCompletedToday: 0,
+        workActiveSecondsToday: 0,
+        skipsToday: 0,
+        coffeeCupsTodayAtStart: 0,
+        coffeeLoggedDuringRun: 0,
+        dailyGoalMinutes: 120,
+        settingsSnapshot: {
+          workDurationMinutes: 25,
+          shortBreakDurationMinutes: 5,
+          longBreakDurationMinutes: 25,
+          longBreakInterval: 4,
+          autoStartBreaks: false,
+          autoStartPomodoros: false,
+        },
+        deviceClass: "desktop",
+        tabBackgroundedCount: 0,
+        source: "client",
+        updatedAtMs: Date.now() - 1000,
+      });
+    });
+
+    // Client completes timer before scheduled onTimerCompleted runs
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "run-attempt-reconcile",
+      nextSessionType: "SHORT_BREAK",
+      nextDurationSeconds: 300,
+      nextCurrentCycle: 1,
+      autoStartNext: true,
+      nextTimerRunId: "run-short-break-1",
+    });
+
+    const reconciledAttempt = await t.run(async (ctx) =>
+      ctx.db
+        .query("session_attempts")
+        .withIndex("by_user_attempt", (q) =>
+          q.eq("userId", userId).eq("attemptId", "run-attempt-reconcile")
+        )
+        .first()
+    );
+    expect(reconciledAttempt?.status).toBe("completed");
+    expect(reconciledAttempt?.actualActiveSeconds).toBe(1500);
+    expect(reconciledAttempt?.completionRatio).toBe(1);
+
+    // 2. Server onTimerCompleted finishes SHORT_BREAK on cycle 1 -> must advance to WORK cycle 2
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-short-break-1",
+    });
+
+    const activeAfterBreak = await asUser.query(api.timer.getActive, {});
+    expect(activeAfterBreak?.sessionType).toBe("WORK");
+    expect(activeAfterBreak?.currentCycle).toBe(2);
+    expect(activeAfterBreak?.status).toBe("IDLE");
+  });
+
+  it("cleans up ml_events tag references on tags.remove and regenerates invalid tag IDs during importBackup", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    // Insert an ml_event referencing tag-study across tagId and fromTagId
+    await t.run(async (ctx) => {
+      await ctx.db.insert("ml_events", {
+        userId,
+        eventId: "evt-tag-cleanup-1",
+        eventType: "tag_changed",
+        timestamp: "2026-11-18T10:05:00.000Z",
+        timestampMs: 1700000005000,
+        utcOffsetMinutes: 60,
+        ianaTimezone: "Europe/Oslo",
+        localDate: "2026-11-18",
+        localHour: 11,
+        localMinuteOfDay: 665,
+        localDayOfWeek: 3,
+        deviceClass: "desktop",
+        tagId: "tag-study",
+        fromTagId: "tag-study",
+        toTagId: "tag-work",
+        source: "client",
+      });
+    });
+
+    await asUser.mutation(api.tags.remove, { id: "tag-study" });
+
+    const cleanedEvent = await t.run(async (ctx) =>
+      ctx.db
+        .query("ml_events")
+        .withIndex("by_user_event", (q) =>
+          q.eq("userId", userId).eq("eventId", "evt-tag-cleanup-1")
+        )
+        .first()
+    );
+    expect(cleanedEvent?.tagId).toBeUndefined();
+    expect(cleanedEvent?.fromTagId).toBeUndefined();
+    expect(cleanedEvent?.toTagId).toBe("tag-work");
+
+    // Import backup with invalid tag ID containing spaces/special characters
+    await asUser.mutation(api.migrations.importBackup, {
+      mode: "merge",
+      tags: [{ id: "invalid tag id!@#", name: "Deep Research", color: "#8B5CF6" }],
+      sessions: [
+        {
+          id: "s-invalid-tag",
+          tagId: "invalid tag id!@#",
+          sessionType: "WORK",
+          durationSeconds: 1500,
+          completedAt: "2026-03-18T10:00:00.000Z",
+        },
+      ],
+      coffeeCups: [],
+    });
+
+    const userState = await asUser.query(api.users.current, {});
+    const importedTag = userState?.tags.find((tag) => tag.name === "Deep Research");
+    expect(importedTag).toBeDefined();
+    expect(importedTag?.id).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+
+    // Verify the remapped tag ID can be updated without failing TAG_ID_REGEX
+    await asUser.mutation(api.tags.update, {
+      id: importedTag!.id,
+      name: "Deep Research Updated",
+      color: "#8B5CF6",
+    });
+    const updatedUserState = await asUser.query(api.users.current, {});
+    expect(updatedUserState?.tags.find((tag) => tag.id === importedTag!.id)?.name).toBe(
+      "Deep Research Updated"
+    );
+  });
 });

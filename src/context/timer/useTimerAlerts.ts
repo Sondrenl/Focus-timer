@@ -1,7 +1,8 @@
 import React, { useCallback, useRef } from 'react';
 import { SessionType, TimerStatus, PeerPresence } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
-import type { useApp } from '../AppContext';
+import { SoundService } from '../../services/audio/SoundService';
+import { NotificationService } from '../../services/notification/NotificationService';
 import { evaluateDeviceAlert } from '../../utils/arbitration';
 import { triggerCompletionConfetti } from '../../utils/confetti';
 import { IS_MOBILE } from './timerPersistence';
@@ -13,8 +14,8 @@ interface UseTimerAlertsParams {
   timerRunIdRef: React.MutableRefObject<string | null>;
   settingsRef: React.MutableRefObject<UserSettings>;
   peerPresenceRef: React.MutableRefObject<PeerPresence>;
-  sound: ReturnType<typeof useApp>['sound'];
-  notifications: ReturnType<typeof useApp>['notifications'];
+  sound: SoundService;
+  notifications: NotificationService;
 }
 
 export const useTimerAlerts = ({
@@ -121,7 +122,6 @@ export const useTimerAlerts = ({
   );
 
   return {
-    shouldThisDeviceAlert,
     syncScheduledNotification,
     dispatchCompletionAlert,
     triggerCompletionConfetti,

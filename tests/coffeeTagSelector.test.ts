@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CoffeeWorkspace } from '../src/components/coffee/CoffeeWorkspace';
 import { CoffeeTagSelector } from '../src/components/coffee/CoffeeTagSelector';
-import * as AppContextModule from '../src/context/AppContext';
+import * as DataContextModule from '../src/context/DataContext';
 import { Tag } from '../src/types/tag';
 
 describe('Coffee Tag Selector - Timer Tag Mimicry & Unidirectional Observation', () => {
@@ -27,7 +27,7 @@ describe('Coffee Tag Selector - Timer Tag Mimicry & Unidirectional Observation',
       activeTagId: 'tag-work',
       setActiveTagId: vi.fn(),
     };
-    vi.spyOn(AppContextModule, 'useApp').mockImplementation(() => mockAppContext);
+    vi.spyOn(DataContextModule, 'useData').mockImplementation(() => mockAppContext);
   });
 
   it('initializes CoffeeWorkspace selected tag to mimic the timer activeTagId', () => {

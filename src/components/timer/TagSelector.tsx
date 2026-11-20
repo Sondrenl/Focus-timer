@@ -1,9 +1,9 @@
 import React from 'react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { TagSelectDropdown } from '../tags/TagSelectDropdown';
 
 export const TagSelector: React.FC = () => {
-  const { activeTagId, setActiveTagId } = useApp();
+  const { activeTagId, setActiveTagId } = useData();
 
   return (
     <TagSelectDropdown

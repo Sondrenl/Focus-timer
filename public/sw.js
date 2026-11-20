@@ -180,12 +180,21 @@ self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || !data.type) return;
 
+  const safeTitle =
+    typeof data.title === 'string' && data.title.trim()
+      ? data.title.trim().slice(0, 100)
+      : 'Pomodor — Focus session complete';
+  const safeBody =
+    typeof data.body === 'string' && data.body.trim()
+      ? data.body.trim().slice(0, 250)
+      : 'Your timer session has ended.';
+
   if (data.type === 'SHOW_NOTIFICATION') {
     clearExistingSchedule();
     event.waitUntil(
       showTimerNotification(
-        data.title,
-        data.body,
+        safeTitle,
+        safeBody,
         data.sessionId || null,
         true, // Always allow explicit SHOW_NOTIFICATION requests from the client
         { isMobile: data.isMobile }
@@ -218,13 +227,13 @@ self.addEventListener('message', (event) => {
             }
             const visible = await hasAnyVisibleClient();
             if (!visible) {
-              await showTimerNotification(data.title, data.body, sessionId, false, {
+              await showTimerNotification(safeTitle, safeBody, sessionId, false, {
                 isMobile: isMobileDevice,
               });
             }
           } catch {
             if (!(targetEndTime > 0 && Date.now() - targetEndTime > STALE_ALERT_MAX_AGE_MS)) {
-              await showTimerNotification(data.title, data.body, sessionId, false, {
+              await showTimerNotification(safeTitle, safeBody, sessionId, false, {
                 isMobile: isMobileDevice,
               });
             }
@@ -238,7 +247,7 @@ self.addEventListener('message', (event) => {
       event.waitUntil(
         hasAnyVisibleClient().then((visible) => {
           if (!visible) {
-            return showTimerNotification(data.title, data.body, sessionId, false, {
+            return showTimerNotification(safeTitle, safeBody, sessionId, false, {
               isMobile: isMobileDevice,
             });
           }
@@ -261,6 +270,7 @@ self.addEventListener('push', (event) => {
   let sessionId = null;
   let isTest = false;
   let isMobileHint;
+  let completedAtMs = 0;
 
   if (event.data) {
     try {
@@ -280,6 +290,9 @@ self.addEventListener('push', (event) => {
       if (typeof json.isMobile === 'boolean') {
         isMobileHint = json.isMobile;
       }
+      if (typeof json.completedAtMs === 'number' && Number.isFinite(json.completedAtMs)) {
+        completedAtMs = json.completedAtMs;
+      }
     } catch {
       const text = event.data.text();
       if (text) {
@@ -294,9 +307,11 @@ self.addEventListener('push', (event) => {
 
       const notifTag = getNotificationTag(sessionId, isTest);
       const visible = await hasAnyVisibleClient();
-      let alreadyDisplayed = false;
+      const isStalePush =
+        !isTest && completedAtMs > 0 && Date.now() - completedAtMs > 2 * 60 * 1000;
+      let alreadyDisplayed = isStalePush;
 
-      if (!isTest && sessionId) {
+      if (!isTest && sessionId && !alreadyDisplayed) {
         if (hasNotifiedSession(sessionId)) {
           alreadyDisplayed = true;
         } else {
@@ -319,7 +334,7 @@ self.addEventListener('push', (event) => {
         return;
       }
 
-      // If a notification was already shown for this session on-device:
+      // If a notification was already shown for this session on-device (or arrived stale):
       // - Chrome/Firefox allow skipping showNotification when a visible client is open.
       // - Pure Safari / iOS WebKit strictly enforces userVisibleOnly and can revoke subscriptions
       //   after repeated silent pushes, so update cleanly with silent: true, renotify: false.

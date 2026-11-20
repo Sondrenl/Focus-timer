@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { Tag } from '../../types/tag';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -9,7 +9,7 @@ import { clsx } from 'clsx';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
 export const TagManager: React.FC = () => {
-  const { tags, sessions, archiveTag, unarchiveTag, deleteTag } = useApp();
+  const { tags, sessions, archiveTag, unarchiveTag, deleteTag } = useData();
 
 
   const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');

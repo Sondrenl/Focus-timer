@@ -3,6 +3,7 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Cloud, LogOut, RefreshCw } from 'lucide-react';
 import { AuthState } from '../../types/user';
+import { GOOGLE_CLIENT_ID } from '../../services/auth/AuthService';
 
 interface CloudSyncCardProps {
   auth: AuthState;
@@ -27,9 +28,7 @@ export const CloudSyncCard: React.FC<CloudSyncCardProps> = ({
       if (window.google?.accounts?.id && googleButtonContainerRef.current) {
         try {
           window.google.accounts.id.initialize({
-            client_id:
-              import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-              '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com',
+            client_id: GOOGLE_CLIENT_ID,
             callback: async (response: any) => {
               if (response.credential) {
                 try {

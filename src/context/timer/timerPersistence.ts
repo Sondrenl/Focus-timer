@@ -11,7 +11,6 @@ import {
 
 export const TIMER_STORAGE_KEY = 'timer_state_v1';
 export const DEVICE_ID_KEY = 'focus_timer_device_id_v1';
-export const SESSION_ALIVE_KEY = 'focus_timer_session_alive_v1';
 
 const getOrCreateDeviceId = (): string => {
   if (typeof window === 'undefined') return 'server';
@@ -32,7 +31,6 @@ const getOrCreateDeviceId = (): string => {
 
 export const DEVICE_ID = getOrCreateDeviceId();
 export const IS_MOBILE = isMobileDevice();
-export const DEVICE_SESSION_ID = `${DEVICE_ID}_${TAB_ID}`;
 
 export interface SavedTimerState {
   sessionType: SessionType;
@@ -73,10 +71,6 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
   try {
     const stored = localStorage.getItem(TIMER_STORAGE_KEY);
     if (!stored) {
-      const currentDayKey = getLogicalDayKey(new Date());
-      if (!getLastResetDayKey()) {
-        setLastResetDayKey(currentDayKey);
-      }
       return fallback;
     }
     const parsed = JSON.parse(stored) as SavedTimerState;
@@ -95,6 +89,7 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
           parsed.timerRunId = null;
           parsed.remainingSeconds = parsed.totalSeconds;
           parsed.updatedAtMs = 0;
+          saveTimerState(parsed);
         } else {
           // Expired while closed, preserve state so mount effect can record and alert
           return {
@@ -146,12 +141,9 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
   }
 };
 
-export const saveTimerState = (stateToSave: SavedTimerState, markSessionAlive = false): void => {
+export const saveTimerState = (stateToSave: SavedTimerState): void => {
   try {
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
-    if (markSessionAlive) {
-      sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
-    }
   } catch {
     // Storage errors ignored
   }

@@ -400,5 +400,49 @@ describe('New Day Check Utilities', () => {
       expect(loaded.currentCycle).toBe(2);
       expect(loaded.remainingSeconds).toBe(600);
     });
+
+    it('reads prefixed pomodor:sessions_v1 for all-nighter check and resets stale PAUSED timer from previous day', async () => {
+      vi.setSystemTime(new Date(2026, 10, 7, 4, 20, 0));
+
+      const recentSessions = [
+        {
+          id: 'prefixed-all-nighter',
+          sessionType: 'WORK',
+          durationSeconds: 1500,
+          completedAt: new Date(2026, 10, 7, 3, 55, 0).toISOString(),
+        },
+      ];
+      store.set('pomodor:sessions_v1', JSON.stringify(recentSessions));
+      store.set('focus_timer_last_day_reset_v1', '2026-11-06');
+
+      const pausedState = {
+        sessionType: 'WORK',
+        status: 'PAUSED',
+        currentCycle: 3,
+        remainingSeconds: 600,
+        totalSeconds: 1500,
+        targetEndTime: null,
+        timerRunId: 'run-paused',
+        updatedAtMs: new Date(2026, 10, 7, 3, 55, 0).getTime(),
+        activeTagId: null,
+        deviceId: 'dev-1',
+        tabId: 'tab-1',
+        lastActiveAtMs: new Date(2026, 10, 7, 3, 55, 0).getTime(),
+      };
+      store.set('timer_state_v1', JSON.stringify(pausedState));
+
+      const { loadInitialTimerState } = await import('../src/context/timer/timerPersistence');
+      // 1. All-nighter session in pomodor:sessions_v1 prevents reset
+      const preserved = loadInitialTimerState(25);
+      expect(preserved.currentCycle).toBe(3);
+      expect(preserved.status).toBe('PAUSED');
+
+      // 2. When 8 hours pass (12:30 PM), the old PAUSED timer from yesterday is reset to Cycle 1 IDLE
+      vi.setSystemTime(new Date(2026, 10, 7, 12, 30, 0));
+      const resetAfterSleep = loadInitialTimerState(25);
+      expect(resetAfterSleep.currentCycle).toBe(1);
+      expect(resetAfterSleep.status).toBe('IDLE');
+      expect(resetAfterSleep.remainingSeconds).toBe(25 * 60);
+    });
   });
 });

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import React, { useState, useEffect, useRef } from 'react';
+import { useAuthProfile } from '../../context/AuthProfileContext';
 import { Check } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 import { TimerDurationSection, FocusedDurationField } from './TimerDurationSection';
@@ -46,8 +46,17 @@ export const SettingsView: React.FC = () => {
     syncPushSubscription,
     isEffectiveAuthenticated,
     convexSync,
-  } = useApp();
+  } = useAuthProfile();
   const [savedToast, setSavedToast] = useState(false);
+  const savedToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (savedToastTimeoutRef.current !== null) {
+        clearTimeout(savedToastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Focus tracking to prevent draft inputs from snapping back or clobbering while actively typing
   const [focusedField, setFocusedField] = useState<FocusedDurationField>(null);
@@ -117,7 +126,13 @@ export const SettingsView: React.FC = () => {
 
   const showSaved = () => {
     setSavedToast(true);
-    setTimeout(() => setSavedToast(false), 2000);
+    if (savedToastTimeoutRef.current !== null) {
+      clearTimeout(savedToastTimeoutRef.current);
+    }
+    savedToastTimeoutRef.current = setTimeout(() => {
+      savedToastTimeoutRef.current = null;
+      setSavedToast(false);
+    }, 2000);
   };
 
   const handleDecimalDurationChange = (
@@ -166,7 +181,7 @@ export const SettingsView: React.FC = () => {
 
     const parsed = parseInt(cleaned, 10);
     if (!Number.isNaN(parsed) && parsed >= 1) {
-      const clamped = Math.min(12, parsed);
+      const clamped = Math.min(20, parsed);
       updateSettings({ longBreakInterval: clamped });
       showSaved();
     }
@@ -174,7 +189,7 @@ export const SettingsView: React.FC = () => {
 
   const handleIntervalInputBlur = () => {
     const parsed = parseInt(intervalInput, 10);
-    const validNum = Number.isNaN(parsed) || parsed < 1 ? settings.longBreakInterval || 4 : Math.min(12, parsed);
+    const validNum = Number.isNaN(parsed) || parsed < 1 ? settings.longBreakInterval || 4 : Math.min(20, parsed);
     setIntervalInput(String(validNum));
     if (settings.longBreakInterval !== validNum) {
       updateSettings({ longBreakInterval: validNum });

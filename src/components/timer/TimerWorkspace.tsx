@@ -29,8 +29,20 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
     if (!isActiveView) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input or textarea
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+      if (e.metaKey || e.ctrlKey || e.altKey) {
+        return;
+      }
+
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName) ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (document.querySelector('[role="dialog"], [role="listbox"]')) {
         return;
       }
 
@@ -45,8 +57,6 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
         skipInterval();
       } else if (e.key === 'r' || e.key === 'R') {
         resetTimer();
-      } else if (e.key === 's' || e.key === 'S') {
-        skipInterval();
       }
     };
 

@@ -1,4 +1,6 @@
 import { Tag } from '../../types/tag';
+import { isSampleSessionId } from '../../services/repository/SessionRepository';
+import { sanitizeHexColor } from '../colors';
 import { toDateKey, WEEKDAY_NAMES, MONTH_NAMES } from '../dates';
 import { formatDurationHoursMins } from '../formatters';
 import {
@@ -21,13 +23,7 @@ export function filterPeriodSessions<T extends StatSession>(
   shouldExcludeSample: boolean
 ): { periodAllSessions: T[]; filteredSessions: T[] } {
   const periodAllSessions = sessions.filter((s) => {
-    if (
-      shouldExcludeSample &&
-      (s.id.startsWith('seed-session-') ||
-        s.id.startsWith('sample-session-') ||
-        s.id.startsWith('sample-') ||
-        s.id.startsWith('seed-'))
-    ) {
+    if (shouldExcludeSample && isSampleSessionId(s.id)) {
       return false;
     }
     if (!s.completedAt) return false;
@@ -81,7 +77,12 @@ export function computeTagDistribution(
     .map(([tagId, data]) => {
       const foundTag = tagMap.get(tagId);
       const name = tagId === 'unassigned' ? 'Unassigned' : foundTag ? foundTag.name : 'Unknown Tag';
-      const color = tagId === 'unassigned' ? '#9E9E9E' : foundTag ? foundTag.color : '#BDBDBD';
+      const color =
+        tagId === 'unassigned'
+          ? '#9E9E9E'
+          : foundTag
+          ? sanitizeHexColor(foundTag.color, '#BDBDBD')
+          : '#BDBDBD';
       const isArchived = foundTag ? foundTag.isArchived : false;
       const percentage =
         totalFocusSeconds > 0 ? Math.round((data.seconds / totalFocusSeconds) * 100) : 0;
@@ -117,11 +118,30 @@ export function computeActivityBars(
     }));
 
     filteredSessions.forEach((s) => {
-      const d = new Date(s.completedAt);
-      const h = d.getHours();
-      if (hoursArray[h]) {
-        hoursArray[h].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
-        hoursArray[h].count += 1;
+      const endDate = new Date(s.completedAt);
+      if (Number.isNaN(endDate.getTime())) return;
+      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+      const endH = endDate.getHours();
+      if (hoursArray[endH]) {
+        hoursArray[endH].count += 1;
+      }
+      if (dur <= 0) return;
+
+      const endMs = endDate.getTime();
+      const startMs = endMs - dur * 1000;
+      const y = endDate.getFullYear();
+      const m = endDate.getMonth();
+      const d = endDate.getDate();
+
+      // Strictly attribute overlap within Day D's local [00:00, 24:00] window
+      for (let h = 0; h < 24; h++) {
+        const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
+        const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
+        const overlapStart = Math.max(startMs, winStart);
+        const overlapEnd = Math.min(endMs, winEnd);
+        if (overlapEnd > overlapStart) {
+          hoursArray[h].seconds += Math.round((overlapEnd - overlapStart) / 1000);
+        }
       }
     });
 
@@ -343,11 +363,30 @@ export function computeProductiveMetric(
   if (periodType === 'day') {
     const hourCounts = new Array(24).fill(0);
     filteredSessions.forEach((s) => {
-      const h = new Date(s.completedAt).getHours();
-      hourCounts[h] = Math.min(
-        3600,
-        hourCounts[h] + (s.durationSeconds > 0 ? s.durationSeconds : 0)
-      );
+      const endDate = new Date(s.completedAt);
+      if (Number.isNaN(endDate.getTime())) return;
+      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+      if (dur <= 0) return;
+
+      const endMs = endDate.getTime();
+      const startMs = endMs - dur * 1000;
+      const y = endDate.getFullYear();
+      const m = endDate.getMonth();
+      const d = endDate.getDate();
+
+      // Strictly attribute overlap within Day D's local [00:00, 24:00] window
+      for (let h = 0; h < 24; h++) {
+        const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
+        const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
+        const overlapStart = Math.max(startMs, winStart);
+        const overlapEnd = Math.min(endMs, winEnd);
+        if (overlapEnd > overlapStart) {
+          hourCounts[h] = Math.min(
+            3600,
+            hourCounts[h] + Math.round((overlapEnd - overlapStart) / 1000)
+          );
+        }
+      }
     });
     let maxH = 0;
     let maxSec = -1;

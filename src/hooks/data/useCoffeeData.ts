@@ -50,8 +50,6 @@ export function useCoffeeData({
   const { isConvexConfigured, convexCoffee, mutations: convexMutations } = convexSync;
 
   const [coffeeCups, setCoffeeCups] = useState<CoffeeCup[]>([]);
-  const coffeeCupsRef = useRef<CoffeeCup[]>(coffeeCups);
-  coffeeCupsRef.current = coffeeCups;
 
   const pendingAddsRef = useRef<Map<string, CoffeeCup>>(new Map());
   const pendingDeletesRef = useRef<Set<string>>(new Set());
@@ -79,7 +77,10 @@ export function useCoffeeData({
     const serverCreatedTimes = new Set(remainingServer.map((c) => c.createdAt));
 
     const unconfirmedAdds = pendingAdds.filter(
-      (a) => !serverIds.has(a.id) && !serverCreatedTimes.has(a.createdAt)
+      (a) =>
+        !pendingDeletes.has(a.id) &&
+        !serverIds.has(a.id) &&
+        !serverCreatedTimes.has(a.createdAt)
     );
 
     const merged = [...remainingServer, ...unconfirmedAdds].sort(
@@ -153,6 +154,25 @@ export function useCoffeeData({
           })
           .then((serverCup) => {
             pendingAddsRef.current.delete(created.id);
+            if (pendingDeletesRef.current.has(created.id)) {
+              pendingDeletesRef.current.delete(created.id);
+              if (serverCup && serverCup.id) {
+                pendingDeletesRef.current.add(serverCup.id);
+                convexMutations
+                  .removeCup({
+                    id: serverCup.id,
+                    date: today,
+                    tagId: tagId || undefined,
+                  })
+                  .finally(() => {
+                    pendingDeletesRef.current.delete(serverCup.id);
+                  })
+                  .catch((err) => {
+                    console.warn('Convex removeCup error:', err);
+                  });
+              }
+              return;
+            }
             if (serverCup && serverCup.id) {
               setCoffeeCups((prev) =>
                 prev.map((c) => (c.id === created.id ? { ...c, id: serverCup.id } : c))
@@ -163,10 +183,12 @@ export function useCoffeeData({
                 );
                 coffeeRepository.saveAll(withServerId);
               });
+              void telemetryTracker.reconcileCoffeeCupId(created.id, serverCup.id);
             }
           })
           .catch((err) => {
             pendingAddsRef.current.delete(created.id);
+            pendingDeletesRef.current.delete(created.id);
             console.warn('Convex addCup error:', err);
           });
       }
@@ -180,6 +202,7 @@ export function useCoffeeData({
       const today = dateStr || toDateKey(new Date());
       const removedCup = await coffeeRepository.removeCup(today, tagId, cupId);
       if (removedCup) {
+        const isPendingAdd = pendingAddsRef.current.has(removedCup.id);
         pendingDeletesRef.current.add(removedCup.id);
 
         const updated = await coffeeRepository.getAll();
@@ -191,7 +214,7 @@ export function useCoffeeData({
 
         void telemetryTracker.onCoffeeRemoved(removedCup);
 
-        if (isConvexConfigured && isEffectiveAuthenticated) {
+        if (isConvexConfigured && isEffectiveAuthenticated && !isPendingAdd) {
           convexMutations
             .removeCup({
               id: removedCup.id,
@@ -215,7 +238,6 @@ export function useCoffeeData({
   return {
     coffeeCups,
     setCoffeeCups,
-    coffeeCupsRef,
     addCoffeeCup,
     removeCoffeeCup,
   };

@@ -53,6 +53,7 @@ export interface StatSession {
 }
 
 export interface StatCoffeeCup {
+  id?: string;
   date: string;
   tagId?: string | null;
 }

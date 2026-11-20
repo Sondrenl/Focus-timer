@@ -22,6 +22,7 @@ import type * as tags from "../tags.js";
 import type * as telemetry from "../telemetry.js";
 import type * as telemetryValidators from "../telemetryValidators.js";
 import type * as timer from "../timer.js";
+import type * as timerHelpers from "../timerHelpers.js";
 import type * as users from "../users.js";
 
 import type {
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   telemetry: typeof telemetry;
   telemetryValidators: typeof telemetryValidators;
   timer: typeof timer;
+  timerHelpers: typeof timerHelpers;
   users: typeof users;
 }>;
 

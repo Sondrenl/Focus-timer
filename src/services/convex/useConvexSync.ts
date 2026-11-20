@@ -194,16 +194,28 @@ export function useConvexSync(isAuthenticated: boolean) {
     ]
   );
 
-  return {
-    isConvexConfigured,
-    convexUser,
-    convexCoffee,
-    convexSessions,
-    vapidPublicKey,
-    setAuthToken,
-    fetchTelemetryAttempts,
-    fetchTelemetryEvents,
-    mutations,
-  };
+  return useMemo(
+    () => ({
+      isConvexConfigured,
+      convexUser,
+      convexCoffee,
+      convexSessions,
+      vapidPublicKey,
+      setAuthToken,
+      fetchTelemetryAttempts,
+      fetchTelemetryEvents,
+      mutations,
+    }),
+    [
+      convexUser,
+      convexCoffee,
+      convexSessions,
+      vapidPublicKey,
+      setAuthToken,
+      fetchTelemetryAttempts,
+      fetchTelemetryEvents,
+      mutations,
+    ]
+  );
 }
 

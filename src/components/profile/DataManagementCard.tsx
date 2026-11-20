@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -33,8 +33,31 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
 }) => {
   const [exportedSuccess, setExportedSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingBackup, setPendingBackup] = useState<BackupData | null>(null);
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+
+  useEffect(() => {
+    return () => {
+      if (exportTimeoutRef.current !== null) {
+        clearTimeout(exportTimeoutRef.current);
+      }
+      if (statusTimeoutRef.current !== null) {
+        clearTimeout(statusTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const scheduleClearStatus = () => {
+    if (statusTimeoutRef.current !== null) {
+      clearTimeout(statusTimeoutRef.current);
+    }
+    statusTimeoutRef.current = setTimeout(() => {
+      statusTimeoutRef.current = null;
+      onStatusMessage(null);
+    }, 4000);
+  };
 
   const handleExportData = () => {
     const backup = exportBackup();
@@ -52,7 +75,13 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
     URL.revokeObjectURL(url);
 
     setExportedSuccess(true);
-    setTimeout(() => setExportedSuccess(false), 2500);
+    if (exportTimeoutRef.current !== null) {
+      clearTimeout(exportTimeoutRef.current);
+    }
+    exportTimeoutRef.current = setTimeout(() => {
+      exportTimeoutRef.current = null;
+      setExportedSuccess(false);
+    }, 2500);
   };
 
   const handleSelectImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -146,7 +175,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
         parts.push(`${result.coffeeAdded} coffee cups`);
       }
       onStatusMessage(`Import complete! Restored ${parts.join(', ')}.`);
-      setTimeout(() => onStatusMessage(null), 4000);
+      scheduleClearStatus();
     } catch {
       onErrorMessage('An error occurred during import.');
     }
@@ -196,7 +225,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
               onClick={async () => {
                 await reloadSampleData();
                 onStatusMessage('Sample data loaded for dev/preview mode.');
-                setTimeout(() => onStatusMessage(null), 4000);
+                scheduleClearStatus();
               }}
             >
               <Sparkles className="w-4 h-4 mr-2" />

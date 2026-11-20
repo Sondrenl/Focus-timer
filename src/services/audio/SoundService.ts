@@ -72,10 +72,21 @@ function generateChimeWav(): string {
 }
 
 export class SoundService {
+  private static readonly UNLOCK_EVENTS = [
+    'pointerdown',
+    'touchstart',
+    'touchend',
+    'click',
+    'keydown',
+  ] as const;
+
   private audioCtx: AudioContext | null = null;
   private chimeWavUrl: string | null = null;
   private chimeAudio: HTMLAudioElement | null = null;
   private isPlayingChime: boolean = false;
+  private isChimePrimed: boolean = false;
+  private isAudioUnlocked: boolean = false;
+  private unlockHandler: (() => void) | null = null;
   private chimeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
@@ -110,14 +121,37 @@ export class SoundService {
       }
 
       // Prepare and prime audio on user interactions so completion chimes play reliably in the background
-      const unlockOnGesture = () => {
+      this.unlockHandler = () => {
         this.prepareForPlayback();
       };
-      window.addEventListener('pointerdown', unlockOnGesture, { passive: true });
-      window.addEventListener('touchstart', unlockOnGesture, { passive: true });
-      window.addEventListener('touchend', unlockOnGesture, { passive: true });
-      window.addEventListener('click', unlockOnGesture, { passive: true });
-      window.addEventListener('keydown', unlockOnGesture, { passive: true });
+      for (const evt of SoundService.UNLOCK_EVENTS) {
+        window.addEventListener(evt, this.unlockHandler, { passive: true });
+      }
+    }
+  }
+
+  private removeUnlockListeners(): void {
+    if (typeof window === 'undefined' || !this.unlockHandler) return;
+    for (const evt of SoundService.UNLOCK_EVENTS) {
+      window.removeEventListener(evt, this.unlockHandler);
+    }
+    this.unlockHandler = null;
+  }
+
+  private tryCompleteAudioUnlock(): void {
+    if (this.isAudioUnlocked) return;
+    const hasAudioContextSupport =
+      typeof window !== 'undefined' &&
+      Boolean(
+        window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      );
+    const webAudioRunning = !hasAudioContextSupport || this.audioCtx?.state === 'running';
+    const chimeReady = !this.chimeAudio || this.isChimePrimed;
+
+    if (webAudioRunning && chimeReady) {
+      this.isAudioUnlocked = true;
+      this.removeUnlockListeners();
     }
   }
 
@@ -136,7 +170,12 @@ export class SoundService {
     }
 
     if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => {});
+      this.audioCtx
+        .resume()
+        .then(() => {
+          this.tryCompleteAudioUnlock();
+        })
+        .catch(() => {});
     }
 
     return this.audioCtx;
@@ -149,21 +188,30 @@ export class SoundService {
    */
   primeAudio(): void {
     if (!this.chimeAudio) return;
-    if (this.isPlayingChime) return;
+    if (this.isPlayingChime || this.isAudioUnlocked || this.isChimePrimed) return;
 
     try {
       this.chimeAudio.volume = 0.001;
       const p = this.chimeAudio.play();
       if (p !== undefined) {
         p.then(() => {
+          this.isChimePrimed = true;
           // Double check that chime didn't start playing while prime promise was in flight
           if (!this.isPlayingChime && this.chimeAudio) {
             this.chimeAudio.pause();
             this.chimeAudio.currentTime = 0;
           }
+          this.tryCompleteAudioUnlock();
         }).catch(() => {
           // Priming error ignored
         });
+      } else {
+        this.isChimePrimed = true;
+        if (!this.isPlayingChime && this.chimeAudio) {
+          this.chimeAudio.pause();
+          this.chimeAudio.currentTime = 0;
+        }
+        this.tryCompleteAudioUnlock();
       }
     } catch {
       // Ignored
@@ -176,8 +224,8 @@ export class SoundService {
    */
   prepareForPlayback(): void {
     const ctx = this.getAudioContext();
-    if (ctx && ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+    if (ctx && ctx.state === 'running') {
+      this.tryCompleteAudioUnlock();
     }
     this.primeAudio();
   }
