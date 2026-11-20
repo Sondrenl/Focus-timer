@@ -53,6 +53,30 @@ export function useCoffeeData({
 
   const pendingAddsRef = useRef<Map<string, CoffeeCup>>(new Map());
   const pendingDeletesRef = useRef<Set<string>>(new Set());
+  const pendingDeletedCreatedAtRef = useRef<Map<string, number>>(new Map());
+
+  const addPendingDeletedCreatedAt = useCallback((createdAt: string) => {
+    const count = pendingDeletedCreatedAtRef.current.get(createdAt) ?? 0;
+    pendingDeletedCreatedAtRef.current.set(createdAt, count + 1);
+  }, []);
+
+  const removePendingDeletedCreatedAt = useCallback((createdAt: string) => {
+    const count = pendingDeletedCreatedAtRef.current.get(createdAt) ?? 0;
+    if (count <= 1) {
+      pendingDeletedCreatedAtRef.current.delete(createdAt);
+    } else {
+      pendingDeletedCreatedAtRef.current.set(createdAt, count - 1);
+    }
+  }, []);
+
+  // Clear pending cloud-reconciliation refs whenever signed out
+  useEffect(() => {
+    if (!isEffectiveAuthenticated) {
+      pendingAddsRef.current.clear();
+      pendingDeletesRef.current.clear();
+      pendingDeletedCreatedAtRef.current.clear();
+    }
+  }, [isEffectiveAuthenticated]);
 
   // Initial load of coffee cups from local storage
   useEffect(() => {
@@ -70,15 +94,19 @@ export function useCoffeeData({
 
     const serverCups = convexCoffee as CoffeeCup[];
     const pendingDeletes = pendingDeletesRef.current;
+    const pendingDeletedCreatedAt = pendingDeletedCreatedAtRef.current;
     const pendingAdds = Array.from(pendingAddsRef.current.values());
 
-    const remainingServer = serverCups.filter((c) => !pendingDeletes.has(c.id));
+    const remainingServer = serverCups.filter(
+      (c) => !pendingDeletes.has(c.id) && !pendingDeletedCreatedAt.has(c.createdAt)
+    );
     const serverIds = new Set(remainingServer.map((c) => c.id));
     const serverCreatedTimes = new Set(remainingServer.map((c) => c.createdAt));
 
     const unconfirmedAdds = pendingAdds.filter(
       (a) =>
         !pendingDeletes.has(a.id) &&
+        !pendingDeletedCreatedAt.has(a.createdAt) &&
         !serverIds.has(a.id) &&
         !serverCreatedTimes.has(a.createdAt)
     );
@@ -114,6 +142,7 @@ export function useCoffeeData({
     const unsubReset = subscribeReset(() => {
       pendingAddsRef.current.clear();
       pendingDeletesRef.current.clear();
+      pendingDeletedCreatedAtRef.current.clear();
       setCoffeeCups([]);
     });
 
@@ -128,7 +157,10 @@ export function useCoffeeData({
       const today = dateStr || toDateKey(new Date());
       const created = await coffeeRepository.addCup(today, tagId);
 
-      pendingAddsRef.current.set(created.id, created);
+      const shouldSyncToCloud = isConvexConfigured && isEffectiveAuthenticated;
+      if (shouldSyncToCloud) {
+        pendingAddsRef.current.set(created.id, created);
+      }
 
       const updated = await coffeeRepository.getAll();
       const sortedUpdated = [...updated].sort(
@@ -145,7 +177,7 @@ export function useCoffeeData({
         activeSessionType: activeTimer.sessionType,
       });
 
-      if (isConvexConfigured && isEffectiveAuthenticated) {
+      if (shouldSyncToCloud) {
         convexMutations
           .addCup({
             date: today,
@@ -166,35 +198,48 @@ export function useCoffeeData({
                   })
                   .finally(() => {
                     pendingDeletesRef.current.delete(serverCup.id);
+                    removePendingDeletedCreatedAt(created.createdAt);
                   })
                   .catch((err) => {
                     console.warn('Convex removeCup error:', err);
                   });
+              } else {
+                removePendingDeletedCreatedAt(created.createdAt);
               }
               return;
             }
             if (serverCup && serverCup.id) {
-              setCoffeeCups((prev) =>
-                prev.map((c) => (c.id === created.id ? { ...c, id: serverCup.id } : c))
-              );
-              coffeeRepository.getAll().then((all) => {
-                const withServerId = all.map((c) =>
+              setCoffeeCups((prev) => {
+                if (
+                  created.id !== serverCup.id &&
+                  prev.some((c) => c.id === serverCup.id)
+                ) {
+                  return prev.filter((c) => c.id !== created.id);
+                }
+                return prev.map((c) =>
                   c.id === created.id ? { ...c, id: serverCup.id } : c
                 );
-                coffeeRepository.saveAll(withServerId);
               });
+              void coffeeRepository.replaceId(created.id, serverCup.id);
               void telemetryTracker.reconcileCoffeeCupId(created.id, serverCup.id);
             }
           })
           .catch((err) => {
             pendingAddsRef.current.delete(created.id);
-            pendingDeletesRef.current.delete(created.id);
+            if (pendingDeletesRef.current.delete(created.id)) {
+              removePendingDeletedCreatedAt(created.createdAt);
+            }
             console.warn('Convex addCup error:', err);
           });
       }
       return created;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [
+      isConvexConfigured,
+      isEffectiveAuthenticated,
+      convexMutations,
+      removePendingDeletedCreatedAt,
+    ]
   );
 
   const removeCoffeeCup = useCallback(
@@ -202,8 +247,12 @@ export function useCoffeeData({
       const today = dateStr || toDateKey(new Date());
       const removedCup = await coffeeRepository.removeCup(today, tagId, cupId);
       if (removedCup) {
-        const isPendingAdd = pendingAddsRef.current.has(removedCup.id);
-        pendingDeletesRef.current.add(removedCup.id);
+        const shouldSyncToCloud = isConvexConfigured && isEffectiveAuthenticated;
+        const isPendingAdd = shouldSyncToCloud && pendingAddsRef.current.has(removedCup.id);
+        if (shouldSyncToCloud) {
+          pendingDeletesRef.current.add(removedCup.id);
+          addPendingDeletedCreatedAt(removedCup.createdAt);
+        }
 
         const updated = await coffeeRepository.getAll();
         const sortedUpdated = [...updated].sort(
@@ -214,7 +263,7 @@ export function useCoffeeData({
 
         void telemetryTracker.onCoffeeRemoved(removedCup);
 
-        if (isConvexConfigured && isEffectiveAuthenticated && !isPendingAdd) {
+        if (shouldSyncToCloud && !isPendingAdd) {
           convexMutations
             .removeCup({
               id: removedCup.id,
@@ -223,6 +272,7 @@ export function useCoffeeData({
             })
             .finally(() => {
               pendingDeletesRef.current.delete(removedCup.id);
+              removePendingDeletedCreatedAt(removedCup.createdAt);
             })
             .catch((err) => {
               console.warn('Convex removeCup error:', err);
@@ -232,7 +282,13 @@ export function useCoffeeData({
       }
       return false;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [
+      isConvexConfigured,
+      isEffectiveAuthenticated,
+      convexMutations,
+      addPendingDeletedCreatedAt,
+      removePendingDeletedCreatedAt,
+    ]
   );
 
   return {

@@ -104,6 +104,19 @@ export function useCloudMigration({
         (e) => !isSampleSessionId(e.eventId)
       );
 
+      let didPreClear = false;
+      if (mode === 'replace' && typeof convexMutations.clearForReplaceBatch === 'function') {
+        let hasMore = true;
+        let batches = 0;
+        const MAX_CLEAR_BATCHES = 500;
+        while (hasMore && batches < MAX_CLEAR_BATCHES) {
+          const res = await convexMutations.clearForReplaceBatch({});
+          hasMore = Boolean(res?.hasMore);
+          batches += 1;
+        }
+        didPreClear = true;
+      }
+
       const maxChunks = Math.max(
         1,
         Math.ceil(cleanSessions.length / BACKUP_CHUNK_SIZE),
@@ -135,7 +148,8 @@ export function useCloudMigration({
 
         await convexMutations.importBackup({
           mode: chunkMode,
-          tags: i === 0 ? tagsToSync : [],
+          ...(i === 0 && didPreClear ? { skipReplaceClear: true } : {}),
+          tags: i === 0 || chunkMode === 'merge' ? tagsToSync : [],
           sessions: sessionSlice,
           coffeeCups: cupSlice,
           ...(hasMlSlice

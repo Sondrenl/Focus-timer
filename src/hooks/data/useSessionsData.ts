@@ -48,9 +48,13 @@ export function useSessionsData({
     initSessions();
   }, []);
 
-  // Immediately purge dev sample sessions whenever a user signs in so sample data never leaks into their account
+  // Immediately purge dev sample sessions whenever a user signs in so sample data never leaks into their account,
+  // and clear pending cloud-reconciliation refs whenever signed out
   useEffect(() => {
-    if (!isEffectiveAuthenticated) return;
+    if (!isEffectiveAuthenticated) {
+      pendingAddsRef.current.clear();
+      return;
+    }
     sessionRepository.purgeSampleSessions().then((clean) => {
       setSessions((prev) => {
         const filtered = prev.filter((s) => !isSampleSessionId(s.id));
@@ -153,7 +157,9 @@ export function useSessionsData({
       }
 
       const created = await sessionRepository.add(sessionData);
-      if (!isSampleSessionId(created.id)) {
+      const shouldSyncToCloud =
+        isConvexConfigured && isEffectiveAuthenticated && !isSampleSessionId(created.id);
+      if (shouldSyncToCloud) {
         pendingAddsRef.current.set(created.id, created);
       }
 
@@ -174,7 +180,7 @@ export function useSessionsData({
       });
       broadcastSession(created);
 
-      if (isConvexConfigured && isEffectiveAuthenticated && !isSampleSessionId(created.id)) {
+      if (shouldSyncToCloud) {
         convexMutations
           .recordSession({
             tagId: sessionData.tagId || undefined,
@@ -185,20 +191,21 @@ export function useSessionsData({
           .then((serverSession) => {
             pendingAddsRef.current.delete(created.id);
             if (serverSession && serverSession.id) {
-              setSessions((prev) =>
-                prev.map((s) =>
-                  s.id === created.id
-                    ? { ...s, id: serverSession.id, completedAt: serverSession.completedAt }
-                    : s
-                )
-              );
-              sessionRepository.getAll().then((all) => {
-                const updated = all.map((s) =>
+              setSessions((prev) => {
+                if (
+                  created.id !== serverSession.id &&
+                  prev.some((s) => s.id === serverSession.id)
+                ) {
+                  return prev.filter((s) => s.id !== created.id);
+                }
+                return prev.map((s) =>
                   s.id === created.id
                     ? { ...s, id: serverSession.id, completedAt: serverSession.completedAt }
                     : s
                 );
-                sessionRepository.saveAll(updated);
+              });
+              void sessionRepository.replaceId(created.id, serverSession.id, {
+                completedAt: serverSession.completedAt,
               });
             }
           })

@@ -127,25 +127,44 @@ export const register = mutation({
       .take(50);
 
     for (const doc of sameEndpointSubs) {
-      if (doc.userId !== user._id) {
+      if (doc.userId !== user._id || doc.deviceId !== args.deviceId) {
         await ctx.db.delete(doc._id);
       }
     }
 
-    const existing = await ctx.db
+    const existingList = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_user_device", (q) =>
         q.eq("userId", user._id).eq("deviceId", args.deviceId)
       )
-      .first();
+      .take(50);
+
+    const existing = existingList[0];
+    if (existingList.length > 1) {
+      for (const duplicate of existingList.slice(1)) {
+        await ctx.db.delete(duplicate._id);
+      }
+    }
 
     if (existing) {
+      const nextIsMobile = args.isMobile ?? existing.isMobile;
+      const unchanged =
+        existing.endpoint === args.endpoint &&
+        existing.p256dh === args.p256dh &&
+        existing.auth === args.auth &&
+        existing.userAgent === sanitizedUserAgent &&
+        existing.isMobile === nextIsMobile;
+
+      if (unchanged) {
+        return existing._id;
+      }
+
       await ctx.db.patch(existing._id, {
         endpoint: args.endpoint,
         p256dh: args.p256dh,
         auth: args.auth,
         userAgent: sanitizedUserAgent,
-        isMobile: args.isMobile ?? existing.isMobile,
+        isMobile: nextIsMobile,
         updatedAt: now,
       });
       return existing._id;
@@ -206,10 +225,11 @@ export const getPushDispatchContext = internalQuery({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) {
-      return { notificationsEnabled: false, subscriptions: [] };
+      return { notificationsEnabled: false, soundEnabled: true, subscriptions: [] };
     }
 
     const notificationsEnabled = user.settings?.notificationsEnabled ?? false;
+    const soundEnabled = user.settings?.soundEnabled ?? true;
     const subscriptions = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
@@ -217,6 +237,7 @@ export const getPushDispatchContext = internalQuery({
 
     return {
       notificationsEnabled,
+      soundEnabled,
       subscriptions,
     };
   },

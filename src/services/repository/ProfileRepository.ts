@@ -10,6 +10,7 @@ export interface IProfileRepository {
 const PROFILE_STORAGE_KEY = 'profile_v1';
 
 export const MAX_DISPLAY_NAME_LENGTH = 50;
+export const MAX_AVATAR_EMOJI_LENGTH = 32;
 
 export function sanitizeProfile(raw: Partial<UserProfile> | null | undefined): UserProfile {
   if (!raw || typeof raw !== 'object') {
@@ -31,7 +32,7 @@ export function sanitizeProfile(raw: Partial<UserProfile> | null | undefined): U
     : DEFAULT_PROFILE.dailyGoalMinutes;
 
   const avatarEmoji = typeof raw.avatarEmoji === 'string'
-    ? raw.avatarEmoji.trim().slice(0, 10)
+    ? raw.avatarEmoji.trim().slice(0, MAX_AVATAR_EMOJI_LENGTH)
     : DEFAULT_PROFILE.avatarEmoji;
 
   const createdAt = typeof raw.createdAt === 'string' && !isNaN(new Date(raw.createdAt).getTime())

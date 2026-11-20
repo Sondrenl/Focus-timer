@@ -231,13 +231,6 @@ describe("Web Push Backend & Arbitration", () => {
         totalSeconds: 1500,
         currentCycle: 1,
         updatedAtMs: now,
-        peerPresence: {
-          desktopActive: true,
-          desktopVisible: true,
-          mobileActive: true,
-          mobileVisible: false,
-          lastSeenMs: now,
-        },
       });
     });
 
@@ -365,5 +358,230 @@ describe("Web Push Backend & Arbitration", () => {
     });
     const pushJobs = scheduledAfter.filter((j) => j.name.includes("sendTimerCompletionPush"));
     expect(pushJobs).toHaveLength(1);
+  });
+
+  it("removes stale same-user endpoint rows when deviceId changes and returns soundEnabled in dispatch context", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createTestUser(t);
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "device-old",
+      endpoint: "https://fcm.googleapis.com/fcm/send/shared-endpoint",
+      p256dh: "BM6hZ_VALID_KEY=",
+      auth: "AUTHKEY==",
+      isMobile: true,
+    });
+
+    // Simulate localStorage clear creating a new deviceId for the same user & SW endpoint
+    await asUser.mutation(api.push.register, {
+      deviceId: "device-new",
+      endpoint: "https://fcm.googleapis.com/fcm/send/shared-endpoint",
+      p256dh: "BM6hZ_VALID_KEY=",
+      auth: "AUTHKEY==",
+      isMobile: true,
+    });
+
+    await asUser.mutation(api.users.updateSettings, {
+      notificationsEnabled: true,
+      soundEnabled: false,
+    });
+
+    const ctx = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(ctx.soundEnabled).toBe(false);
+    expect(ctx.subscriptions).toHaveLength(1);
+    expect(ctx.subscriptions[0].deviceId).toBe("device-new");
+  });
+
+  it("skips patching updatedAt in api.push.register when subscription fields are unchanged", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createTestUser(t);
+
+    const subArgs = {
+      deviceId: "desktop-focus-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/unchanged-tok",
+      p256dh: "BM6hZ_VALID_KEY=",
+      auth: "AUTHKEY==",
+      userAgent: "Mozilla/5.0 Chrome/125.0",
+      isMobile: false,
+    };
+
+    const firstId = await asUser.mutation(api.push.register, subArgs);
+    const sentinelUpdatedAt = "2026-01-01T00:00:00.000Z";
+    await t.run(async (ctx) => {
+      await ctx.db.patch(firstId, { updatedAt: sentinelUpdatedAt });
+    });
+
+    // Re-registering identical subscription fields should skip ctx.db.patch
+    const secondId = await asUser.mutation(api.push.register, subArgs);
+    expect(secondId).toBe(firstId);
+
+    const afterUnchanged = await t.run(async (ctx) => ctx.db.get(firstId));
+    expect(afterUnchanged?.updatedAt).toBe(sentinelUpdatedAt);
+
+    // Changing a field (e.g., auth key) should patch and refresh updatedAt
+    await asUser.mutation(api.push.register, {
+      ...subArgs,
+      auth: "UPDATED_AUTH==",
+    });
+    const afterChanged = await t.run(async (ctx) => ctx.db.get(firstId));
+    expect(afterChanged?.auth).toBe("UPDATED_AUTH==");
+    expect(afterChanged?.updatedAt).not.toBe(sentinelUpdatedAt);
+  });
+
+  it("cleans up duplicate (userId, deviceId) rows in api.push.register", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createTestUser(t);
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("push_subscriptions", {
+        userId,
+        deviceId: "dup-device-1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/dup-tok-1",
+        p256dh: "BM6hZ_VALID_KEY=",
+        auth: "AUTHKEY==",
+        isMobile: true,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      await ctx.db.insert("push_subscriptions", {
+        userId,
+        deviceId: "dup-device-1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/dup-tok-2",
+        p256dh: "BM6hZ_VALID_KEY=",
+        auth: "AUTHKEY==",
+        isMobile: true,
+        updatedAt: "2026-01-02T00:00:00.000Z",
+      });
+    });
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "dup-device-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/dup-tok-1",
+      p256dh: "BM6hZ_VALID_KEY=",
+      auth: "AUTHKEY==",
+      isMobile: true,
+    });
+
+    const rows = await t.run(async (ctx) =>
+      ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_user_device", (q) =>
+          q.eq("userId", userId).eq("deviceId", "dup-device-1")
+        )
+        .collect()
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].endpoint).toBe("https://fcm.googleapis.com/fcm/send/dup-tok-1");
+  });
+
+  it("does not schedule sendTimerCompletionPush when notificationsEnabled is undefined or false", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createTestUser(t);
+
+    // 1. Missing/undefined user.settings (falls back to DEFAULT_SETTINGS) -> client api.timer.complete must not schedule push
+    await t.run(async (ctx) => {
+      await ctx.db.patch(userId, { settings: undefined });
+      const now = Date.now();
+      await ctx.db.insert("active_timers", {
+        userId,
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 1500,
+        totalSeconds: 1500,
+        targetEndTime: now - 500,
+        currentCycle: 1,
+        timerRunId: "run-notif-undef-client",
+        updatedAtMs: now - 1_500_500,
+      });
+    });
+
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "run-notif-undef-client",
+      nextSessionType: "SHORT_BREAK",
+      nextDurationSeconds: 300,
+      nextCurrentCycle: 1,
+      autoStartNext: false,
+    });
+
+    // 2. Undefined notificationsEnabled -> server internal.timer.onTimerCompleted must not schedule push
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      const now = Date.now();
+      await ctx.db.patch(existing!._id, {
+        sessionType: "SHORT_BREAK",
+        status: "RUNNING",
+        remainingSeconds: 300,
+        totalSeconds: 300,
+        targetEndTime: now - 500,
+        currentCycle: 1,
+        timerRunId: "run-notif-undef-server",
+        updatedAtMs: now - 300_500,
+      });
+    });
+
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-notif-undef-server",
+    });
+
+    // 3. Explicit notificationsEnabled: false -> neither complete nor onTimerCompleted schedules push
+    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: false });
+
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      const now = Date.now();
+      await ctx.db.patch(existing!._id, {
+        sessionType: "WORK",
+        status: "RUNNING",
+        remainingSeconds: 1500,
+        totalSeconds: 1500,
+        targetEndTime: now - 500,
+        currentCycle: 2,
+        timerRunId: "run-notif-false-client",
+        updatedAtMs: now - 1_500_500,
+      });
+    });
+
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "run-notif-false-client",
+      nextSessionType: "SHORT_BREAK",
+      nextDurationSeconds: 300,
+      nextCurrentCycle: 2,
+      autoStartNext: false,
+    });
+
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      const now = Date.now();
+      await ctx.db.patch(existing!._id, {
+        sessionType: "SHORT_BREAK",
+        status: "RUNNING",
+        remainingSeconds: 300,
+        totalSeconds: 300,
+        targetEndTime: now - 500,
+        currentCycle: 2,
+        timerRunId: "run-notif-false-server",
+        updatedAtMs: now - 300_500,
+      });
+    });
+
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-notif-false-server",
+    });
+
+    const scheduled = await t.run(async (ctx) =>
+      ctx.db.system.query("_scheduled_functions").collect()
+    );
+    const pushJobs = scheduled.filter((job) => job.name.includes("sendTimerCompletionPush"));
+    expect(pushJobs).toHaveLength(0);
   });
 });

@@ -1,82 +1,26 @@
 import React, { useCallback, useRef } from 'react';
-import { SessionType, TimerStatus, PeerPresence } from '../../types/timer';
+import { SessionType } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
 import { SoundService } from '../../services/audio/SoundService';
 import { NotificationService } from '../../services/notification/NotificationService';
-import { evaluateDeviceAlert } from '../../utils/arbitration';
+import { getCompletionNotificationCopy } from '../../services/notification/notificationCopy';
 import { triggerCompletionConfetti } from '../../utils/confetti';
-import { IS_MOBILE } from './timerPersistence';
 
 interface UseTimerAlertsParams {
-  statusRef: React.MutableRefObject<TimerStatus>;
-  sessionTypeRef: React.MutableRefObject<SessionType>;
-  targetEndTimeRef: React.MutableRefObject<number | null>;
   timerRunIdRef: React.MutableRefObject<string | null>;
   settingsRef: React.MutableRefObject<UserSettings>;
-  peerPresenceRef: React.MutableRefObject<PeerPresence>;
   sound: SoundService;
   notifications: NotificationService;
 }
 
 export const useTimerAlerts = ({
-  statusRef,
-  sessionTypeRef,
-  targetEndTimeRef,
   timerRunIdRef,
   settingsRef,
-  peerPresenceRef,
   sound,
   notifications,
 }: UseTimerAlertsParams) => {
   const lastAlertWallMsRef = useRef<number>(0);
   const lastAlertRunIdRef = useRef<string | null>(null);
-
-  /**
-   * Determines whether THIS device should play the completion chime and show the notification:
-   */
-  const shouldThisDeviceAlert = useCallback(
-    (type: SessionType): boolean => {
-      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-      return evaluateDeviceAlert({
-        isMobile: IS_MOBILE,
-        isVisible,
-        peer: peerPresenceRef.current,
-        type,
-      });
-    },
-    [peerPresenceRef]
-  );
-
-  const syncScheduledNotification = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    if (statusRef.current !== 'RUNNING' || !targetEndTimeRef.current) {
-      notifications.cancelScheduledNotification();
-      return;
-    }
-
-    const currentType = sessionTypeRef.current;
-    const shouldAlert = shouldThisDeviceAlert(currentType);
-    const runId = timerRunIdRef.current;
-
-    if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
-      notifications.scheduleTimerNotification(
-        targetEndTimeRef.current,
-        currentType,
-        shouldAlert,
-        runId
-      );
-    } else {
-      notifications.cancelScheduledNotification();
-    }
-  }, [
-    notifications,
-    shouldThisDeviceAlert,
-    statusRef,
-    targetEndTimeRef,
-    sessionTypeRef,
-    timerRunIdRef,
-    settingsRef,
-  ]);
 
   const dispatchCompletionAlert = useCallback(
     (completedSessionType: SessionType, runId?: string | null) => {
@@ -95,34 +39,33 @@ export const useTimerAlerts = ({
       lastAlertRunIdRef.current = currentRunId || null;
 
       const currentSettings = settingsRef.current;
-      const willAlert = shouldThisDeviceAlert(completedSessionType);
+      const wantsNotification =
+        currentSettings.notificationsEnabled && notifications.hasPermission();
+      const isSilent = !currentSettings.soundEnabled;
 
-      if (!willAlert) {
-        return;
-      }
+      if (wantsNotification) {
+        const { title, body } = getCompletionNotificationCopy(completedSessionType);
 
-      if (currentSettings.notificationsEnabled) {
-        const title =
-          completedSessionType === 'WORK'
-            ? 'Pomodor — Focus session complete'
-            : 'Pomodor — Break session complete';
-        const body =
-          completedSessionType === 'WORK'
-            ? 'Your focus timer has finished. Time for a break.'
-            : 'Your break timer has finished. Time for a focus session.';
-
-        notifications.notify(title, body, false, currentRunId);
-      }
-
-      if (currentSettings.soundEnabled) {
+        // Let the OS notification service own the standard notification sound (or stay silent when muted).
+        // Fall back to the in-app Web Audio chime only if OS notification delivery fails.
+        void notifications
+          .notify(title, body, false, currentRunId, { silent: isSilent })
+          .catch(() => false)
+          .then((sent) => {
+            const latest = settingsRef.current;
+            if (!sent && latest.soundEnabled) {
+              sound.playChime(latest.soundVolume);
+            }
+          });
+      } else if (currentSettings.soundEnabled) {
+        // App is running without OS notifications — play the native Web Audio chime.
         sound.playChime(currentSettings.soundVolume);
       }
     },
-    [notifications, sound, shouldThisDeviceAlert, timerRunIdRef, settingsRef]
+    [notifications, sound, timerRunIdRef, settingsRef]
   );
 
   return {
-    syncScheduledNotification,
     dispatchCompletionAlert,
     triggerCompletionConfetti,
   };

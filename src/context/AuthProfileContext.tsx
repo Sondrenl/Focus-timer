@@ -17,6 +17,7 @@ import { subscribeReset } from '../services/timer/TimerBroadcast';
 import { useConvexSync } from '../services/convex/useConvexSync';
 import { usePushSubscriptionSync } from '../hooks/usePushSubscriptionSync';
 import { DEVICE_ID } from './timer/timerPersistence';
+import { sanitizeProfile } from '../services/repository/ProfileRepository';
 import {
   authService,
   profileRepository,
@@ -106,6 +107,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     mutations: convexMutations,
   } = convexSync;
 
+  const convexUserRef = useRef(convexUser);
+  convexUserRef.current = convexUser;
+
   useEffect(() => {
     return () => {
       if (tokenRefreshTimerRef.current) {
@@ -168,6 +172,10 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
     authService.logout();
     lastPersistedAuthUserJsonRef.current = null;
+    lastLocalSettingsEditMsRef.current = 0;
+    lastLocalProfileEditMsRef.current = 0;
+    pendingSettingsMutationsRef.current = 0;
+    pendingProfileMutationsRef.current = 0;
     if (isConvexConfigured && !hadConvexSession) {
       setAuthToken(null);
     }
@@ -338,6 +346,36 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   }, [isConvexConfigured, isConvexAuthLoading, isConvexAuthAuthenticated, setAuthToken]);
 
+  // Clear stale local auth state if a persisted Convex Auth session expired/failed to refresh
+  // and no valid legacy Google JWT exists.
+  useEffect(() => {
+    if (
+      !isConvexConfigured ||
+      isConvexAuthLoading ||
+      isConvexAuthAuthenticated ||
+      !auth.isAuthenticated
+    ) {
+      return;
+    }
+    if (authService.hasConvexAuthSession()) {
+      return;
+    }
+    const storedToken = authService.getStoredToken();
+    if (storedToken && !authService.isTokenExpired(storedToken)) {
+      return;
+    }
+    setAuth((prev) =>
+      prev.isAuthenticated
+        ? {
+            ...prev,
+            isAuthenticated: false,
+            token: null,
+            isTokenExpired: Boolean(storedToken),
+          }
+        : prev
+    );
+  }, [isConvexConfigured, isConvexAuthLoading, isConvexAuthAuthenticated, auth.isAuthenticated]);
+
   // Multi-tab factory-reset listener for profile & settings
   useEffect(() => {
     const unsubReset = subscribeReset((scope) => {
@@ -361,7 +399,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   useEffect(() => {
     if (!isEffectiveAuthenticated || !convexUser) return;
 
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
     const applyRemoteUser = () => {
+      if (cancelled) return;
       const now = Date.now();
       if (
         convexUser.settings &&
@@ -394,7 +436,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         now - lastLocalProfileEditMsRef.current >= 2000
       ) {
         const curProf = profileRef.current;
-        const updatedProfile: UserProfile = {
+        const updatedProfile = sanitizeProfile({
           ...curProf,
           id: convexUser.id,
           email: convexUser.email,
@@ -402,7 +444,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           avatarUrl: convexUser.avatarUrl,
           avatarEmoji: convexUser.avatarEmoji,
           dailyGoalMinutes: convexUser.dailyGoalMinutes,
-        };
+        });
         const profileChanged =
           curProf.id !== updatedProfile.id ||
           curProf.email !== updatedProfile.email ||
@@ -450,23 +492,53 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     };
 
+    const scheduleNextCheck = () => {
+      if (cancelled) return;
+      const now = Date.now();
+      const settingsBlocked =
+        Boolean(convexUser.settings) &&
+        (pendingSettingsMutationsRef.current > 0 ||
+          now - lastLocalSettingsEditMsRef.current < 2000);
+      const profileBlocked =
+        pendingProfileMutationsRef.current > 0 ||
+        now - lastLocalProfileEditMsRef.current < 2000;
+
+      if (!settingsBlocked && !profileBlocked) {
+        return;
+      }
+
+      const settingsRemaining =
+        pendingSettingsMutationsRef.current > 0
+          ? 500
+          : Math.max(0, 2000 - (now - lastLocalSettingsEditMsRef.current));
+      const profileRemaining =
+        pendingProfileMutationsRef.current > 0
+          ? 500
+          : Math.max(0, 2000 - (now - lastLocalProfileEditMsRef.current));
+
+      const nextDelay = Math.min(
+        settingsBlocked ? settingsRemaining : Infinity,
+        profileBlocked ? profileRemaining : Infinity
+      );
+      if (!Number.isFinite(nextDelay)) return;
+
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        applyRemoteUser();
+        scheduleNextCheck();
+      }, Math.max(50, nextDelay + 50));
+    };
+
     applyRemoteUser();
+    scheduleNextCheck();
 
-    const now = Date.now();
-    const settingsRemaining =
-      pendingSettingsMutationsRef.current > 0
-        ? 2000
-        : 2000 - (now - lastLocalSettingsEditMsRef.current);
-    const profileRemaining =
-      pendingProfileMutationsRef.current > 0
-        ? 2000
-        : 2000 - (now - lastLocalProfileEditMsRef.current);
-    const maxRemaining = Math.max(settingsRemaining, profileRemaining);
-
-    if (maxRemaining > 0) {
-      const timer = setTimeout(applyRemoteUser, maxRemaining + 50);
-      return () => clearTimeout(timer);
-    }
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
   }, [convexUser, isEffectiveAuthenticated]);
 
   // Google Identity Services auto-selection & silent token refresh
@@ -517,10 +589,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const syncWithCloud = useCallback(
     async (): Promise<void> => {
       if (!isEffectiveAuthenticated) return;
+      if (isConvexConfigured && convexUserRef.current === undefined) return;
       setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
       try {
         if (isConvexConfigured) {
-          const curProfile = profileRef.current;
+          const curProfile = sanitizeProfile(profileRef.current);
           const curSettings = settingsRef.current;
           pendingProfileMutationsRef.current += 1;
           pendingSettingsMutationsRef.current += 1;
@@ -571,7 +644,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ): Promise<void> => {
       lastLocalProfileEditMsRef.current = Date.now();
       const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
-      const merged = { ...profileRef.current, ...newProfile };
+      const merged = sanitizeProfile({ ...profileRef.current, ...newProfile });
       profileRef.current = merged;
       setProfile(merged);
       await profileRepository.save(merged);
@@ -587,9 +660,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         pendingProfileMutationsRef.current += 1;
         convexMutations
           .updateProfile({
-            displayName: newProfile.displayName,
-            avatarEmoji: newProfile.avatarEmoji,
-            dailyGoalMinutes: newProfile.dailyGoalMinutes,
+            ...(newProfile.displayName !== undefined ? { displayName: merged.displayName } : {}),
+            ...(newProfile.avatarEmoji !== undefined ? { avatarEmoji: merged.avatarEmoji } : {}),
+            ...(newProfile.dailyGoalMinutes !== undefined
+              ? { dailyGoalMinutes: merged.dailyGoalMinutes }
+              : {}),
           })
           .catch(console.warn)
           .finally(() => {

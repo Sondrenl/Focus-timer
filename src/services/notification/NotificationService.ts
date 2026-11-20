@@ -1,4 +1,3 @@
-import { SessionType } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
@@ -55,6 +54,8 @@ export class NotificationService {
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
+  private handleControllerChange: (() => void) | null = null;
+  private handleVisibilityChange: (() => void) | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -72,21 +73,43 @@ export class NotificationService {
         })
         .catch(() => {});
 
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
+      this.handleControllerChange = () => {
         navigator.serviceWorker.getRegistration().then((reg) => {
           if (reg) {
             this.cachedRegistration = reg;
           }
         }).catch(() => {});
-      });
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', this.handleControllerChange);
 
       if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', () => {
+        this.handleVisibilityChange = () => {
           if (document.visibilityState === 'visible' && this.cachedRegistration) {
             this.cachedRegistration.update().catch(() => {});
           }
-        });
+        };
+        document.addEventListener('visibilitychange', this.handleVisibilityChange);
       }
+    }
+  }
+
+  destroy(): void {
+    if (
+      this.handleControllerChange &&
+      typeof window !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      typeof navigator.serviceWorker.removeEventListener === 'function'
+    ) {
+      navigator.serviceWorker.removeEventListener('controllerchange', this.handleControllerChange);
+      this.handleControllerChange = null;
+    }
+    if (
+      this.handleVisibilityChange &&
+      typeof document !== 'undefined' &&
+      typeof document.removeEventListener === 'function'
+    ) {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      this.handleVisibilityChange = null;
     }
   }
 
@@ -373,26 +396,25 @@ export class NotificationService {
     title: string,
     body: string,
     isManualTest: boolean = false,
-    sessionRunId?: string | null
+    sessionRunId?: string | null,
+    notifOpts?: { silent?: boolean }
   ): Promise<boolean> {
     if (!this.hasPermission()) return false;
+
+    const silent = Boolean(notifOpts?.silent);
 
     if (!isManualTest && sessionRunId && this.lastNotifiedSessionId === sessionRunId) {
       return true;
     }
-    if (sessionRunId) {
-      this.lastNotifiedSessionId = sessionRunId;
-    }
 
-    // Cancel any pending scheduled timer notification in the Service Worker
-    this.cancelScheduledNotification();
-
-    try {
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate([250, 100, 250]);
+    if (!silent) {
+      try {
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          navigator.vibrate([250, 100, 250]);
+        }
+      } catch {
+        // Ignore vibration errors
       }
-    } catch {
-      // Ignore vibration errors
     }
 
     const mobile = isMobileDevice();
@@ -408,9 +430,9 @@ export class NotificationService {
       badge: '/badge-72.png',
       tag: notifTag,
       timestamp: Date.now(),
-      renotify: true,
-      silent: false,
-      vibrate: [250, 100, 250],
+      renotify: !silent,
+      silent,
+      ...(silent ? {} : { vibrate: [250, 100, 250] }),
       ...(mobile ? {} : { requireInteraction: true }),
     } as NotificationOptions;
 
@@ -424,6 +446,7 @@ export class NotificationService {
           try {
             const existingSameTag = await reg.getNotifications({ tag: notifTag });
             if (existingSameTag.length > 0) {
+              this.lastNotifiedSessionId = sessionRunId;
               this.markSessionNotifiedInWorker(sessionRunId);
               return true;
             }
@@ -447,9 +470,11 @@ export class NotificationService {
           }
         }
 
-        // Mark notified in SW BEFORE awaiting showNotification to avoid push/page races
-        this.markSessionNotifiedInWorker(sessionRunId);
         await reg.showNotification(title, options);
+        if (sessionRunId) {
+          this.lastNotifiedSessionId = sessionRunId;
+        }
+        this.markSessionNotifiedInWorker(sessionRunId);
         return true;
       }
     } catch (err) {
@@ -463,7 +488,7 @@ export class NotificationService {
           body,
           icon: '/icon-192.png',
           tag: notifTag,
-          silent: false,
+          silent,
         });
         notif.onclick = () => {
           try {
@@ -473,64 +498,17 @@ export class NotificationService {
             // Ignore
           }
         };
+        if (sessionRunId) {
+          this.lastNotifiedSessionId = sessionRunId;
+        }
         this.markSessionNotifiedInWorker(sessionRunId);
         return true;
       }
     } catch (err) {
-      console.warn('new Notification failed, trying ServiceWorker postMessage:', err);
+      console.warn('new Notification failed:', err);
     }
 
-    // 3. Service Worker message dispatch fallback
-    this.sendWorkerMessage({
-      type: 'SHOW_NOTIFICATION',
-      title,
-      body,
-      sessionId: sessionRunId || null,
-      isManualTest,
-      isMobile: mobile,
-    });
-    return true;
-  }
-
-  /**
-   * Schedules a backup notification in the Service Worker at the exact targetEndTime
-   * so the phone Home Screen or lock screen receives the alert even if the browser throttles the page.
-   */
-  scheduleTimerNotification(
-    targetEndTimeMs: number,
-    sessionType: SessionType,
-    enabled: boolean,
-    sessionRunId?: string | null
-  ): void {
-    if (!enabled || !this.hasPermission()) {
-      this.cancelScheduledNotification();
-      return;
-    }
-
-    const title =
-      sessionType === 'WORK'
-        ? 'Pomodor — Focus session complete'
-        : 'Pomodor — Break session complete';
-    const body =
-      sessionType === 'WORK'
-        ? 'Your focus timer has finished. Time for a break.'
-        : 'Your break timer has finished. Time for a focus session.';
-
-    this.sendWorkerMessage({
-      type: 'SCHEDULE_TIMER_NOTIFICATION',
-      targetEndTime: targetEndTimeMs,
-      title,
-      body,
-      sessionId: sessionRunId || null,
-      sessionType,
-      isMobile: isMobileDevice(),
-    });
-  }
-
-  cancelScheduledNotification(): void {
-    this.sendWorkerMessage({
-      type: 'CANCEL_TIMER_NOTIFICATION',
-    });
+    return false;
   }
 }
 

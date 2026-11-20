@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from '../../types/settings';
 import { TimerDurationSection, FocusedDurationField } from './TimerDurationSection';
 import { AutomationSection } from './AutomationSection';
 import { SoundNotificationSection } from './SoundNotificationSection';
+import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
 /**
  * Sanitizes a decimal string input to allow digits and at most one decimal point
@@ -283,6 +284,13 @@ export const SettingsView: React.FC = () => {
         pushStatus={pushStatus}
         isPushAuthenticated={convexSync.isConvexConfigured && isEffectiveAuthenticated}
         onSyncPush={syncPushSubscription}
+        onUnsubscribePush={() =>
+          notifications.unsubscribePush(
+            convexSync.isConvexConfigured && isEffectiveAuthenticated
+              ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+              : undefined
+          )
+        }
         onScheduleTestPush={() => convexSync.mutations.scheduleTestPush({ delayMs: 5000 })}
       />
     </div>

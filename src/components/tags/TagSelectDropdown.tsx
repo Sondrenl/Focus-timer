@@ -20,8 +20,12 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasModalOpenRef = useRef(false);
 
   useEffect(() => {
+    if (!isOpen) return;
+
     const handleClickOutside = (e: MouseEvent | TouchEvent | PointerEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsOpen(false);
@@ -29,7 +33,11 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
         setIsOpen(false);
+        if (triggerRef.current?.isConnected) {
+          triggerRef.current.focus();
+        }
       }
     };
     document.addEventListener('pointerdown', handleClickOutside);
@@ -38,7 +46,18 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
       document.removeEventListener('pointerdown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [isOpen]);
+
+  // Restore focus to the dropdown trigger after the tag creation modal closes
+  // (the "Create New Tag..." button that opened the modal is unmounted when the dropdown closes).
+  useEffect(() => {
+    if (wasModalOpenRef.current && !isModalOpen) {
+      if (triggerRef.current?.isConnected) {
+        triggerRef.current.focus();
+      }
+    }
+    wasModalOpenRef.current = isModalOpen;
+  }, [isModalOpen]);
 
   const currentTag = activeTags.find((t) => t.id === selectedTagId);
   const menuTitle = variant === 'coffee' ? 'Choose Tag for Cup' : 'Tags';
@@ -47,6 +66,7 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
     <div className="relative inline-block" ref={dropdownRef}>
       {/* Trigger Button */}
       <button
+        ref={triggerRef}
         type="button"
         aria-expanded={isOpen}
         aria-haspopup="listbox"
@@ -87,14 +107,17 @@ export const TagSelectDropdown: React.FC<TagSelectDropdownProps> = ({
       {/* Dropdown Menu */}
       {isOpen && (
         <div
-          role="listbox"
           className="absolute left-1/2 -translate-x-1/2 mt-2 w-[min(calc(100vw-32px),20rem)] md:w-64 bg-white border border-md-outline-variant rounded-2xl p-2 md:p-1.5 shadow-elevation-2 z-30"
         >
           <div className="text-xs font-semibold text-md-on-surface-variant uppercase tracking-wider px-3 py-2 md:py-1.5">
             {menuTitle}
           </div>
 
-          <div className="max-h-64 md:max-h-56 overflow-y-auto space-y-1 py-1">
+          <div
+            role="listbox"
+            aria-label={menuTitle}
+            className="max-h-64 md:max-h-56 overflow-y-auto space-y-1 py-1"
+          >
             {/* Unassigned / No Tag Option */}
             <button
               type="button"

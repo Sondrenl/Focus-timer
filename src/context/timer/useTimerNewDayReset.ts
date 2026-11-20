@@ -3,7 +3,6 @@ import { SessionType, TimerStatus, RemoteTimerState } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
 import { CoffeeCup } from '../../types/coffee';
 import { CompletedSession } from '../../types/session';
-import { NotificationService } from '../../services/notification/NotificationService';
 import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import {
@@ -12,6 +11,7 @@ import {
   getLastResetDayKey,
   setLastResetDayKey,
   getLastSessionCompletedAt,
+  INACTIVITY_THRESHOLD_MS,
 } from '../../utils/newDayCheck';
 import { DEVICE_ID, SavedTimerState, saveTimerState } from './timerPersistence';
 import { ResetTimerOptions } from './useTimerCloudSync';
@@ -43,7 +43,6 @@ interface UseTimerNewDayResetParams {
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
   setTargetEndTime: React.Dispatch<React.SetStateAction<number | null>>;
   getDurationForType: (type: SessionType) => number;
-  notifications: NotificationService;
   publishLocalTimerState: (
     nextState: RemoteTimerState,
     isDirectUserAction?: boolean,
@@ -77,7 +76,6 @@ export function useTimerNewDayReset({
   setRemainingSeconds,
   setTargetEndTime,
   getDurationForType,
-  notifications,
   publishLocalTimerState,
 }: UseTimerNewDayResetParams) {
   const checkAndResetForNewDay = useCallback(() => {
@@ -103,6 +101,13 @@ export function useTimerNewDayReset({
         setLastResetDayKey(currentDayKey);
       }
       return false;
+    }
+
+    if (statusRef.current === 'PAUSED' || latestRemote?.status === 'PAUSED') {
+      const pausedAtMs = Math.max(localUpdatedAtRef.current, latestRemote?.updatedAtMs ?? 0);
+      if (pausedAtMs > 0 && now.getTime() - pausedAtMs < INACTIVITY_THRESHOLD_MS) {
+        return false;
+      }
     }
 
     const latestSessionTime = getLastSessionCompletedAt(sessions);
@@ -161,7 +166,6 @@ export function useTimerNewDayReset({
       setTargetEndTime(null);
 
       wakeLockService.release();
-      notifications.cancelScheduledNotification();
 
       setLastResetDayKey(currentDayKey);
 
@@ -231,7 +235,6 @@ export function useTimerNewDayReset({
     setRemainingSeconds,
     setTargetEndTime,
     getDurationForType,
-    notifications,
     publishLocalTimerState,
   ]);
 

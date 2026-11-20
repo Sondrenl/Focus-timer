@@ -7,18 +7,7 @@ export { TAG_ID_REGEX };
 
 export type TimerSessionType = "WORK" | "SHORT_BREAK" | "LONG_BREAK";
 
-export interface PeerPresenceRecord {
-  desktopActive: boolean;
-  desktopVisible: boolean;
-  mobileActive: boolean;
-  mobileVisible: boolean;
-  lastSeenMs: number;
-  desktopLastSeenMs?: number;
-  mobileLastSeenMs?: number;
-}
-
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9_-]+$/;
-const PRESENCE_TTL_MS = 90_000;
 export const MAX_FUTURE_TIMESTAMP_SKEW_MS = 5 * 60 * 1000;
 
 export async function cancelScheduledJob(
@@ -228,66 +217,4 @@ export function computeServerNextInterval(
   const nextDurationSec = Math.max(1, Math.round(nextMinutes * 60));
 
   return { nextType, nextCycle, nextDurationSec };
-}
-
-export function computeUpdatedPeerPresence(
-  existingPresence: PeerPresenceRecord | undefined,
-  args: { isMobile: boolean; isVisible: boolean },
-  now: number
-): { shouldPatch: boolean; presence: PeerPresenceRecord } {
-  const currentPresence: PeerPresenceRecord = existingPresence ?? {
-    desktopActive: false,
-    desktopVisible: false,
-    mobileActive: false,
-    mobileVisible: false,
-    lastSeenMs: 0,
-    desktopLastSeenMs: 0,
-    mobileLastSeenMs: 0,
-  };
-
-  const prevDesktopSeen = currentPresence.desktopLastSeenMs ?? currentPresence.lastSeenMs ?? 0;
-  const prevMobileSeen = currentPresence.mobileLastSeenMs ?? currentPresence.lastSeenMs ?? 0;
-
-  const peerDesktopFresh = now - prevDesktopSeen < PRESENCE_TTL_MS;
-  const peerMobileFresh = now - prevMobileSeen < PRESENCE_TTL_MS;
-
-  const newDesktopActive = args.isMobile
-    ? peerDesktopFresh && currentPresence.desktopActive
-    : true;
-  const newDesktopVisible = args.isMobile
-    ? peerDesktopFresh && currentPresence.desktopVisible
-    : args.isVisible;
-  const newMobileActive = args.isMobile
-    ? true
-    : peerMobileFresh && currentPresence.mobileActive;
-  const newMobileVisible = args.isMobile
-    ? args.isVisible
-    : peerMobileFresh && currentPresence.mobileVisible;
-
-  const newDesktopLastSeenMs = args.isMobile ? prevDesktopSeen : now;
-  const newMobileLastSeenMs = args.isMobile ? now : prevMobileSeen;
-
-  const flagsChanged =
-    newDesktopActive !== currentPresence.desktopActive ||
-    newDesktopVisible !== currentPresence.desktopVisible ||
-    newMobileActive !== currentPresence.mobileActive ||
-    newMobileVisible !== currentPresence.mobileVisible;
-
-  const thisDeviceLastSeen = args.isMobile ? prevMobileSeen : prevDesktopSeen;
-  if (!flagsChanged && now - thisDeviceLastSeen < 60_000) {
-    return { shouldPatch: false, presence: currentPresence };
-  }
-
-  return {
-    shouldPatch: true,
-    presence: {
-      desktopActive: newDesktopActive,
-      desktopVisible: newDesktopVisible,
-      mobileActive: newMobileActive,
-      mobileVisible: newMobileVisible,
-      lastSeenMs: now,
-      desktopLastSeenMs: newDesktopLastSeenMs,
-      mobileLastSeenMs: newMobileLastSeenMs,
-    },
-  };
 }

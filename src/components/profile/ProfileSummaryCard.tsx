@@ -35,15 +35,16 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
   userEmail,
 }) => {
   const displayName = profile.displayName || 'Focus Practitioner';
+  const dailyGoalMinutes = profile.dailyGoalMinutes || 120;
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState(displayName);
   const [editEmoji, setEditEmoji] = useState(profile.avatarEmoji);
-  const [editGoalInput, setEditGoalInput] = useState(String(profile.dailyGoalMinutes));
+  const [editGoalInput, setEditGoalInput] = useState(String(dailyGoalMinutes));
 
   const openEditModal = () => {
     setEditName(profile.displayName || 'Focus Practitioner');
     setEditEmoji(profile.avatarEmoji);
-    setEditGoalInput(String(profile.dailyGoalMinutes));
+    setEditGoalInput(String(dailyGoalMinutes));
     setIsEditingProfile(true);
   };
 
@@ -53,10 +54,10 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
     const parsedMinutes = parseInt(editGoalInput, 10);
     const safeGoal = !Number.isNaN(parsedMinutes)
       ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes)))
-      : profile.dailyGoalMinutes || 120;
+      : dailyGoalMinutes;
     await updateProfile({
       displayName: safeDisplayName,
-      avatarEmoji: editEmoji.trim().slice(0, 10),
+      avatarEmoji: editEmoji.trim().slice(0, 32),
       dailyGoalMinutes: safeGoal,
     });
     setIsEditingProfile(false);
@@ -79,7 +80,6 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
     .filter((s) => toDateKey(s.completedAt) === todayStr)
     .reduce((acc, curr) => acc + Math.max(0, curr.durationSeconds), 0);
   const todayFocusMinutes = Math.floor(todayFocusSeconds / 60);
-  const dailyGoalMinutes = profile.dailyGoalMinutes || 120;
   const goalProgressPercent = Math.min(
     100,
     Math.floor((todayFocusSeconds / (dailyGoalMinutes * 60)) * 100)
@@ -153,7 +153,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="text-md-on-surface-variant font-mono">
-                    {todayFocusMinutes}m / {profile.dailyGoalMinutes}m ({goalProgressPercent}%)
+                    {todayFocusMinutes}m / {dailyGoalMinutes}m ({goalProgressPercent}%)
                   </span>
                   <button
                     onClick={openEditModal}

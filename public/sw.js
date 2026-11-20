@@ -1,12 +1,9 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 1.0.5
+// Version: 1.0.7
 // Handles Web Push, background, Home Screen, lock-screen, and smartwatch-friendly notifications
 
-const STALE_ALERT_MAX_AGE_MS = 60 * 1000;
 const RECENT_NOTIFIED_LIMIT = 20;
 
-let scheduledTimerId = null;
-let scheduledResolve = null;
 const notifiedSessionIds = [];
 
 function hasNotifiedSession(sessionId) {
@@ -77,18 +74,6 @@ self.addEventListener('activate', (event) => {
     ])
   );
 });
-
-function clearExistingSchedule() {
-  if (scheduledTimerId) {
-    clearTimeout(scheduledTimerId);
-    scheduledTimerId = null;
-  }
-  if (scheduledResolve) {
-    const resolve = scheduledResolve;
-    scheduledResolve = null;
-    resolve();
-  }
-}
 
 async function closeAllExistingNotifications() {
   try {
@@ -180,87 +165,10 @@ self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || !data.type) return;
 
-  const safeTitle =
-    typeof data.title === 'string' && data.title.trim()
-      ? data.title.trim().slice(0, 100)
-      : 'Pomodor — Focus session complete';
-  const safeBody =
-    typeof data.body === 'string' && data.body.trim()
-      ? data.body.trim().slice(0, 250)
-      : 'Your timer session has ended.';
-
-  if (data.type === 'SHOW_NOTIFICATION') {
-    clearExistingSchedule();
-    event.waitUntil(
-      showTimerNotification(
-        safeTitle,
-        safeBody,
-        data.sessionId || null,
-        true, // Always allow explicit SHOW_NOTIFICATION requests from the client
-        { isMobile: data.isMobile }
-      )
-    );
-  } else if (data.type === 'SCHEDULE_TIMER_NOTIFICATION') {
-    clearExistingSchedule();
-    const targetEndTime = Number(data.targetEndTime) || 0;
-    const nowMs = Date.now();
-    const delayMs = Math.max(0, targetEndTime - nowMs);
-    const sessionId = data.sessionId || null;
-    const isMobileDevice = Boolean(data.isMobile);
-
-    // Do not fire stale catch-up notifications if targetEndTime already passed >60s ago
-    if (targetEndTime > 0 && nowMs - targetEndTime > STALE_ALERT_MAX_AGE_MS) {
-      return;
-    }
-
-    if (delayMs > 0 && delayMs < 8 * 60 * 60 * 1000) {
-      const waitPromise = new Promise((resolve) => {
-        scheduledResolve = resolve;
-        scheduledTimerId = setTimeout(async () => {
-          scheduledTimerId = null;
-          scheduledResolve = null;
-
-          try {
-            // Abort stale timer callbacks that only woke up late due to OS Doze throttling
-            if (targetEndTime > 0 && Date.now() - targetEndTime > STALE_ALERT_MAX_AGE_MS) {
-              return;
-            }
-            const visible = await hasAnyVisibleClient();
-            if (!visible) {
-              await showTimerNotification(safeTitle, safeBody, sessionId, false, {
-                isMobile: isMobileDevice,
-              });
-            }
-          } catch {
-            if (!(targetEndTime > 0 && Date.now() - targetEndTime > STALE_ALERT_MAX_AGE_MS)) {
-              await showTimerNotification(safeTitle, safeBody, sessionId, false, {
-                isMobile: isMobileDevice,
-              });
-            }
-          } finally {
-            resolve();
-          }
-        }, delayMs);
-      });
-      event.waitUntil(waitPromise);
-    } else if (delayMs === 0) {
-      event.waitUntil(
-        hasAnyVisibleClient().then((visible) => {
-          if (!visible) {
-            return showTimerNotification(safeTitle, safeBody, sessionId, false, {
-              isMobile: isMobileDevice,
-            });
-          }
-        })
-      );
-    }
-  } else if (data.type === 'MARK_SESSION_NOTIFIED') {
-    clearExistingSchedule();
+  if (data.type === 'MARK_SESSION_NOTIFIED') {
     if (data.sessionId) {
       recordNotifiedSession(data.sessionId);
     }
-  } else if (data.type === 'CANCEL_TIMER_NOTIFICATION') {
-    clearExistingSchedule();
   }
 });
 
@@ -271,6 +179,7 @@ self.addEventListener('push', (event) => {
   let isTest = false;
   let isMobileHint;
   let completedAtMs = 0;
+  let silent = false;
 
   if (event.data) {
     try {
@@ -293,6 +202,9 @@ self.addEventListener('push', (event) => {
       if (typeof json.completedAtMs === 'number' && Number.isFinite(json.completedAtMs)) {
         completedAtMs = json.completedAtMs;
       }
+      if (typeof json.silent === 'boolean') {
+        silent = json.silent;
+      }
     } catch {
       const text = event.data.text();
       if (text) {
@@ -303,8 +215,6 @@ self.addEventListener('push', (event) => {
 
   event.waitUntil(
     (async () => {
-      clearExistingSchedule();
-
       const notifTag = getNotificationTag(sessionId, isTest);
       const visible = await hasAnyVisibleClient();
       const isStalePush =
@@ -329,7 +239,7 @@ self.addEventListener('push', (event) => {
       if (!alreadyDisplayed) {
         await showTimerNotification(title, body, sessionId, isTest, {
           isMobile: isMobileHint,
-          silent: false,
+          silent,
         });
         return;
       }

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation } from "./_generated/server";
+import { mutation, MutationCtx } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireUser } from "./authHelper";
 import { sanitizeTagColor, MAX_TAG_NAME_LENGTH, MAX_TAGS_PER_USER } from "./tags";
 import { TAG_ID_REGEX } from "./timerHelpers";
@@ -10,12 +11,69 @@ import {
   validateAndNormalizeEvent,
 } from "./telemetryValidators";
 
-const REPLACE_DELETE_BATCH_SIZE = 750;
+const REPLACE_DELETE_BATCH_SIZE = 500;
 const MERGE_DEDUP_SCAN_LIMIT = 4000;
+
+async function deleteReplaceBatchForUser(
+  ctx: MutationCtx,
+  userId: Id<"users">
+): Promise<{ hasMore: boolean }> {
+  const existingSessions = await ctx.db
+    .query("sessions")
+    .withIndex("by_user_completed", (q) => q.eq("userId", userId))
+    .take(REPLACE_DELETE_BATCH_SIZE);
+  for (const s of existingSessions) {
+    await ctx.db.delete(s._id);
+  }
+
+  const existingCups = await ctx.db
+    .query("coffee_cups")
+    .withIndex("by_user_date", (q) => q.eq("userId", userId))
+    .take(REPLACE_DELETE_BATCH_SIZE);
+  for (const c of existingCups) {
+    await ctx.db.delete(c._id);
+  }
+
+  const existingAttempts = await ctx.db
+    .query("session_attempts")
+    .withIndex("by_user_attempt", (q) => q.eq("userId", userId))
+    .take(REPLACE_DELETE_BATCH_SIZE);
+  for (const a of existingAttempts) {
+    await ctx.db.delete(a._id);
+  }
+
+  const existingEvents = await ctx.db
+    .query("ml_events")
+    .withIndex("by_user_event", (q) => q.eq("userId", userId))
+    .take(REPLACE_DELETE_BATCH_SIZE);
+  for (const e of existingEvents) {
+    await ctx.db.delete(e._id);
+  }
+
+  const hasMore =
+    existingSessions.length >= REPLACE_DELETE_BATCH_SIZE ||
+    existingCups.length >= REPLACE_DELETE_BATCH_SIZE ||
+    existingAttempts.length >= REPLACE_DELETE_BATCH_SIZE ||
+    existingEvents.length >= REPLACE_DELETE_BATCH_SIZE;
+
+  return { hasMore };
+}
+
+export const clearForReplaceBatch = mutation({
+  args: {},
+  returns: v.object({
+    hasMore: v.boolean(),
+  }),
+  handler: async (ctx) => {
+    const user = await requireUser(ctx, true);
+    return await deleteReplaceBatchForUser(ctx, user._id);
+  },
+});
 
 export const importBackup = mutation({
   args: {
     mode: v.union(v.literal("merge"), v.literal("replace")),
+    skipReplaceClear: v.optional(v.boolean()),
     tags: v.array(
       v.object({
         id: v.optional(v.string()),
@@ -137,39 +195,9 @@ export const importBackup = mutation({
         : `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     if (args.mode === "replace") {
-      // 1. Clear existing sessions (bounded)
-      const existingSessions = await ctx.db
-        .query("sessions")
-        .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-        .take(REPLACE_DELETE_BATCH_SIZE);
-      for (const s of existingSessions) {
-        await ctx.db.delete(s._id);
-      }
-
-      // 2. Clear existing coffee cups (bounded)
-      const existingCups = await ctx.db
-        .query("coffee_cups")
-        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-        .take(REPLACE_DELETE_BATCH_SIZE);
-      for (const c of existingCups) {
-        await ctx.db.delete(c._id);
-      }
-
-      // 2b. Clear existing passive ML telemetry (bounded)
-      const existingAttempts = await ctx.db
-        .query("session_attempts")
-        .withIndex("by_user_attempt", (q) => q.eq("userId", user._id))
-        .take(REPLACE_DELETE_BATCH_SIZE);
-      for (const a of existingAttempts) {
-        await ctx.db.delete(a._id);
-      }
-
-      const existingEvents = await ctx.db
-        .query("ml_events")
-        .withIndex("by_user_event", (q) => q.eq("userId", user._id))
-        .take(REPLACE_DELETE_BATCH_SIZE);
-      for (const e of existingEvents) {
-        await ctx.db.delete(e._id);
+      // 1-2b. Clear existing data (bounded) unless caller already pre-cleared via clearForReplaceBatch
+      if (!args.skipReplaceClear) {
+        await deleteReplaceBatchForUser(ctx, user._id);
       }
 
       // 3. Format and replace tags, keeping track of valid/remapped tag IDs
@@ -278,7 +306,8 @@ export const importBackup = mutation({
 
     const mergedTags = [...existingTags];
     for (const incoming of args.tags) {
-      const key = incoming.name.toLowerCase().trim();
+      const cleanName = incoming.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
+      const key = cleanName.toLowerCase();
       const existingMatch = tagMap.get(key);
       if (existingMatch) {
         if (incoming.id) {
@@ -286,7 +315,6 @@ export const importBackup = mutation({
         }
       } else {
         const canonicalId = makeSafeTagId(incoming.id);
-        const cleanName = incoming.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
         const cleanColor = sanitizeTagColor(incoming.color);
         const newTag = {
           id: canonicalId,

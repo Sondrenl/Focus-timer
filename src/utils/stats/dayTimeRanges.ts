@@ -57,13 +57,22 @@ export function computeDayTimeRangeBreakdown(
       const startMs = endMs - session.durationSeconds * 1000;
       if (endMs <= startMs) continue;
 
-      const y = endDate.getFullYear();
-      const m = endDate.getMonth();
-      const d = endDate.getDate();
+      // A positive-duration session ending at exact local midnight (00:00:00.000)
+      // spent all of its elapsed time before midnight on the preceding day (ending at 24:00).
+      const isExactLocalMidnight =
+        endDate.getHours() === 0 &&
+        endDate.getMinutes() === 0 &&
+        endDate.getSeconds() === 0 &&
+        endDate.getMilliseconds() === 0;
+      const anchorDate = isExactLocalMidnight ? new Date(endMs - 1) : endDate;
+
+      const y = anchorDate.getFullYear();
+      const m = anchorDate.getMonth();
+      const d = anchorDate.getDate();
 
       const atHour = (hour: number) => new Date(y, m, d, hour, 0, 0, 0).getTime();
 
-      // Contiguous local-time windows strictly covering Day D's [00:00, 24:00]
+      // Contiguous local-time windows strictly covering the session day's [00:00, 24:00]
       const windows: { id: DayTimeRangeId; start: number; end: number }[] = [
         { id: 'night', start: atHour(0), end: atHour(6) },
         { id: 'morning', start: atHour(6), end: atHour(10) },

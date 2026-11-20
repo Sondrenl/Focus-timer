@@ -3,7 +3,6 @@ import { SessionType, TimerStatus, RemoteTimerState } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
 import { CoffeeCup } from '../../types/coffee';
 import { SoundService } from '../../services/audio/SoundService';
-import { NotificationService } from '../../services/notification/NotificationService';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import {
   computeNextInterval,
@@ -44,10 +43,8 @@ interface UseTimerActionsParams {
     completedAt: string;
   }) => Promise<unknown>;
   sound: SoundService;
-  notifications: NotificationService;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
   triggerCompletionConfetti: () => void;
-  syncScheduledNotification: () => void;
   publishLocalTimerState: (
     nextState: RemoteTimerState,
     isDirectUserAction?: boolean,
@@ -81,10 +78,8 @@ export function useTimerActions({
   getDurationForType,
   recordSession,
   sound,
-  notifications,
   dispatchCompletionAlert,
   triggerCompletionConfetti,
-  syncScheduledNotification,
   publishLocalTimerState,
   publishTimerCompletion,
 }: UseTimerActionsParams) {
@@ -100,7 +95,6 @@ export function useTimerActions({
       const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, currentRemaining));
 
       wakeLockService.release();
-      notifications.cancelScheduledNotification();
 
       if (!silent) {
         dispatchCompletionAlert(completedType, currentRunId);
@@ -193,8 +187,6 @@ export function useTimerActions({
           },
           currentRunId
         );
-
-        syncScheduledNotification();
       } else {
         timerRunIdRef.current = null;
         statusRef.current = 'IDLE';
@@ -236,9 +228,7 @@ export function useTimerActions({
       setStatus,
       setRemainingSeconds,
       recordSession,
-      notifications,
       publishTimerCompletion,
-      syncScheduledNotification,
       dispatchCompletionAlert,
       triggerCompletionConfetti,
     ]
@@ -246,7 +236,6 @@ export function useTimerActions({
 
   const handleStaleExpiration = useCallback(() => {
     wakeLockService.release();
-    notifications.cancelScheduledNotification();
 
     const staleType = sessionTypeRef.current;
     const staleRunId = timerRunIdRef.current;
@@ -271,6 +260,7 @@ export function useTimerActions({
     });
 
     const defaultDuration = getDurationForType(staleType);
+    const prevUpdatedAtMs = localUpdatedAtRef.current;
     const nowMs = Date.now();
     statusRef.current = 'IDLE';
     targetEndTimeRef.current = null;
@@ -296,10 +286,11 @@ export function useTimerActions({
         timerRunId: null,
         updatedAtMs: nowMs,
       },
-      true,
+      false,
       {
-        onlyIfNotRunning: false,
+        onlyIfNotRunning: !staleRunId,
         expectedTimerRunId: staleRunId || undefined,
+        expectedUpdatedAtMs: !staleRunId ? prevUpdatedAtMs : undefined,
       }
     );
   }, [
@@ -320,7 +311,6 @@ export function useTimerActions({
     setTotalSeconds,
     setRemainingSeconds,
     getDurationForType,
-    notifications,
     publishLocalTimerState,
   ]);
 
@@ -387,8 +377,6 @@ export function useTimerActions({
       },
       true
     );
-
-    syncScheduledNotification();
   }, [
     statusRef,
     settingsRef,
@@ -405,14 +393,12 @@ export function useTimerActions({
     setStatus,
     sound,
     publishLocalTimerState,
-    syncScheduledNotification,
   ]);
 
   const pause = useCallback(() => {
     if (statusRef.current !== 'RUNNING') return;
 
     wakeLockService.release();
-    notifications.cancelScheduledNotification();
 
     const now = Date.now();
     let currentRemaining = remainingSecondsRef.current;
@@ -461,13 +447,11 @@ export function useTimerActions({
     setTargetEndTime,
     setStatus,
     setRemainingSeconds,
-    notifications,
     publishLocalTimerState,
   ]);
 
   const reset = useCallback(() => {
     wakeLockService.release();
-    notifications.cancelScheduledNotification();
 
     const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
     if (wasStarted) {
@@ -537,7 +521,6 @@ export function useTimerActions({
     setRemainingSeconds,
     setTotalSeconds,
     getDurationForType,
-    notifications,
     publishLocalTimerState,
   ]);
 
@@ -549,7 +532,6 @@ export function useTimerActions({
       outcome: 'skipped' | 'switched'
     ) => {
       wakeLockService.release();
-      notifications.cancelScheduledNotification();
 
       const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
       if (wasStarted) {
@@ -624,7 +606,6 @@ export function useTimerActions({
       setRemainingSeconds,
       setTotalSeconds,
       setTargetEndTime,
-      notifications,
       publishLocalTimerState,
     ]
   );

@@ -317,19 +317,357 @@ describe("NotificationService & Service Worker mobile behavior", () => {
       expect(shownNotifications[0].options.renotify).toBe(false);
     });
 
-    it("does NOT fire stale SCHEDULE_TIMER_NOTIFICATION catch-up alerts (>60s past targetEndTime)", async () => {
-      const { dispatchMessage, shownNotifications } = createSwSandbox({ visibleClient: false });
+    it("propagates silent: true on Web Push and omits vibrate to comply with Notification spec", async () => {
+      const { dispatchPush, shownNotifications } = createSwSandbox({ visibleClient: false });
 
-      await dispatchMessage({
-        type: "SCHEDULE_TIMER_NOTIFICATION",
-        targetEndTime: Date.now() - 10 * 60 * 1000, // 10 minutes late
+      await dispatchPush({
         title: "Pomodor — Focus session complete",
-        body: "Stale alert",
-        sessionId: "run-stale-1",
+        body: "Muted alert",
+        sessionId: "run-silent-1",
         isMobile: true,
+        silent: true,
       });
 
-      expect(shownNotifications).toHaveLength(0);
+      expect(shownNotifications).toHaveLength(1);
+      expect(shownNotifications[0].options.silent).toBe(true);
+      expect(shownNotifications[0].options.renotify).toBe(false);
+      expect(shownNotifications[0].options.vibrate).toBeUndefined();
     });
+  });
+
+  it("omits vibrate and skips navigator.vibrate when NotificationService.notify is called with silent: true", async () => {
+    const { showNotification } = setupBrowserMocks();
+
+    const svc = new NotificationService();
+    const ok = await svc.notify(
+      "Pomodor — Focus session complete",
+      "Muted banner",
+      false,
+      "run-muted-1",
+      { silent: true }
+    );
+
+    expect(ok).toBe(true);
+    expect(showNotification).toHaveBeenCalledTimes(1);
+    const [, options] = showNotification.mock.calls[0];
+    expect(options.silent).toBe(true);
+    expect((options as any).renotify).toBe(false);
+    expect((options as any).vibrate).toBeUndefined();
+    expect((navigator as any).vibrate).not.toHaveBeenCalled();
+  });
+
+  it("returns false when both Tier 1 and Tier 2 fail and does NOT poison lastNotifiedSessionId for retries", async () => {
+    const { showNotification, postMessage } = setupBrowserMocks();
+    showNotification.mockRejectedValueOnce(new Error("SW showNotification failed"));
+
+    const throwingNotification: any = vi.fn(() => {
+      throw new Error("Illegal constructor");
+    });
+    throwingNotification.permission = "granted";
+    vi.stubGlobal("Notification", throwingNotification);
+    (window as any).Notification = throwingNotification;
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const svc = new NotificationService();
+
+    const firstAttempt = await svc.notify(
+      "Pomodor — Focus session complete",
+      "Your focus timer has finished. Time for a break.",
+      false,
+      "run-retry-1"
+    );
+
+    expect(firstAttempt).toBe(false);
+    expect(showNotification).toHaveBeenCalledTimes(1);
+    expect(throwingNotification).toHaveBeenCalledTimes(1);
+    expect(postMessage).not.toHaveBeenCalled();
+
+    // Retry for the exact same sessionRunId must succeed now that Tier 1 works
+    const secondAttempt = await svc.notify(
+      "Pomodor — Focus session complete",
+      "Your focus timer has finished. Time for a break.",
+      false,
+      "run-retry-1"
+    );
+
+    expect(secondAttempt).toBe(true);
+    expect(showNotification).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it("destroy() detaches controllerchange and visibilitychange listeners cleanly", () => {
+    const swRemoveEventListener = vi.fn();
+    const docAddEventListener = vi.fn();
+    const docRemoveEventListener = vi.fn();
+    setupBrowserMocks();
+    (navigator as any).serviceWorker.removeEventListener = swRemoveEventListener;
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: docAddEventListener,
+      removeEventListener: docRemoveEventListener,
+    });
+
+    const svc = new NotificationService();
+    const swAddedCb = (navigator as any).serviceWorker.addEventListener.mock.calls.find(
+      (c: unknown[]) => c[0] === "controllerchange"
+    )?.[1];
+    const docAddedCb = docAddEventListener.mock.calls.find(
+      (c: unknown[]) => c[0] === "visibilitychange"
+    )?.[1];
+
+    expect(swAddedCb).toBeTypeOf("function");
+    expect(docAddedCb).toBeTypeOf("function");
+
+    svc.destroy();
+
+    expect(swRemoveEventListener).toHaveBeenCalledWith("controllerchange", swAddedCb);
+    expect(docRemoveEventListener).toHaveBeenCalledWith("visibilitychange", docAddedCb);
+  });
+
+  it("SoundService uses pure native Web Audio without global window listeners and resumes interrupted contexts", async () => {
+    const { SoundService } = await import("../src/services/audio/SoundService");
+    const addEventListener = vi.fn();
+    const startMock = vi.fn();
+    const stopMock = vi.fn();
+    const resumeMock = vi.fn(async () => {
+      mockCtx.state = "running";
+    });
+
+    const mockCtx: any = {
+      state: "interrupted",
+      currentTime: 10,
+      destination: {},
+      resume: resumeMock,
+      createOscillator: vi.fn(() => ({
+        type: "sine",
+        frequency: { setValueAtTime: vi.fn() },
+        connect: vi.fn(),
+        start: startMock,
+        stop: stopMock,
+      })),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(),
+      })),
+    };
+
+    vi.stubGlobal("window", {
+      addEventListener,
+      AudioContext: vi.fn(function () {
+        return mockCtx;
+      }),
+    });
+
+    const sound = new SoundService();
+    // No global gesture listener workarounds registered on construction
+    expect(addEventListener).not.toHaveBeenCalled();
+
+    // Resumes WebKit 'interrupted' context and plays the 3 triad notes
+    sound.playChime(0.7);
+    await Promise.resolve();
+
+    expect(resumeMock).toHaveBeenCalledTimes(1);
+    expect(startMock).toHaveBeenCalledTimes(3);
+    expect(stopMock).toHaveBeenCalledTimes(3);
+
+    // Volume 0 is a no-op
+    startMock.mockClear();
+    sound.playChime(0);
+    expect(startMock).not.toHaveBeenCalled();
+  });
+
+  it("SoundService skips phantom chime when ctx.resume() resolves after >1500ms", async () => {
+    vi.useFakeTimers();
+    try {
+      const { SoundService } = await import("../src/services/audio/SoundService");
+      const startMock = vi.fn();
+      let resolveResume!: () => void;
+
+      const mockCtx: any = {
+        state: "suspended",
+        currentTime: 5,
+        destination: {},
+        resume: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveResume = () => {
+                mockCtx.state = "running";
+                resolve();
+              };
+            })
+        ),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: { setValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+          start: startMock,
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        })),
+      };
+
+      vi.stubGlobal("window", {
+        AudioContext: vi.fn(function () {
+          return mockCtx;
+        }),
+      });
+
+      const sound = new SoundService();
+      sound.playChime(0.8);
+
+      // Simulate user waking the suspended AudioContext much later (>1500ms)
+      vi.advanceTimersByTime(2000);
+      resolveResume();
+      await Promise.resolve();
+
+      expect(startMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("SoundService recreates a closed AudioContext cleanly", async () => {
+    const { SoundService } = await import("../src/services/audio/SoundService");
+    const firstStart = vi.fn();
+    const secondStart = vi.fn();
+
+    const firstCtx: any = {
+      state: "running",
+      currentTime: 1,
+      destination: {},
+      resume: vi.fn(async () => {}),
+      createOscillator: vi.fn(() => ({
+        type: "sine",
+        frequency: { setValueAtTime: vi.fn() },
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        start: firstStart,
+        stop: vi.fn(),
+      })),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+      })),
+    };
+
+    const secondCtx: any = {
+      state: "running",
+      currentTime: 2,
+      destination: {},
+      resume: vi.fn(async () => {}),
+      createOscillator: vi.fn(() => ({
+        type: "sine",
+        frequency: { setValueAtTime: vi.fn() },
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        start: secondStart,
+        stop: vi.fn(),
+      })),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+      })),
+    };
+
+    const audioContextCtor = vi
+      .fn()
+      .mockImplementationOnce(function () {
+        return firstCtx;
+      })
+      .mockImplementationOnce(function () {
+        return secondCtx;
+      });
+
+    vi.stubGlobal("window", {
+      AudioContext: audioContextCtor,
+    });
+
+    const sound = new SoundService();
+    sound.playChime(0.8);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
+    expect(firstStart).toHaveBeenCalledTimes(3);
+
+    // Simulate OS/browser closing the first AudioContext
+    firstCtx.state = "closed";
+    sound.playChime(0.8);
+
+    expect(audioContextCtor).toHaveBeenCalledTimes(2);
+    expect(secondStart).toHaveBeenCalledTimes(3);
+  });
+
+  it("SoundService stops and disconnects previous oscillators on rapid playChime() calls and onended", async () => {
+    const { SoundService } = await import("../src/services/audio/SoundService");
+    const createdOscs: Array<{
+      start: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+      onended: (() => void) | null;
+    }> = [];
+    const createdGains: Array<{ disconnect: ReturnType<typeof vi.fn> }> = [];
+
+    const mockCtx: any = {
+      state: "running",
+      currentTime: 0,
+      destination: {},
+      resume: vi.fn(async () => {}),
+      createOscillator: vi.fn(() => {
+        const osc = {
+          type: "sine",
+          frequency: { setValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn(),
+          onended: null as (() => void) | null,
+        };
+        createdOscs.push(osc);
+        return osc;
+      }),
+      createGain: vi.fn(() => {
+        const gain = {
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        };
+        createdGains.push(gain);
+        return gain;
+      }),
+    };
+
+    vi.stubGlobal("window", {
+      AudioContext: vi.fn(function () {
+        return mockCtx;
+      }),
+    });
+
+    const sound = new SoundService();
+    sound.playChime(0.8);
+    expect(createdOscs).toHaveLength(3);
+
+    // Rapid second chime should stop & disconnect the first 3 nodes before scheduling 3 new ones
+    sound.playChime(0.8);
+    expect(createdOscs).toHaveLength(6);
+
+    for (let i = 0; i < 3; i++) {
+      // Called once with scheduled stop time, and once immediately when superseded
+      expect(createdOscs[i].stop).toHaveBeenCalledTimes(2);
+      expect(createdOscs[i].disconnect).toHaveBeenCalledTimes(1);
+      expect(createdGains[i].disconnect).toHaveBeenCalledTimes(1);
+    }
+
+    // Firing onended on the active second chime disconnects its nodes cleanly
+    for (let i = 3; i < 6; i++) {
+      expect(createdOscs[i].onended).toBeTypeOf("function");
+      createdOscs[i].onended!();
+      expect(createdOscs[i].disconnect).toHaveBeenCalledTimes(1);
+      expect(createdGains[i].disconnect).toHaveBeenCalledTimes(1);
+    }
   });
 });

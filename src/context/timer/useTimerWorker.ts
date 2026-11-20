@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
-import { SoundService } from '../../services/audio/SoundService';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { formatTime } from '../../utils/formatters';
@@ -43,9 +42,6 @@ interface UseTimerWorkerParams {
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
   onStaleExpiration: () => void;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
-  sound: SoundService;
-  syncScheduledNotification: () => void;
-  reportPresence: (isVisible: boolean) => void;
 }
 
 export const useTimerWorker = ({
@@ -66,9 +62,6 @@ export const useTimerWorker = ({
   handleCompleteRef,
   onStaleExpiration,
   setRemainingSeconds,
-  sound,
-  syncScheduledNotification,
-  reportPresence,
 }: UseTimerWorkerParams) => {
   // Manage screen wake lock: keep screen awake while timer is actively running if keepAwake is enabled
   useEffect(() => {
@@ -196,17 +189,9 @@ export const useTimerWorker = ({
         void telemetryTracker.onTabVisibilityChanged(true);
       }
 
-      if (statusRef.current === 'RUNNING') {
-        sound.prepareForPlayback();
-      }
-
-      reportPresence(!isHidden);
-
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
         const diffSec = executeTick();
         if (diffSec === null) return;
-
-        syncScheduledNotification();
 
         const stateToSave: SavedTimerState = {
           sessionType: sessionTypeRef.current,
@@ -237,9 +222,6 @@ export const useTimerWorker = ({
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
   }, [
-    sound,
-    syncScheduledNotification,
-    reportPresence,
     executeTick,
     statusRef,
     targetEndTimeRef,
@@ -250,16 +232,6 @@ export const useTimerWorker = ({
     localUpdatedAtRef,
     activeTagIdRef,
   ]);
-
-  // Periodic presence heartbeat while tab is visible so peer presence stays within the 90s TTL
-  useEffect(() => {
-    const heartbeatInterval = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        reportPresence(true);
-      }
-    }, 45_000);
-    return () => clearInterval(heartbeatInterval);
-  }, [reportPresence]);
 
   // Main-thread backup countdown timer
   useEffect(() => {

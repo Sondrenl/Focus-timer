@@ -62,12 +62,12 @@ export class TelemetryRepository implements ITelemetryRepository {
   private safeSetArray<T>(key: string, items: T[], maxItems: number): void {
     const trimmed = items.length > maxItems ? items.slice(items.length - maxItems) : items;
     try {
-      this.storage.setItem(key, trimmed);
+      this.storage.setItem(key, trimmed, { throwOnQuotaError: true });
     } catch {
       // Fallback: trim oldest 25% if storage quota is tight
       try {
         const reduced = trimmed.slice(Math.floor(trimmed.length * 0.25));
-        this.storage.setItem(key, reduced);
+        this.storage.setItem(key, reduced, { throwOnQuotaError: true });
       } catch {
         // Ignore storage errors silently so UI is never disrupted
       }

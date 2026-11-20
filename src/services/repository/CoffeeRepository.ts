@@ -6,6 +6,7 @@ export interface ICoffeeRepository {
   getAll(): Promise<CoffeeCup[]>;
   addCup(date: string, tagId: string | null): Promise<CoffeeCup>;
   removeCup(date: string, tagId?: string | null, cupId?: string): Promise<CoffeeCup | null>;
+  replaceId(oldId: string, newId: string): Promise<CoffeeCup[]>;
   saveAll(cups: CoffeeCup[]): Promise<void>;
   clear(): Promise<void>;
 }
@@ -105,6 +106,25 @@ export class CoffeeRepository implements ICoffeeRepository {
         return removed;
       }
       return null;
+    });
+  }
+
+  async replaceId(oldId: string, newId: string): Promise<CoffeeCup[]> {
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      if (oldId === newId) {
+        return all;
+      }
+      if (!all.some((c) => c.id === oldId)) {
+        return all;
+      }
+      const hasNew = all.some((c) => c.id === newId);
+      const updated = hasNew
+        ? all.filter((c) => c.id !== oldId)
+        : all.map((c) => (c.id === oldId ? { ...c, id: newId } : c));
+      updated.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      this.storage.setItem(COFFEE_STORAGE_KEY, updated);
+      return updated;
     });
   }
 

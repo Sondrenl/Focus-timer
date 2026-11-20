@@ -22,16 +22,3 @@ export interface RemoteTimerState {
   timerRunId: string | null;
   updatedAtMs: number;
 }
-
-/**
- * Presence indicator across peer devices (desktop and mobile)
- */
-export interface PeerPresence {
-  desktopActive: boolean;
-  desktopVisible: boolean;
-  mobileActive: boolean;
-  mobileVisible: boolean;
-  lastSeenMs?: number;
-  desktopLastSeenMs?: number;
-  mobileLastSeenMs?: number;
-}

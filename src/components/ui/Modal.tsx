@@ -20,14 +20,22 @@ export const Modal: React.FC<ModalProps> = ({
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const prevIsOpenRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  // Capture previously focused element synchronously during render (before commit)
+  // because child `autoFocus` runs during commitMount before useEffect executes.
+  if (isOpen && !prevIsOpenRef.current) {
+    previouslyFocusedRef.current =
+      typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+  }
+  prevIsOpenRef.current = isOpen;
+
   useEffect(() => {
     if (!isOpen) return;
-
-    previouslyFocusedRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     const dialogEl = dialogRef.current;
     if (dialogEl && !dialogEl.contains(document.activeElement)) {
@@ -73,10 +81,12 @@ export const Modal: React.FC<ModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      const prev = previouslyFocusedRef.current;
-      previouslyFocusedRef.current = null;
-      if (prev && prev.isConnected) {
-        prev.focus();
+      if (!prevIsOpenRef.current || !dialogRef.current?.isConnected) {
+        const prev = previouslyFocusedRef.current;
+        previouslyFocusedRef.current = null;
+        if (prev && prev.isConnected) {
+          prev.focus();
+        }
       }
     };
   }, [isOpen]);

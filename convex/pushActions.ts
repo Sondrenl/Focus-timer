@@ -1,8 +1,9 @@
 "use node";
 
 import { v } from "convex/values";
-import { internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
 import { buildPushHTTPRequest } from "@pushforge/builder";
 import { isSubscriptionMobile } from "./push";
 
@@ -31,11 +32,14 @@ function parsePrivateJwk(raw: string | undefined): JsonWebKey | string | null {
 }
 
 async function dispatchPushToSubscriptions(
-  ctx: any,
+  ctx: ActionCtx,
   params: {
-    userId: any;
+    userId: Id<"users">;
     requireNotificationsEnabled: boolean;
-    buildPayload: (isMobileSub: boolean) => Record<string, string | number | boolean>;
+    buildPayload: (
+      isMobileSub: boolean,
+      soundEnabled: boolean
+    ) => Record<string, string | number | boolean>;
     options: { ttl: number; urgency: "high"; topic: string };
   }
 ) {
@@ -63,7 +67,7 @@ async function dispatchPushToSubscriptions(
   let pruned = 0;
 
   await Promise.allSettled(
-    dispatchCtx.subscriptions.map(async (sub: any) => {
+    dispatchCtx.subscriptions.map(async (sub: Doc<"push_subscriptions">) => {
       const isMobileSub = isSubscriptionMobile(sub);
 
       try {
@@ -77,7 +81,7 @@ async function dispatchPushToSubscriptions(
             },
           },
           message: {
-            payload: params.buildPayload(isMobileSub),
+            payload: params.buildPayload(isMobileSub, dispatchCtx.soundEnabled),
             adminContact,
             options: params.options,
           },
@@ -126,13 +130,14 @@ export const sendTimerCompletionPush = internalAction({
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
       requireNotificationsEnabled: true,
-      buildPayload: (isMobileSub) => ({
+      buildPayload: (isMobileSub, soundEnabled) => ({
         title,
         body,
         sessionId: args.timerRunId,
         sessionType: args.sessionType,
         completedAtMs: args.completedAtMs,
         isMobile: isMobileSub,
+        silent: !soundEnabled,
       }),
       options: {
         ttl: 600,
@@ -152,7 +157,7 @@ export const sendTestPush = internalAction({
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
       requireNotificationsEnabled: false,
-      buildPayload: (isMobileSub) => ({
+      buildPayload: (isMobileSub, soundEnabled) => ({
         title: "Pomodor — Test push alert",
         body: "Background & lock-screen push notifications are active.",
         sessionId: `test-push-${args.scheduledAtMs}`,
@@ -160,6 +165,7 @@ export const sendTestPush = internalAction({
         completedAtMs: Date.now(),
         isTest: true,
         isMobile: isMobileSub,
+        silent: !soundEnabled,
       }),
       options: {
         ttl: 120,

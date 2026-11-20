@@ -7,6 +7,7 @@ import {
   getLastResetDayKey,
   setLastResetDayKey,
   getLastSessionCompletedAtFromStorage,
+  INACTIVITY_THRESHOLD_MS,
 } from '../../utils/newDayCheck';
 
 export const TIMER_STORAGE_KEY = 'timer_state_v1';
@@ -110,7 +111,14 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     const lastResetDayKey = getLastResetDayKey();
     const now = new Date();
 
+    const isFreshlyPaused =
+      parsed.status === 'PAUSED' &&
+      typeof parsed.updatedAtMs === 'number' &&
+      parsed.updatedAtMs > 0 &&
+      now.getTime() - parsed.updatedAtMs < INACTIVITY_THRESHOLD_MS;
+
     if (
+      !isFreshlyPaused &&
       shouldResetForNewDay({
         now,
         lastSessionTimeMs,

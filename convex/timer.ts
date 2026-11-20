@@ -11,7 +11,6 @@ import {
   assertValidTimerRunId,
   cancelScheduledJob,
   computeServerNextInterval,
-  computeUpdatedPeerPresence,
   reconcileCompletedSessionAttempt,
   recordCompletedSessionIfNotDuplicate,
 } from "./timerHelpers";
@@ -41,7 +40,6 @@ export const getActive = query({
       activeTagId: timer.tagId ?? null,
       timerRunId: timer.timerRunId ?? null,
       updatedAtMs: timer.updatedAtMs,
-      peerPresence: timer.peerPresence ?? null,
     };
   },
 });
@@ -353,7 +351,7 @@ export const complete = mutation({
 
       const withinPushFreshnessWindow =
         !existing.targetEndTime || nowMs - existing.targetEndTime <= 120_000;
-      if (settings.notificationsEnabled !== false && withinPushFreshnessWindow) {
+      if (settings.notificationsEnabled === true && withinPushFreshnessWindow) {
         await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
           userId: user._id,
           sessionType: existing.sessionType,
@@ -401,37 +399,6 @@ export const complete = mutation({
     }
 
     return existing;
-  },
-});
-
-export const updatePresence = mutation({
-  args: {
-    isMobile: v.boolean(),
-    isVisible: v.boolean(),
-  },
-  handler: async (ctx, args) => {
-    const user = await getAuthenticatedUser(ctx);
-    if (!user) return null;
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
-    if (!existing) return null;
-
-    const { shouldPatch, presence } = computeUpdatedPeerPresence(
-      existing.peerPresence,
-      args,
-      Date.now()
-    );
-
-    if (shouldPatch) {
-      await ctx.db.patch(existing._id, {
-        peerPresence: presence,
-      });
-    }
-
-    return presence;
   },
 });
 
@@ -496,7 +463,7 @@ export const onTimerCompleted = internalMutation({
       updatedAtMs: nowMs,
     });
 
-    if (settings.notificationsEnabled !== false) {
+    if (settings.notificationsEnabled === true) {
       await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
         userId: args.userId,
         sessionType: timer.sessionType,

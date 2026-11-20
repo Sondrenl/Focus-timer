@@ -165,6 +165,47 @@ describe('focusStats', () => {
     expect(peak.subtext).toBe('15m focused');
   });
 
+  it('attributes exact-midnight (00:00:00.000) sessions to the preceding day without losing duration to 0s overlap', () => {
+    // Started 2026-11-14 23:35:00, completed 2026-11-15 00:00:00.000 (25m total on Nov 14)
+    const sessions: StatSession[] = [
+      {
+        id: 'exact-midnight-1',
+        tagId: 'tag-dev',
+        sessionType: 'WORK',
+        durationSeconds: 1500,
+        completedAt: localIso(2026, 11, 15, 0, 0, 0),
+      },
+    ];
+
+    const nov14Start = new Date(2026, 10, 14, 0, 0, 0, 0);
+    const nov14End = new Date(2026, 10, 14, 23, 59, 59, 999);
+    const nov15Start = new Date(2026, 10, 15, 0, 0, 0, 0);
+    const nov15End = new Date(2026, 10, 15, 23, 59, 59, 999);
+
+    const nov14Filtered = filterPeriodSessions(sessions, nov14Start, nov14End, true);
+    const nov15Filtered = filterPeriodSessions(sessions, nov15Start, nov15End, true);
+
+    expect(nov14Filtered.filteredSessions.map((s) => s.id)).toEqual(['exact-midnight-1']);
+    expect(nov15Filtered.filteredSessions).toHaveLength(0);
+
+    const refNov14 = new Date(2026, 10, 14, 12, 0, 0);
+    const bars = computeActivityBars(nov14Filtered.filteredSessions, 'day', refNov14, nov14Start, {
+      start: '2026-11-14',
+      end: '2026-11-14',
+    });
+
+    const hour23 = bars.find((b) => b.key === 'hour-23');
+    const hour0 = bars.find((b) => b.key === 'hour-0');
+    expect(hour23?.totalSeconds).toBe(1500);
+    expect(hour23?.sessionCount).toBe(1);
+    expect(hour0?.totalSeconds).toBe(0);
+
+    const peak = computeProductiveMetric(nov14Filtered.filteredSessions, bars, 'day', refNov14, false);
+    expect(peak.hasData).toBe(true);
+    expect(peak.value).toBe('23:00 – 00:00');
+    expect(peak.subtext).toBe('25m focused');
+  });
+
   it('computes week activity bars and most productive day accurately', () => {
     const refDate = new Date(2026, 10, 11, 12, 0, 0); // Wednesday
     const { startDate, sanitizedCustomRange } = computePeriodBounds('week', refDate, {

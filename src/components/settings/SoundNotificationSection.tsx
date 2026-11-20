@@ -9,6 +9,7 @@ import {
   NotificationPermissionStatus,
   PushSubscriptionStatus,
 } from '../../services/notification/NotificationService';
+import { getCompletionNotificationCopy } from '../../services/notification/notificationCopy';
 
 interface SoundNotificationSectionProps {
   settings: UserSettings;
@@ -19,6 +20,7 @@ interface SoundNotificationSectionProps {
   pushStatus?: PushSubscriptionStatus;
   isPushAuthenticated?: boolean;
   onSyncPush?: () => Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }>;
+  onUnsubscribePush?: () => Promise<void>;
   onScheduleTestPush?: () => Promise<{ scheduled: boolean; reason?: string }>;
 }
 
@@ -31,6 +33,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
   pushStatus = 'unsubscribed',
   isPushAuthenticated = false,
   onSyncPush,
+  onUnsubscribePush,
   onScheduleTestPush,
 }) => {
   const [permissionState, setPermissionState] = useState<NotificationPermissionStatus>(() =>
@@ -74,7 +77,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
   const handleTestSound = () => {
     sound.prepareForPlayback();
-    sound.playChime(settings.soundVolume || 0.8);
+    sound.playChime(settings.soundVolume ?? 0.8);
   };
 
   const handleToggleNotifications = async (enable: boolean) => {
@@ -82,6 +85,9 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       updateSettings({ notificationsEnabled: false });
       setPermissionState(notifications.getPermissionState());
       onSaved();
+      if (onUnsubscribePush) {
+        await onUnsubscribePush();
+      }
       return;
     }
 
@@ -163,11 +169,10 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       void onSyncPush();
     }
 
-    const sent = await notifications.notify(
-      'Pomodor — Focus session complete',
-      'Your focus timer has finished. Time for a break.',
-      true
-    );
+    const { title, body } = getCompletionNotificationCopy('WORK');
+    const sent = await notifications.notify(title, body, true, undefined, {
+      silent: !settings.soundEnabled,
+    });
     showNotifFeedback(sent ? 'Sample timer alert sent!' : 'Could not dispatch alert — check OS notification settings.');
   };
 
@@ -244,6 +249,8 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
   };
 
   const notifSubtitle = getNotificationSubtitle();
+  const osNotificationsOwnSound =
+    Boolean(settings.notificationsEnabled) && permissionState === 'granted';
 
   return (
     <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
@@ -262,8 +269,10 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         {/* Audio Chime */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-md-on-surface">Chime Alert</div>
-            <div className="text-xs text-md-on-surface-variant">Play gentle acoustic sound on completion</div>
+            <div className="text-sm font-semibold text-md-on-surface">Sound & Chime</div>
+            <div className="text-xs text-md-on-surface-variant">
+              Uses OS alert sound when notifications are on, or web chime while the app is open
+            </div>
           </div>
           <div className="flex items-center gap-2.5 shrink-0">
             <button
@@ -283,10 +292,18 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         </div>
 
         {/* Sound Volume Slider */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
+        <div
+          className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4 transition-opacity ${
+            osNotificationsOwnSound ? 'opacity-60' : ''
+          }`}
+        >
           <div className="min-w-0">
             <div className="text-sm font-semibold text-md-on-surface">Chime Volume</div>
-            <div className="text-xs text-md-on-surface-variant">Adjust completion bell volume</div>
+            <div className="text-xs text-md-on-surface-variant">
+              {osNotificationsOwnSound
+                ? 'Used for in-app web chime (OS volume controls system notifications)'
+                : 'Adjust in-app web chime volume'}
+            </div>
           </div>
           <div className="flex items-center gap-3.5 w-full sm:w-auto shrink-0">
             <input
@@ -299,6 +316,9 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
                 const val = parseFloat(e.target.value);
                 updateSettings({ soundVolume: Math.round(val * 100) / 100 });
               }}
+              onMouseUp={onSaved}
+              onTouchEnd={onSaved}
+              onKeyUp={onSaved}
               className="flex-1 sm:w-48 md:w-60 h-2.5 rounded-full accent-md-primary cursor-pointer bg-md-surface-container-highest"
               aria-label="Chime Volume"
             />

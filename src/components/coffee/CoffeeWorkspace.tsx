@@ -5,6 +5,47 @@ import { CoffeeTagSelector } from './CoffeeTagSelector';
 import { toDateKey } from '../../utils/dates';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
+export type CoffeeShortcutAction = 'add' | 'remove' | null;
+
+export interface CoffeeShortcutKeyEventLike {
+  key: string;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  target: EventTarget | null;
+}
+
+export function resolveCoffeeShortcutAction(
+  e: CoffeeShortcutKeyEventLike,
+  hasOpenOverlay: boolean
+): CoffeeShortcutAction {
+  if (e.metaKey || e.ctrlKey || e.altKey) {
+    return null;
+  }
+
+  const target = e.target as Partial<HTMLElement> | null;
+  const tagName = typeof target?.tagName === 'string' ? target.tagName.toUpperCase() : '';
+  if (
+    target &&
+    (['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName) || Boolean(target.isContentEditable))
+  ) {
+    return null;
+  }
+
+  if (hasOpenOverlay) {
+    return null;
+  }
+
+  if (e.key === '+' || e.key === '=') {
+    return 'add';
+  }
+  if (e.key === '-') {
+    return 'remove';
+  }
+
+  return null;
+}
+
 export const CoffeeWorkspace: React.FC = () => {
   const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags, activeTagId } = useData();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(activeTagId);
@@ -85,27 +126,14 @@ export const CoffeeWorkspace: React.FC = () => {
   // Keyboard shortcut listener (+ / = to add cup, - to remove cup)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) {
-        return;
-      }
-
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName) ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-
-      if (document.querySelector('[role="dialog"], [role="listbox"]')) {
-        return;
-      }
-
-      if (e.key === '+' || e.key === '=') {
+      const hasOpenOverlay = Boolean(
+        document.querySelector('[role="dialog"], [role="listbox"]')
+      );
+      const action = resolveCoffeeShortcutAction(e, hasOpenOverlay);
+      if (action === 'add') {
         e.preventDefault();
         handleAdd();
-      } else if (e.key === '-') {
+      } else if (action === 'remove') {
         e.preventDefault();
         handleRemove();
       }

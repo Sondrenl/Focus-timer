@@ -1,4 +1,4 @@
-import { IStorageService } from './IStorageService';
+import { IStorageService, StorageSetOptions } from './IStorageService';
 
 /**
  * Robust LocalStorage implementation of IStorageService with in-memory fallback
@@ -8,6 +8,7 @@ export class LocalStorageService implements IStorageService {
   private prefix: string;
   private memoryCache: Map<string, string> = new Map();
   private isLocalStorageAvailable: boolean = true;
+  private hasWarnedQuota: boolean = false;
 
   constructor(prefix: string = 'pomodor:') {
     this.prefix = prefix;
@@ -57,7 +58,7 @@ export class LocalStorageService implements IStorageService {
     }
   }
 
-  setItem<T>(key: string, value: T): void {
+  setItem<T>(key: string, value: T, options?: StorageSetOptions): void {
     const fullKey = `${this.prefix}${key}`;
     let serialized: string;
     try {
@@ -71,11 +72,22 @@ export class LocalStorageService implements IStorageService {
       try {
         window.localStorage.setItem(fullKey, serialized);
         this.memoryCache.delete(fullKey);
+        this.hasWarnedQuota = false;
       } catch (err) {
         this.memoryCache.set(fullKey, serialized);
-        console.error(`Error writing key "${key}" to storage:`, err);
         if (this.isQuotaExceededError(err)) {
-          throw err;
+          if (!this.hasWarnedQuota) {
+            this.hasWarnedQuota = true;
+            console.warn(
+              `LocalStorage quota exceeded while writing key "${key}". Keeping value in memory fallback.`,
+              err
+            );
+          }
+          if (options?.throwOnQuotaError === true) {
+            throw err;
+          }
+        } else {
+          console.error(`Error writing key "${key}" to storage:`, err);
         }
       }
     } else {

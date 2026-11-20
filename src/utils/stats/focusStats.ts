@@ -13,6 +13,32 @@ import {
 } from './types';
 
 /**
+ * Returns the effective local attribution timestamp for a session.
+ * A positive-duration session completing at exact local midnight (00:00:00.000)
+ * had all of its elapsed time on the preceding calendar day (ending at 24:00),
+ * so shifting its attribution by -1ms (23:59:59.999 of Day D-1) attributes it
+ * to the day it actually occurred and prevents collapsing to 0s overlap.
+ */
+export function getEffectiveSessionDate(
+  completedAt: string,
+  durationSeconds: number
+): Date | null {
+  if (!completedAt) return null;
+  const endDate = new Date(completedAt);
+  if (Number.isNaN(endDate.getTime())) return null;
+  if (
+    durationSeconds > 0 &&
+    endDate.getHours() === 0 &&
+    endDate.getMinutes() === 0 &&
+    endDate.getSeconds() === 0 &&
+    endDate.getMilliseconds() === 0
+  ) {
+    return new Date(endDate.getTime() - 1);
+  }
+  return endDate;
+}
+
+/**
  * Filters all sessions and WORK sessions within the given period bounds,
  * excluding dev sample/seed sessions when appropriate.
  */
@@ -26,9 +52,8 @@ export function filterPeriodSessions<T extends StatSession>(
     if (shouldExcludeSample && isSampleSessionId(s.id)) {
       return false;
     }
-    if (!s.completedAt) return false;
-    const d = new Date(s.completedAt);
-    if (isNaN(d.getTime())) return false;
+    const d = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+    if (!d) return false;
     return d >= startDate && d <= endDate;
   });
 
@@ -121,7 +146,8 @@ export function computeActivityBars(
       const endDate = new Date(s.completedAt);
       if (Number.isNaN(endDate.getTime())) return;
       const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
-      const endH = endDate.getHours();
+      const anchorDate = getEffectiveSessionDate(s.completedAt, dur) ?? endDate;
+      const endH = anchorDate.getHours();
       if (hoursArray[endH]) {
         hoursArray[endH].count += 1;
       }
@@ -129,11 +155,11 @@ export function computeActivityBars(
 
       const endMs = endDate.getTime();
       const startMs = endMs - dur * 1000;
-      const y = endDate.getFullYear();
-      const m = endDate.getMonth();
-      const d = endDate.getDate();
+      const y = anchorDate.getFullYear();
+      const m = anchorDate.getMonth();
+      const d = anchorDate.getDate();
 
-      // Strictly attribute overlap within Day D's local [00:00, 24:00] window
+      // Strictly attribute overlap within the session day's local [00:00, 24:00] window
       for (let h = 0; h < 24; h++) {
         const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
         const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
@@ -167,7 +193,9 @@ export function computeActivityBars(
     });
 
     filteredSessions.forEach((s) => {
-      const key = toDateKey(s.completedAt);
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const key = toDateKey(effectiveDate);
       const target = days.find((d) => d.dateKey === key);
       if (target) {
         target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -202,7 +230,9 @@ export function computeActivityBars(
     });
 
     filteredSessions.forEach((s) => {
-      const key = toDateKey(s.completedAt);
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const key = toDateKey(effectiveDate);
       const target = monthDays.find((d) => d.dateKey === key);
       if (target) {
         target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -228,7 +258,9 @@ export function computeActivityBars(
     }));
 
     filteredSessions.forEach((s) => {
-      const m = new Date(s.completedAt).getMonth();
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const m = effectiveDate.getMonth();
       if (months[m]) {
         months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
         months[m].count += 1;
@@ -245,7 +277,11 @@ export function computeActivityBars(
 
   if (periodType === 'all') {
     const sessionYears = Array.from(
-      new Set(filteredSessions.map((s) => new Date(s.completedAt).getFullYear()))
+      new Set(
+        filteredSessions
+          .map((s) => getEffectiveSessionDate(s.completedAt, s.durationSeconds)?.getFullYear())
+          .filter((y): y is number => typeof y === 'number')
+      )
     ).sort((a, b) => a - b);
 
     if (sessionYears.length <= 1) {
@@ -259,7 +295,9 @@ export function computeActivityBars(
       }));
 
       filteredSessions.forEach((s) => {
-        const m = new Date(s.completedAt).getMonth();
+        const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+        if (!effectiveDate) return;
+        const m = effectiveDate.getMonth();
         if (months[m]) {
           months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
           months[m].count += 1;
@@ -287,7 +325,9 @@ export function computeActivityBars(
     }
 
     filteredSessions.forEach((s) => {
-      const y = new Date(s.completedAt).getFullYear();
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const y = effectiveDate.getFullYear();
       const target = yearStats.find((item) => item.year === y);
       if (target) {
         target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -324,7 +364,9 @@ export function computeActivityBars(
   });
 
   filteredSessions.forEach((s) => {
-    const key = toDateKey(s.completedAt);
+    const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+    if (!effectiveDate) return;
+    const key = toDateKey(effectiveDate);
     const target = dayList.find((d) => d.dateKey === key);
     if (target) {
       target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -368,13 +410,14 @@ export function computeProductiveMetric(
       const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
       if (dur <= 0) return;
 
+      const anchorDate = getEffectiveSessionDate(s.completedAt, dur) ?? endDate;
       const endMs = endDate.getTime();
       const startMs = endMs - dur * 1000;
-      const y = endDate.getFullYear();
-      const m = endDate.getMonth();
-      const d = endDate.getDate();
+      const y = anchorDate.getFullYear();
+      const m = anchorDate.getMonth();
+      const d = anchorDate.getDate();
 
-      // Strictly attribute overlap within Day D's local [00:00, 24:00] window
+      // Strictly attribute overlap within the session day's local [00:00, 24:00] window
       for (let h = 0; h < 24; h++) {
         const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
         const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
@@ -414,7 +457,8 @@ export function computeProductiveMetric(
     const weekdaySecs = new Array(7).fill(0);
     const weekdayDateSets: Set<string>[] = Array.from({ length: 7 }, () => new Set<string>());
     filteredSessions.forEach((s) => {
-      const d = new Date(s.completedAt);
+      const d = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!d) return;
       const dayIdx = d.getDay();
       weekdaySecs[dayIdx] += s.durationSeconds > 0 ? s.durationSeconds : 0;
       weekdayDateSets[dayIdx].add(toDateKey(d));

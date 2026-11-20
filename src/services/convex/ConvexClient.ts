@@ -16,7 +16,10 @@ export const convexUrl =
        (import.meta.env.VITE_CONVEX_URL && !import.meta.env.VITE_CONVEX_URL.includes("agile-seahorse")
          ? import.meta.env.VITE_CONVEX_URL
          : PROD_CONVEX_URL))
-    : (import.meta.env.VITE_CONVEX_URL || DEV_CONVEX_URL));
+    : (import.meta.env.VITE_CONVEX_DEV_URL ||
+       (import.meta.env.VITE_CONVEX_URL && !import.meta.env.VITE_CONVEX_URL.includes("acrobatic-oyster")
+         ? import.meta.env.VITE_CONVEX_URL
+         : DEV_CONVEX_URL)));
 
 export const isConvexConfigured = Boolean(
   convexUrl && !convexUrl.includes("dummy") && !convexUrl.includes("proud-otter")

@@ -16,6 +16,11 @@ export function isSampleSessionId(id?: string | null): boolean {
 export interface ISessionRepository {
   getAll(): Promise<CompletedSession[]>;
   add(session: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession>;
+  replaceId(
+    oldId: string,
+    newId: string,
+    updates?: Partial<Pick<CompletedSession, 'completedAt'>>
+  ): Promise<CompletedSession[]>;
   saveAll(sessions: CompletedSession[]): Promise<void>;
   loadSampleData(): Promise<CompletedSession[]>;
   purgeSampleSessions(): Promise<CompletedSession[]>;
@@ -92,6 +97,37 @@ export class SessionRepository implements ISessionRepository {
       all.push(newSession);
       this.storage.setItem(SESSIONS_STORAGE_KEY, all);
       return newSession;
+    });
+  }
+
+  async replaceId(
+    oldId: string,
+    newId: string,
+    updates?: Partial<Pick<CompletedSession, 'completedAt'>>
+  ): Promise<CompletedSession[]> {
+    return this.enqueue(async () => {
+      const all = await this.getAll();
+      if (!all.some((s) => s.id === oldId)) {
+        return all;
+      }
+      let updated: CompletedSession[];
+      if (oldId !== newId && all.some((s) => s.id === newId)) {
+        updated = all.filter((s) => s.id !== oldId);
+      } else {
+        updated = all.map((s) =>
+          s.id === oldId
+            ? {
+                ...s,
+                id: newId,
+                ...(updates?.completedAt !== undefined
+                  ? { completedAt: updates.completedAt }
+                  : {}),
+              }
+            : s
+        );
+      }
+      this.storage.setItem(SESSIONS_STORAGE_KEY, updated);
+      return updated;
     });
   }
 

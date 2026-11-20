@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { SessionType, TimerStatus, PeerPresence } from '../types/timer';
+import { SessionType, TimerStatus } from '../types/timer';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { DEFAULT_TAGS } from '../types/tag';
 import { useAuthProfile } from './AuthProfileContext';
@@ -86,13 +86,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const lastTickWallMsRef = useRef<number>(Date.now());
 
-  const peerPresenceRef = useRef<PeerPresence>({
-    desktopActive: false,
-    desktopVisible: false,
-    mobileActive: false,
-    mobileVisible: false,
-  });
-
   const sessionTypeRef = useRef<SessionType>(sessionType);
   sessionTypeRef.current = sessionType;
 
@@ -126,16 +119,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
 
   const {
-    syncScheduledNotification,
     dispatchCompletionAlert,
     triggerCompletionConfetti,
   } = useTimerAlerts({
-    statusRef,
-    sessionTypeRef,
-    targetEndTimeRef,
     timerRunIdRef,
     settingsRef,
-    peerPresenceRef,
     sound,
     notifications,
   });
@@ -143,7 +131,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const {
     publishLocalTimerState,
     publishTimerCompletion,
-    reportPresence,
     applyRemoteState,
     isInitialMountDoneRef,
     hasResolvedRemoteTimerRef,
@@ -165,7 +152,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     lastLocalActionWallMsRef,
     lastTickWallMsRef,
     prevActiveTagIdRef,
-    peerPresenceRef,
     settingsRef,
     profileRef,
     coffeeCupsRef,
@@ -179,8 +165,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveTagId,
     getDurationForType,
     dispatchCompletionAlert,
-    syncScheduledNotification,
-    notifications,
   });
 
   const {
@@ -212,10 +196,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     getDurationForType,
     recordSession,
     sound,
-    notifications,
     dispatchCompletionAlert,
     triggerCompletionConfetti,
-    syncScheduledNotification,
     publishLocalTimerState,
     publishTimerCompletion,
   });
@@ -381,9 +363,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     handleCompleteRef,
     onStaleExpiration: handleStaleExpiration,
     setRemainingSeconds,
-    sound,
-    syncScheduledNotification,
-    reportPresence,
   });
 
   useEffect(() => {
@@ -421,7 +400,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setTargetEndTime(null);
 
       wakeLockService.release();
-      notifications.cancelScheduledNotification();
 
       telemetryTracker.invalidateDraftCache();
 
@@ -451,7 +429,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       unsubscribeState();
       unsubscribeReset();
     };
-  }, [getDurationForType, notifications, applyRemoteState, publishLocalTimerState]);
+  }, [getDurationForType, applyRemoteState, publishLocalTimerState]);
 
   useTimerNewDayReset({
     sessions,
@@ -479,7 +457,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRemainingSeconds,
     setTargetEndTime,
     getDurationForType,
-    notifications,
     publishLocalTimerState,
   });
 
