@@ -1,11 +1,49 @@
-// @vitest-environment edge-runtime
+// @vitest-environment node
 import { convexTest } from "convex-test";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-import { buildPushHTTPRequest } from "@pushforge/builder";
+import * as webpush from "web-push";
 
 const modules = import.meta.glob("../convex/**/*.*s");
+
+function toBase64Url(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64url");
+}
+
+function makeSyntheticSubKeys(seed = 0x11) {
+  const p256Bytes = new Uint8Array(65);
+  p256Bytes[0] = 0x04;
+  p256Bytes.fill(seed, 1);
+  const authBytes = new Uint8Array(16).fill((seed + 1) & 0xff);
+  return {
+    p256dh: toBase64Url(p256Bytes),
+    auth: toBase64Url(authBytes),
+  };
+}
+
+async function makeRealSubKeys() {
+  const ecdh = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    ["deriveBits"]
+  );
+  const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", ecdh.publicKey));
+  const authBytes = crypto.getRandomValues(new Uint8Array(16));
+  return {
+    p256dh: toBase64Url(rawPub),
+    auth: toBase64Url(authBytes),
+  };
+}
+
+async function generateVapidJwk() {
+  const kp = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"]
+  );
+  return await crypto.subtle.exportKey("jwk", kp.privateKey);
+}
 
 describe("Web Push Backend & Declarative Push", () => {
   const originalVapidPublic = process.env.VAPID_PUBLIC_KEY;
@@ -39,12 +77,7 @@ describe("Web Push Backend & Declarative Push", () => {
   }
 
   it("derives uncompressed P-256 VAPID public key from VAPID_PRIVATE_KEY JWK", async () => {
-    const kp = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"]
-    );
-    const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+    const jwk = await generateVapidJwk();
     delete process.env.VAPID_PUBLIC_KEY;
     process.env.VAPID_PRIVATE_KEY = JSON.stringify(jwk);
 
@@ -59,139 +92,175 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(explicitKey).toBe("explicit-test-vapid-key");
   });
 
-  it("encrypts a high-urgency Declarative Web Push (web_push: 8030) payload with @pushforge/builder", async () => {
-    const vapidKp = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"]
-    );
-    const privateJWK = await crypto.subtle.exportKey("jwk", vapidKp.privateKey);
+  it("encrypts a high-urgency RFC 8291 aes128gcm + RFC 8292 vapid Declarative Web Push request via web-push", async () => {
+    const vapidKeys = webpush.generateVAPIDKeys();
+    const { p256dh, auth } = await makeRealSubKeys();
 
-    const clientEcdh = await crypto.subtle.generateKey(
-      { name: "ECDH", namedCurve: "P-256" },
-      true,
-      ["deriveBits"]
-    );
-    const rawClientPub = new Uint8Array(
-      await crypto.subtle.exportKey("raw", clientEcdh.publicKey)
-    );
-    const p256dh = btoa(String.fromCharCode(...rawClientPub))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-    const authBytes = crypto.getRandomValues(new Uint8Array(16));
-    const auth = btoa(String.fromCharCode(...authBytes))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-
-    const req = await buildPushHTTPRequest({
-      privateJWK,
-      subscription: {
-        endpoint: "https://fcm.googleapis.com/fcm/send/test-token",
-        keys: { p256dh, auth },
-      },
-      message: {
-        payload: {
-          web_push: 8030,
-          mutable: false,
-          notification: {
-            title: "Pomodor — Focus session complete",
-            body: "Your focus timer has finished. Time for a break.",
-            navigate: "https://focus-timer.sondrelassen.workers.dev/",
-            icon: "https://focus-timer.sondrelassen.workers.dev/icon-192.png",
-            tag: "pomodor-session-run-test-123",
-            silent: false,
-            timestamp: Date.now(),
-          },
-        },
-        adminContact: "mailto:notifications@pomodor.app",
-        options: {
-          ttl: 600,
-          urgency: "high",
-          topic: "pomodor-alert",
-        },
+    const payload = JSON.stringify({
+      web_push: 8030,
+      mutable: false,
+      notification: {
+        title: "Pomodor — Focus session complete",
+        body: "Your focus timer has finished. Time for a break.",
+        navigate: "https://focus-timer.sondrelassen.workers.dev/",
+        icon: "https://focus-timer.sondrelassen.workers.dev/icon-192.png",
+        badge: "https://focus-timer.sondrelassen.workers.dev/badge-72.png",
+        tag: "pomodor-session-run-test-123",
+        silent: false,
+        timestamp: Math.round(Date.now()),
       },
     });
 
-    expect(req.endpoint).toBe("https://fcm.googleapis.com/fcm/send/test-token");
-    expect(req.body.byteLength).toBeGreaterThan(0);
-    const getHeader = (name: string) =>
-      req.headers instanceof Headers
-        ? req.headers.get(name)
-        : (req.headers as Record<string, string>)[name] ??
-          (req.headers as Record<string, string>)[name.toLowerCase()];
-    expect(getHeader("Urgency")).toBe("high");
-    expect(getHeader("Topic")).toBe("pomodor-alert");
-    expect(getHeader("Authorization")).toContain("vapid ");
+    const req = webpush.generateRequestDetails(
+      {
+        endpoint: "https://web.push.apple.com/QTestAppleToken",
+        keys: { p256dh, auth },
+      },
+      payload,
+      {
+        TTL: 180,
+        urgency: "high",
+        topic: "pomodor-alert",
+        contentEncoding: "aes128gcm",
+        vapidDetails: {
+          subject: "mailto:notifications@pomodor.app",
+          publicKey: vapidKeys.publicKey,
+          privateKey: vapidKeys.privateKey,
+        },
+      }
+    );
+
+    expect(req.endpoint).toBe("https://web.push.apple.com/QTestAppleToken");
+    expect(req.body).toBeInstanceOf(Buffer);
+    expect(req.body!.byteLength).toBeGreaterThan(0);
+
+    const headersLower = Object.fromEntries(
+      Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), String(v)])
+    );
+    expect(headersLower["content-encoding"]).toBe("aes128gcm");
+    expect(headersLower["authorization"]).toMatch(/^vapid t=/);
+    expect(headersLower["urgency"]).toBe("high");
+    expect(headersLower["topic"]).toBe("pomodor-alert");
+    expect(headersLower["ttl"]).toBe("180");
+    // Must NOT emit legacy aesgcm headers (which Apple APNs rejects)
+    expect(headersLower["crypto-key"]).toBeUndefined();
+    expect(headersLower["encryption"]).toBeUndefined();
   });
 
-  it("sanitizes & stores origin, fetches dispatch context, and prunes stale subscriptions by ID", async () => {
+  it("validates p256dh/auth key lengths, accepts standard base64 with + and /, and enforces strict origin allowlist", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
+
+    // Rejects short/corrupt p256dh
+    await expect(
+      asUser.mutation(api.push.register, {
+        deviceId: "bad-key-1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/bad-key-1",
+        p256dh: "BM6hZ_SHORT=",
+        auth: makeSyntheticSubKeys().auth,
+      })
+    ).rejects.toThrow(/Invalid p256dh key/i);
+
+    // Rejects 65-byte p256dh missing 0x04 uncompressed prefix
+    const wrongPrefix = new Uint8Array(65).fill(0x02);
+    await expect(
+      asUser.mutation(api.push.register, {
+        deviceId: "bad-key-2",
+        endpoint: "https://fcm.googleapis.com/fcm/send/bad-key-2",
+        p256dh: toBase64Url(wrongPrefix),
+        auth: makeSyntheticSubKeys().auth,
+      })
+    ).rejects.toThrow(/Invalid p256dh key/i);
+
+    // Rejects short auth key (valid base64, wrong length: 8 bytes instead of 16)
+    await expect(
+      asUser.mutation(api.push.register, {
+        deviceId: "bad-key-3",
+        endpoint: "https://fcm.googleapis.com/fcm/send/bad-key-3",
+        p256dh: makeSyntheticSubKeys().p256dh,
+        auth: "QUJDREVGR0g=",
+      })
+    ).rejects.toThrow(/Invalid auth key/i);
+
+    // Accepts standard base64 keys containing '+' and '/'
+    const plusSlashP256 = new Uint8Array(65);
+    plusSlashP256[0] = 0x04;
+    plusSlashP256.fill(0xfb, 1); // produces '+' and '/' in standard base64
+    const plusSlashAuth = new Uint8Array(16).fill(0xff);
+    const stdB64P256 = Buffer.from(plusSlashP256).toString("base64");
+    const stdB64Auth = Buffer.from(plusSlashAuth).toString("base64");
+    expect(stdB64P256).toMatch(/[+/]/);
+    expect(stdB64Auth).toMatch(/[+/]/);
 
     const subId = await asUser.mutation(api.push.register, {
       deviceId: "android-pixel-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/android-token",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
+      p256dh: stdB64P256,
+      auth: stdB64Auth,
       userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/125.0 Mobile",
       isMobile: true,
       origin: "https://dev-focus-timer.sondrelassen.workers.dev/timer?foo=bar",
     });
 
-    // Enable notifications as user does in settings
-    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+    const deviceStatus = await asUser.query(api.push.getDeviceSubscriptionStatus, {
+      deviceId: "android-pixel-1",
+    });
+    expect(deviceStatus.registered).toBe(true);
+    expect(deviceStatus.updatedAt).toBeTypeOf("string");
 
     const ctxBefore = await t.query(internal.push.getPushDispatchContext, { userId });
-    expect(ctxBefore.notificationsEnabled).toBe(true);
+    expect(ctxBefore.soundEnabled).toBe(true);
     expect(ctxBefore.subscriptions).toHaveLength(1);
     expect(ctxBefore.subscriptions[0].isMobile).toBe(true);
     expect(ctxBefore.subscriptions[0].origin).toBe(
       "https://dev-focus-timer.sondrelassen.workers.dev"
     );
 
-    // Invalid non-https origins never overwrite an existing valid origin
+    // Unauthorized HTTPS origins never overwrite an existing valid origin
     await asUser.mutation(api.push.register, {
       deviceId: "android-pixel-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/android-token",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
+      p256dh: stdB64P256,
+      auth: stdB64Auth,
       isMobile: true,
-      origin: "http://evil.example.com",
+      origin: "https://evil.example.com",
     });
     const ctxSanitized = await t.query(internal.push.getPushDispatchContext, { userId });
     expect(ctxSanitized.subscriptions[0].origin).toBe(
       "https://dev-focus-timer.sondrelassen.workers.dev"
     );
 
-    // Invalid non-https origins are stripped on fresh registrations
+    // Unauthorized origins are stripped on fresh registrations
     const badOriginSubId = await asUser.mutation(api.push.register, {
       deviceId: "bad-origin-device",
       endpoint: "https://fcm.googleapis.com/fcm/send/bad-origin-token",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
-      origin: "http://evil.example.com",
+      ...makeSyntheticSubKeys(0x21),
+      origin: "https://evil.example.com",
     });
     const badOriginDoc = await t.run(async (ctx) => ctx.db.get(badOriginSubId));
     expect(badOriginDoc?.origin).toBeUndefined();
     await t.mutation(internal.push.deleteSubscriptionById, { id: badOriginSubId });
 
-    // Turning off notifications updates dispatch context
-    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: false });
-    const ctxDisabled = await t.query(internal.push.getPushDispatchContext, { userId });
-    expect(ctxDisabled.notificationsEnabled).toBe(false);
-
-    // Pruning gone/expired subscription deletes it cleanly
+    // Pruning gone/expired subscription deletes it cleanly and reflects in getDeviceSubscriptionStatus
     const deleted = await t.mutation(internal.push.deleteSubscriptionById, { id: subId });
     expect(deleted).toBe(true);
-    const ctxAfter = await t.query(internal.push.getPushDispatchContext, { userId });
-    expect(ctxAfter.subscriptions).toHaveLength(0);
+    const statusAfter = await asUser.query(api.push.getDeviceSubscriptionStatus, {
+      deviceId: "android-pixel-1",
+    });
+    expect(statusAfter).toEqual({ registered: false, updatedAt: null });
   });
 
-  it("validates scheduleTestPush preconditions and schedules delayed test push", async () => {
+  it("validates scheduleTestPush preconditions (VAPID key, subscriptions, 5s rate limit)", async () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createTestUser(t);
+
+    // Missing VAPID_PRIVATE_KEY fails fast
+    delete process.env.VAPID_PRIVATE_KEY;
+    const missingVapidRes = await asUser.mutation(api.push.scheduleTestPush, { delayMs: 5000 });
+    expect(missingVapidRes).toEqual({ scheduled: false, reason: "missing_vapid_key" });
+
+    // Configure VAPID_PRIVATE_KEY
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
 
     const noSubRes = await asUser.mutation(api.push.scheduleTestPush, { delayMs: 5000 });
     expect(noSubRes).toEqual({ scheduled: false, reason: "no_subscriptions" });
@@ -199,82 +268,72 @@ describe("Web Push Backend & Declarative Push", () => {
     await asUser.mutation(api.push.register, {
       deviceId: "android-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/tok-1",
-      p256dh: "BM6hZ_VALID=",
-      auth: "AUTHKEY==",
+      ...makeSyntheticSubKeys(0x31),
       isMobile: true,
     });
 
     const scheduledRes = await asUser.mutation(api.push.scheduleTestPush, { delayMs: 5000 });
     expect(scheduledRes).toEqual({ scheduled: true, delayMs: 5000, deviceCount: 1 });
+
+    // Immediate second call within 5s is rate-limited
+    const rateLimitedRes = await asUser.mutation(api.push.scheduleTestPush, { delayMs: 5000 });
+    expect(rateLimitedRes).toEqual({ scheduled: false, reason: "rate_limited" });
   });
 
-  it("delivers Web Push to both mobile and desktop subscriptions via sendTimerCompletionPush even when desktop is visible", async () => {
-    const vapidKp = await crypto.subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"]
-    );
-    process.env.VAPID_PRIVATE_KEY = JSON.stringify(
-      await crypto.subtle.exportKey("jwk", vapidKp.privateKey)
-    );
-
-    const makeSubKeys = async () => {
-      const ecdh = await crypto.subtle.generateKey(
-        { name: "ECDH", namedCurve: "P-256" },
-        true,
-        ["deriveBits"]
-      );
-      const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", ecdh.publicKey));
-      const p256dh = btoa(String.fromCharCode(...rawPub))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-      const authBytes = crypto.getRandomValues(new Uint8Array(16));
-      const auth = btoa(String.fromCharCode(...authBytes))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-      return { p256dh, auth };
-    };
+  it("delivers RFC 8291 aes128gcm Web Push to all registered devices, retries 503 once, and prunes 403/410", async () => {
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
 
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
-    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
 
-    const mobileKeys = await makeSubKeys();
-    const desktopKeys = await makeSubKeys();
+    const mobileKeys = await makeRealSubKeys();
+    const desktopKeys = await makeRealSubKeys();
+    const deadKeys = await makeRealSubKeys();
 
     await asUser.mutation(api.push.register, {
-      deviceId: "android-1",
-      endpoint: "https://fcm.googleapis.com/fcm/send/android-tok",
+      deviceId: "apple-iphone-1",
+      endpoint: "https://web.push.apple.com/iphone-tok",
       ...mobileKeys,
       isMobile: true,
     });
     await asUser.mutation(api.push.register, {
-      deviceId: "desktop-1",
+      deviceId: "desktop-retry-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/desktop-tok",
       ...desktopKeys,
       isMobile: false,
     });
-
-    const now = Date.now();
-    await t.run(async (ctx) => {
-      await ctx.db.insert("active_timers", {
-        userId,
-        sessionType: "WORK",
-        status: "IDLE",
-        remainingSeconds: 1500,
-        totalSeconds: 1500,
-        currentCycle: 1,
-        updatedAtMs: now,
-      });
+    await asUser.mutation(api.push.register, {
+      deviceId: "stale-vapid-1",
+      endpoint: "https://web.push.apple.com/stale-vapid-tok",
+      ...deadKeys,
+      isMobile: true,
     });
 
-    const deliveredEndpoints: string[] = [];
+    const deliveredHeadersByEndpoint = new Map<string, Record<string, string>>();
+    let desktopAttempts = 0;
+
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async (input) => {
-        deliveredEndpoints.push(typeof input === "string" ? input : input.toString());
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const hdrs = Object.fromEntries(
+          Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [
+            k.toLowerCase(),
+            String(v),
+          ])
+        );
+        deliveredHeadersByEndpoint.set(url, hdrs);
+
+        if (url.includes("desktop-tok")) {
+          desktopAttempts += 1;
+          if (desktopAttempts === 1) {
+            return new Response("Temporary outage", { status: 503 });
+          }
+          return new Response(null, { status: 201 });
+        }
+        if (url.includes("stale-vapid-tok")) {
+          return new Response(JSON.stringify({ reason: "VapidPkHashMismatch" }), { status: 403 });
+        }
         return new Response(null, { status: 201 });
       });
 
@@ -283,24 +342,42 @@ describe("Web Push Backend & Declarative Push", () => {
         userId,
         sessionType: "WORK",
         timerRunId: "run-push-1",
-        completedAtMs: now,
+        completedAtMs: Date.now(),
       });
 
-      expect(result).toEqual({ sent: 2, pruned: 0 });
-      expect(deliveredEndpoints).toContain("https://fcm.googleapis.com/fcm/send/android-tok");
-      expect(deliveredEndpoints).toContain("https://fcm.googleapis.com/fcm/send/desktop-tok");
+      expect(result).toEqual({ sent: 2, pruned: 1 });
+      expect(desktopAttempts).toBe(2);
+
+      // Verify RFC 8291 aes128gcm & RFC 8292 vapid headers (no legacy Crypto-Key / Encryption)
+      const appleHeaders = deliveredHeadersByEndpoint.get("https://web.push.apple.com/iphone-tok");
+      expect(appleHeaders?.["content-encoding"]).toBe("aes128gcm");
+      expect(appleHeaders?.["authorization"]).toMatch(/^vapid t=/);
+      expect(appleHeaders?.["crypto-key"]).toBeUndefined();
+      expect(appleHeaders?.["encryption"]).toBeUndefined();
+
+      // Verify 403 VapidPkHashMismatch subscription was pruned
+      const staleStatus = await asUser.query(api.push.getDeviceSubscriptionStatus, {
+        deviceId: "stale-vapid-1",
+      });
+      expect(staleStatus.registered).toBe(false);
     } finally {
       fetchSpy.mockRestore();
     }
   });
 
-  it("records session, advances break->work, and schedules push when client api.timer.complete beats onTimerCompleted", async () => {
+  it("schedules push based on per-device push_subscriptions (Decision 4A) even if account notificationsEnabled is false", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
 
-    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+    // Account setting is false, but this device has an active push subscription
+    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: false });
+    await asUser.mutation(api.push.register, {
+      deviceId: "iphone-sub-1",
+      endpoint: "https://web.push.apple.com/iphone-per-device",
+      ...makeSyntheticSubKeys(0x41),
+      isMobile: true,
+    });
 
-    // Insert an expired RUNNING break whose server onTimerCompleted hasn't run yet
     const now = Date.now();
     await t.run(async (ctx) => {
       await ctx.db.insert("active_timers", {
@@ -333,7 +410,6 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0].sessionType).toBe("SHORT_BREAK");
 
-    // Verify sendTimerCompletionPush was scheduled in _scheduled_functions
     const scheduled = await t.run(async (ctx) => {
       return await ctx.db.system.query("_scheduled_functions").collect();
     });
@@ -345,7 +421,12 @@ describe("Web Push Backend & Declarative Push", () => {
   it("does not prematurely complete a running timer or double-schedule when onTimerCompleted already transitioned to IDLE", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
-    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+    await asUser.mutation(api.push.register, {
+      deviceId: "device-push-active",
+      endpoint: "https://fcm.googleapis.com/fcm/send/active-tok",
+      ...makeSyntheticSubKeys(0x51),
+      isMobile: true,
+    });
 
     // 1. Timer still has 60s left -> premature complete should be ignored
     const now = Date.now();
@@ -399,12 +480,12 @@ describe("Web Push Backend & Declarative Push", () => {
   it("removes stale same-user endpoint rows when deviceId changes and returns soundEnabled in dispatch context", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
+    const keys = makeSyntheticSubKeys(0x61);
 
     await asUser.mutation(api.push.register, {
       deviceId: "device-old",
       endpoint: "https://fcm.googleapis.com/fcm/send/shared-endpoint",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
+      ...keys,
       isMobile: true,
     });
 
@@ -412,13 +493,11 @@ describe("Web Push Backend & Declarative Push", () => {
     await asUser.mutation(api.push.register, {
       deviceId: "device-new",
       endpoint: "https://fcm.googleapis.com/fcm/send/shared-endpoint",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
+      ...keys,
       isMobile: true,
     });
 
     await asUser.mutation(api.users.updateSettings, {
-      notificationsEnabled: true,
       soundEnabled: false,
     });
 
@@ -428,53 +507,61 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(ctx.subscriptions[0].deviceId).toBe("device-new");
   });
 
-  it("skips patching updatedAt in api.push.register when subscription fields are unchanged", async () => {
+  it("skips patching updatedAt within 24h when unchanged, but refreshes updatedAt after 24h to prevent active-device eviction", async () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createTestUser(t);
+    const keys = makeSyntheticSubKeys(0x71);
 
     const subArgs = {
       deviceId: "desktop-focus-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/unchanged-tok",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
+      ...keys,
       userAgent: "Mozilla/5.0 Chrome/125.0",
       isMobile: false,
     };
 
     const firstId = await asUser.mutation(api.push.register, subArgs);
-    const sentinelUpdatedAt = "2026-01-01T00:00:00.000Z";
+    const recentUpdatedAt = new Date(Date.now() - 60_000).toISOString();
     await t.run(async (ctx) => {
-      await ctx.db.patch(firstId, { updatedAt: sentinelUpdatedAt });
+      await ctx.db.patch(firstId, { updatedAt: recentUpdatedAt });
     });
 
-    // Re-registering identical subscription fields should skip ctx.db.patch
+    // Re-registering identical subscription fields within 24h should skip ctx.db.patch
     const secondId = await asUser.mutation(api.push.register, subArgs);
     expect(secondId).toBe(firstId);
+    const afterRecent = await t.run(async (ctx) => ctx.db.get(firstId));
+    expect(afterRecent?.updatedAt).toBe(recentUpdatedAt);
 
-    const afterUnchanged = await t.run(async (ctx) => ctx.db.get(firstId));
-    expect(afterUnchanged?.updatedAt).toBe(sentinelUpdatedAt);
+    // Once >24h old, re-registering identical fields DOES touch updatedAt so active devices aren't evicted first
+    const staleUpdatedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    await t.run(async (ctx) => {
+      await ctx.db.patch(firstId, { updatedAt: staleUpdatedAt });
+    });
+    await asUser.mutation(api.push.register, subArgs);
+    const afterRefresh = await t.run(async (ctx) => ctx.db.get(firstId));
+    expect(afterRefresh?.updatedAt).not.toBe(staleUpdatedAt);
 
-    // Changing a field (e.g., auth key) should patch and refresh updatedAt
+    // Changing a field (e.g., auth key) immediately patches and refreshes updatedAt
+    const updatedKeys = makeSyntheticSubKeys(0x75);
     await asUser.mutation(api.push.register, {
       ...subArgs,
-      auth: "UPDATED_AUTH==",
+      auth: updatedKeys.auth,
     });
     const afterChanged = await t.run(async (ctx) => ctx.db.get(firstId));
-    expect(afterChanged?.auth).toBe("UPDATED_AUTH==");
-    expect(afterChanged?.updatedAt).not.toBe(sentinelUpdatedAt);
+    expect(afterChanged?.auth).toBe(updatedKeys.auth);
   });
 
   it("cleans up duplicate (userId, deviceId) rows in api.push.register", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
+    const keys = makeSyntheticSubKeys(0x81);
 
     await t.run(async (ctx) => {
       await ctx.db.insert("push_subscriptions", {
         userId,
         deviceId: "dup-device-1",
         endpoint: "https://fcm.googleapis.com/fcm/send/dup-tok-1",
-        p256dh: "BM6hZ_VALID_KEY=",
-        auth: "AUTHKEY==",
+        ...keys,
         isMobile: true,
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
@@ -482,8 +569,7 @@ describe("Web Push Backend & Declarative Push", () => {
         userId,
         deviceId: "dup-device-1",
         endpoint: "https://fcm.googleapis.com/fcm/send/dup-tok-2",
-        p256dh: "BM6hZ_VALID_KEY=",
-        auth: "AUTHKEY==",
+        ...keys,
         isMobile: true,
         updatedAt: "2026-01-02T00:00:00.000Z",
       });
@@ -492,8 +578,7 @@ describe("Web Push Backend & Declarative Push", () => {
     await asUser.mutation(api.push.register, {
       deviceId: "dup-device-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/dup-tok-1",
-      p256dh: "BM6hZ_VALID_KEY=",
-      auth: "AUTHKEY==",
+      ...keys,
       isMobile: true,
     });
 
@@ -509,14 +594,15 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(rows[0].endpoint).toBe("https://fcm.googleapis.com/fcm/send/dup-tok-1");
   });
 
-  it("does not schedule sendTimerCompletionPush when notificationsEnabled is undefined or false", async () => {
+  it("does not schedule sendTimerCompletionPush when no device has an active push subscription", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
 
-    // 1. Missing/undefined user.settings (falls back to DEFAULT_SETTINGS) -> client api.timer.complete must not schedule push
+    // Even if account notificationsEnabled is true, having 0 push_subscriptions skips scheduling push
+    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: true });
+
+    const now = Date.now();
     await t.run(async (ctx) => {
-      await ctx.db.patch(userId, { settings: undefined });
-      const now = Date.now();
       await ctx.db.insert("active_timers", {
         userId,
         sessionType: "WORK",
@@ -525,93 +611,39 @@ describe("Web Push Backend & Declarative Push", () => {
         totalSeconds: 1500,
         targetEndTime: now - 500,
         currentCycle: 1,
-        timerRunId: "run-notif-undef-client",
+        timerRunId: "run-no-sub-client",
         updatedAtMs: now - 1_500_500,
       });
     });
 
     await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-notif-undef-client",
+      completedTimerRunId: "run-no-sub-client",
       nextSessionType: "SHORT_BREAK",
       nextDurationSeconds: 300,
       nextCurrentCycle: 1,
       autoStartNext: false,
     });
 
-    // 2. Undefined notificationsEnabled -> server internal.timer.onTimerCompleted must not schedule push
     await t.run(async (ctx) => {
       const existing = await ctx.db
         .query("active_timers")
         .withIndex("by_user", (q) => q.eq("userId", userId))
         .first();
-      const now = Date.now();
       await ctx.db.patch(existing!._id, {
         sessionType: "SHORT_BREAK",
         status: "RUNNING",
         remainingSeconds: 300,
         totalSeconds: 300,
-        targetEndTime: now - 500,
+        targetEndTime: Date.now() - 500,
         currentCycle: 1,
-        timerRunId: "run-notif-undef-server",
-        updatedAtMs: now - 300_500,
+        timerRunId: "run-no-sub-server",
+        updatedAtMs: Date.now() - 300_500,
       });
     });
 
     await t.mutation(internal.timer.onTimerCompleted, {
       userId,
-      timerRunId: "run-notif-undef-server",
-    });
-
-    // 3. Explicit notificationsEnabled: false -> neither complete nor onTimerCompleted schedules push
-    await asUser.mutation(api.users.updateSettings, { notificationsEnabled: false });
-
-    await t.run(async (ctx) => {
-      const existing = await ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first();
-      const now = Date.now();
-      await ctx.db.patch(existing!._id, {
-        sessionType: "WORK",
-        status: "RUNNING",
-        remainingSeconds: 1500,
-        totalSeconds: 1500,
-        targetEndTime: now - 500,
-        currentCycle: 2,
-        timerRunId: "run-notif-false-client",
-        updatedAtMs: now - 1_500_500,
-      });
-    });
-
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-notif-false-client",
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 2,
-      autoStartNext: false,
-    });
-
-    await t.run(async (ctx) => {
-      const existing = await ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first();
-      const now = Date.now();
-      await ctx.db.patch(existing!._id, {
-        sessionType: "SHORT_BREAK",
-        status: "RUNNING",
-        remainingSeconds: 300,
-        totalSeconds: 300,
-        targetEndTime: now - 500,
-        currentCycle: 2,
-        timerRunId: "run-notif-false-server",
-        updatedAtMs: now - 300_500,
-      });
-    });
-
-    await t.mutation(internal.timer.onTimerCompleted, {
-      userId,
-      timerRunId: "run-notif-false-server",
+      timerRunId: "run-no-sub-server",
     });
 
     const scheduled = await t.run(async (ctx) =>

@@ -212,12 +212,26 @@ describe("Security Hardening & Input Validation", () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createAuthenticatedTestUser(t);
 
+    const makeValidPushKeys = (seed: number) => {
+      const p256Bytes = new Uint8Array(65);
+      p256Bytes[0] = 0x04;
+      p256Bytes.fill(seed, 1);
+      const authBytes = new Uint8Array(16).fill(seed + 1);
+      const toB64Url = (bytes: Uint8Array) =>
+        btoa(String.fromCharCode(...bytes))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+      return { p256dh: toB64Url(p256Bytes), auth: toB64Url(authBytes) };
+    };
+    const { p256dh: validP256dh, auth: validAuth } = makeValidPushKeys(0x11);
+
     await expect(
       asUser.mutation(api.push.register, {
         deviceId: "device-1",
         endpoint: "http://169.254.169.254/latest/meta-data/",
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       })
     ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
@@ -225,8 +239,8 @@ describe("Security Hardening & Input Validation", () => {
       asUser.mutation(api.push.register, {
         deviceId: "device-1",
         endpoint: "https://169.254.169.254/latest/meta-data/",
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       })
     ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
@@ -234,8 +248,8 @@ describe("Security Hardening & Input Validation", () => {
       asUser.mutation(api.push.register, {
         deviceId: "device-1",
         endpoint: "javascript:alert(1)",
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       })
     ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
@@ -243,8 +257,8 @@ describe("Security Hardening & Input Validation", () => {
     const regId = await asUser.mutation(api.push.register, {
       deviceId: "device-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/sample-token",
-      p256dh: "BM6hZ/VALID=",
-      auth: "AUTHKEY==",
+      p256dh: validP256dh,
+      auth: validAuth,
     });
     expect(regId).toBeDefined();
   });
@@ -252,14 +266,19 @@ describe("Security Hardening & Input Validation", () => {
   it("enforces push subscription quota and prunes oldest devices when exceeding quota", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
+    const p256Bytes = new Uint8Array(65);
+    p256Bytes[0] = 0x04;
+    p256Bytes.fill(0x33, 1);
+    const validP256dh = btoa(String.fromCharCode(...p256Bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const validAuth = btoa(String.fromCharCode(...new Uint8Array(16).fill(0x44))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
     // Register 11 devices
     for (let i = 1; i <= 11; i++) {
       await asUser.mutation(api.push.register, {
         deviceId: `device-${i}`,
         endpoint: `https://fcm.googleapis.com/fcm/send/token-${i}`,
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       });
     }
 
@@ -278,6 +297,11 @@ describe("Security Hardening & Input Validation", () => {
   it("removes another user's push subscription when a different account registers the same endpoint", async () => {
     const t = convexTest(schema, modules);
     const { userId: userAId, asUser: asUserA } = await createAuthenticatedTestUser(t);
+    const p256Bytes = new Uint8Array(65);
+    p256Bytes[0] = 0x04;
+    p256Bytes.fill(0x55, 1);
+    const validP256dh = btoa(String.fromCharCode(...p256Bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const validAuth = btoa(String.fromCharCode(...new Uint8Array(16).fill(0x66))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
     const userBId = await t.run(async (ctx) => {
       return await ctx.db.insert("users", {
@@ -299,15 +323,15 @@ describe("Security Hardening & Input Validation", () => {
     await asUserA.mutation(api.push.register, {
       deviceId: "shared-browser-device",
       endpoint: sharedEndpoint,
-      p256dh: "BM6hZ/VALID=",
-      auth: "AUTHKEY==",
+      p256dh: validP256dh,
+      auth: validAuth,
     });
 
     await asUserB.mutation(api.push.register, {
       deviceId: "shared-browser-device",
       endpoint: sharedEndpoint,
-      p256dh: "BM6hZ/VALID=",
-      auth: "AUTHKEY==",
+      p256dh: validP256dh,
+      auth: validAuth,
     });
 
     const subsForEndpoint = await t.run(async (ctx) => {

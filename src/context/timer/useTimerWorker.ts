@@ -40,6 +40,7 @@ interface UseTimerWorkerParams {
   activeTagIdRef: React.MutableRefObject<string | null>;
   lastTickWallMsRef: React.MutableRefObject<number>;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
+  shouldDeferExpiredCompletion?: () => boolean;
   onStaleExpiration: () => void;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
 }
@@ -60,6 +61,7 @@ export const useTimerWorker = ({
   activeTagIdRef,
   lastTickWallMsRef,
   handleCompleteRef,
+  shouldDeferExpiredCompletion,
   onStaleExpiration,
   setRemainingSeconds,
 }: UseTimerWorkerParams) => {
@@ -118,6 +120,9 @@ export const useTimerWorker = ({
         onStaleExpiration();
         return null;
       }
+      if (shouldDeferExpiredCompletion && shouldDeferExpiredCompletion()) {
+        return 0;
+      }
       remainingSecondsRef.current = 0;
       setRemainingSeconds(0);
       const expiredLongAgo = diffMs < -60_000;
@@ -135,6 +140,7 @@ export const useTimerWorker = ({
     lastTickWallMsRef,
     targetEndTimeRef,
     handleCompleteRef,
+    shouldDeferExpiredCompletion,
     onStaleExpiration,
     remainingSecondsRef,
     setRemainingSeconds,

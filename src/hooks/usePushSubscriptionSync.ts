@@ -8,6 +8,7 @@ import { UserSettings } from '../types/settings';
 import { DEVICE_ID } from '../context/timer/timerPersistence';
 
 const PUSH_RESYNC_TTL_MS = 15 * 60 * 1000;
+const SERVER_PRUNE_RECOVERY_COOLDOWN_MS = 30 * 1000;
 
 interface UsePushSubscriptionSyncParams {
   notificationService: NotificationService;
@@ -16,6 +17,7 @@ interface UsePushSubscriptionSyncParams {
   notificationsEnabled: boolean;
   settingsRef: MutableRefObject<UserSettings>;
   vapidPublicKey?: string | null;
+  isServerSubscriptionRegistered?: boolean;
   registerPushSubscription: (args: PushRegisterPayload) => Promise<unknown>;
 }
 
@@ -26,12 +28,16 @@ export function usePushSubscriptionSync({
   notificationsEnabled,
   settingsRef,
   vapidPublicKey,
+  isServerSubscriptionRegistered,
   registerPushSubscription,
 }: UsePushSubscriptionSyncParams) {
   const [pushStatus, setPushStatus] = useState<PushSubscriptionStatus>(() =>
     notificationService.getPushStatus()
   );
   const lastSyncedAtRef = useRef<number>(0);
+  const lastPruneRecoveryAtRef = useRef<number>(0);
+  const isServerRegisteredRef = useRef<boolean | undefined>(isServerSubscriptionRegistered);
+  isServerRegisteredRef.current = isServerSubscriptionRegistered;
 
   // Track push status updates emitted by NotificationService
   useEffect(() => {
@@ -58,9 +64,11 @@ export function usePushSubscriptionSync({
 
   const syncPushSubscription = useCallback(async () => {
     if (!isConvexConfigured || !isEffectiveAuthenticated) {
-      return { ok: false, status: notificationService.getPushStatus(), reason: 'Unauthenticated' };
+      notificationService.resetPushStatus('unsubscribed');
+      return { ok: false, status: 'unsubscribed' as PushSubscriptionStatus, reason: 'Unauthenticated' };
     }
     if (!settingsRef.current.notificationsEnabled) {
+      notificationService.resetPushStatus('unsubscribed');
       return {
         ok: false,
         status: 'unsubscribed' as PushSubscriptionStatus,
@@ -76,14 +84,32 @@ export function usePushSubscriptionSync({
     performSync,
   ]);
 
-  // Automatically register/refresh Web Push subscription when authenticated and notifications are enabled
+  // Automatically register/refresh Web Push subscription when authenticated and notifications are enabled,
+  // and cleanly reset cached pushStatus whenever auth, settings, VAPID config, or permission change.
   useEffect(() => {
     if (!isConvexConfigured || !isEffectiveAuthenticated || !notificationsEnabled) {
       lastSyncedAtRef.current = 0;
+      notificationService.resetPushStatus('unsubscribed');
+      return;
+    }
+    if (vapidPublicKey === null) {
+      lastSyncedAtRef.current = 0;
+      notificationService.resetPushStatus('unconfigured');
       return;
     }
     if (!vapidPublicKey) return;
-    if (!notificationService.hasPermission()) return;
+    if (!notificationService.hasPermission()) {
+      lastSyncedAtRef.current = 0;
+      const perm = notificationService.getPermissionState();
+      notificationService.resetPushStatus(
+        perm === 'unsupported'
+          ? 'unsupported'
+          : perm === 'denied'
+            ? 'permission_denied'
+            : 'unsubscribed'
+      );
+      return;
+    }
 
     void performSync();
   }, [
@@ -95,11 +121,39 @@ export function usePushSubscriptionSync({
     performSync,
   ]);
 
-  // Re-sync push subscription if user returns from OS Settings after granting notification permission
+  // Self-heal if the server pruned this device's push subscription (404/410/403/quota eviction)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handleReturn = () => {
-      if (document.visibilityState === 'hidden') return;
+    if (isServerSubscriptionRegistered !== false) return;
+    if (
+      !isConvexConfigured ||
+      !isEffectiveAuthenticated ||
+      !notificationsEnabled ||
+      !vapidPublicKey ||
+      !notificationService.hasPermission()
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastPruneRecoveryAtRef.current < SERVER_PRUNE_RECOVERY_COOLDOWN_MS) {
+      return;
+    }
+    lastPruneRecoveryAtRef.current = now;
+    lastSyncedAtRef.current = 0;
+    void performSync();
+  }, [
+    isServerSubscriptionRegistered,
+    isConvexConfigured,
+    isEffectiveAuthenticated,
+    notificationsEnabled,
+    vapidPublicKey,
+    notificationService,
+    performSync,
+  ]);
+
+  // Immediately re-sync if the Service Worker reports a pushsubscriptionchange key rotation
+  useEffect(() => {
+    return notificationService.subscribePushResyncRequested(() => {
       if (
         !isConvexConfigured ||
         !isEffectiveAuthenticated ||
@@ -109,7 +163,45 @@ export function usePushSubscriptionSync({
       ) {
         return;
       }
+      lastSyncedAtRef.current = 0;
+      void performSync();
+    });
+  }, [
+    notificationService,
+    isConvexConfigured,
+    isEffectiveAuthenticated,
+    settingsRef,
+    vapidPublicKey,
+    performSync,
+  ]);
+
+  // Re-sync push subscription on focus/visibility return (e.g. after granting OS permission) or network recovery
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleReturn = () => {
+      if (document.visibilityState === 'hidden') return;
       if (
+        !isConvexConfigured ||
+        !isEffectiveAuthenticated ||
+        !settingsRef.current.notificationsEnabled ||
+        !vapidPublicKey
+      ) {
+        return;
+      }
+      if (!notificationService.hasPermission()) {
+        const perm = notificationService.getPermissionState();
+        notificationService.resetPushStatus(
+          perm === 'unsupported'
+            ? 'unsupported'
+            : perm === 'denied'
+              ? 'permission_denied'
+              : 'unsubscribed'
+        );
+        return;
+      }
+      const serverMissing = isServerRegisteredRef.current === false;
+      if (
+        !serverMissing &&
         notificationService.getPushStatus() === 'active' &&
         Date.now() - lastSyncedAtRef.current < PUSH_RESYNC_TTL_MS
       ) {
@@ -118,9 +210,11 @@ export function usePushSubscriptionSync({
       void performSync();
     };
     window.addEventListener('focus', handleReturn);
+    window.addEventListener('online', handleReturn);
     document.addEventListener('visibilitychange', handleReturn);
     return () => {
       window.removeEventListener('focus', handleReturn);
+      window.removeEventListener('online', handleReturn);
       document.removeEventListener('visibilitychange', handleReturn);
     };
   }, [

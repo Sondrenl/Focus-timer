@@ -1,9 +1,11 @@
 import { v } from "convex/values";
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireUser } from "./authHelper";
+import { getAuthenticatedUser, requireUser } from "./authHelper";
 
 export const MAX_PUSH_DEVICES_PER_USER = 10;
+const UPDATED_AT_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // Touch active devices daily so quota eviction never drops primary devices
+const TEST_PUSH_RATE_LIMIT_MS = 5_000;
 
 export const ALLOWED_PUSH_DOMAINS = [
   "fcm.googleapis.com",
@@ -13,8 +15,8 @@ export const ALLOWED_PUSH_DOMAINS = [
   "web.push.apple.com",
 ];
 
-function decodeBase64UrlToBytes(b64u: string): Uint8Array {
-  const b64 = b64u.replace(/-/g, "+").replace(/_/g, "/");
+function decodeBase64ToBytes(raw: string): Uint8Array {
+  const b64 = raw.replace(/-/g, "+").replace(/_/g, "/");
   const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4 || 4)) % 4), "=");
   const binary = atob(padded);
   const bytes = new Uint8Array(binary.length);
@@ -37,8 +39,8 @@ function deriveVapidPublicKeyFromPrivateJwk(rawPrivateJwk: string | undefined): 
   try {
     const parsed = JSON.parse(rawPrivateJwk) as { kty?: string; crv?: string; x?: string; y?: string };
     if (parsed.kty === "EC" && parsed.crv === "P-256" && parsed.x && parsed.y) {
-      const x = decodeBase64UrlToBytes(parsed.x);
-      const y = decodeBase64UrlToBytes(parsed.y);
+      const x = decodeBase64ToBytes(parsed.x);
+      const y = decodeBase64ToBytes(parsed.y);
       if (x.length === 32 && y.length === 32) {
         const uncompressed = new Uint8Array(65);
         uncompressed[0] = 0x04;
@@ -74,19 +76,43 @@ function validateEndpoint(endpoint: string): void {
   }
 }
 
+function isAllowedAppOrigin(url: URL): boolean {
+  if (url.username !== "" || url.password !== "") return false;
+  if (
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+  ) {
+    return true;
+  }
+  if (url.protocol !== "https:") return false;
+
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === "focus-timer.sondrelassen.workers.dev" || hostname.endsWith(".sondrelassen.workers.dev")) {
+    return true;
+  }
+
+  const configuredSiteUrl = process.env.SITE_URL?.trim();
+  if (configuredSiteUrl) {
+    try {
+      const site = new URL(configuredSiteUrl);
+      if (site.protocol === "https:" && site.origin === url.origin) {
+        return true;
+      }
+    } catch {
+      // Ignore malformed SITE_URL
+    }
+  }
+
+  return false;
+}
+
 function sanitizeOrigin(rawOrigin: string | undefined): string | undefined {
   if (!rawOrigin) return undefined;
   const trimmed = rawOrigin.trim();
   if (!trimmed || trimmed.length > 256) return undefined;
   try {
     const url = new URL(trimmed);
-    if (
-      (url.protocol === "https:" ||
-        (url.protocol === "http:" &&
-          (url.hostname === "localhost" || url.hostname === "127.0.0.1"))) &&
-      url.username === "" &&
-      url.password === ""
-    ) {
+    if (isAllowedAppOrigin(url)) {
       return url.origin;
     }
   } catch {
@@ -101,18 +127,60 @@ function validateDeviceId(deviceId: string): void {
   }
 }
 
-function validatePushKey(key: string, name: string): void {
-  if (!key || key.length > 256 || !/^[a-zA-Z0-9_/-]+=*$/.test(key)) {
+function validatePushKey(key: string, name: "p256dh" | "auth"): void {
+  if (!key || key.length > 256 || !/^[a-zA-Z0-9+_/-]+=*$/.test(key)) {
     throw new Error(`Invalid ${name} format: must be valid base64 key.`);
+  }
+  let decoded: Uint8Array;
+  try {
+    decoded = decodeBase64ToBytes(key);
+  } catch {
+    throw new Error(`Invalid ${name} format: base64 decode failed.`);
+  }
+  if (name === "p256dh") {
+    if (decoded.length !== 65 || decoded[0] !== 0x04) {
+      throw new Error("Invalid p256dh key: must be a 65-byte uncompressed P-256 public key.");
+    }
+  } else if (decoded.length !== 16) {
+    throw new Error("Invalid auth key: must be a 16-byte authentication secret.");
   }
 }
 
 export const getVapidPublicKey = query({
   args: {},
+  returns: v.union(v.string(), v.null()),
   handler: async () => {
     const explicit = process.env.VAPID_PUBLIC_KEY?.trim();
     if (explicit) return explicit;
     return deriveVapidPublicKeyFromPrivateJwk(process.env.VAPID_PRIVATE_KEY);
+  },
+});
+
+export const getDeviceSubscriptionStatus = query({
+  args: { deviceId: v.string() },
+  returns: v.object({
+    registered: v.boolean(),
+    updatedAt: v.union(v.string(), v.null()),
+  }),
+  handler: async (ctx, args) => {
+    const user = await getAuthenticatedUser(ctx);
+    if (!user) {
+      return { registered: false, updatedAt: null };
+    }
+    if (!args.deviceId || args.deviceId.length > 128 || !/^[a-zA-Z0-9_.-]+$/.test(args.deviceId)) {
+      return { registered: false, updatedAt: null };
+    }
+    const existing = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_user_device", (q) =>
+        q.eq("userId", user._id).eq("deviceId", args.deviceId)
+      )
+      .first();
+
+    return {
+      registered: Boolean(existing),
+      updatedAt: existing?.updatedAt ?? null,
+    };
   },
 });
 
@@ -126,6 +194,7 @@ export const register = mutation({
     isMobile: v.optional(v.boolean()),
     origin: v.optional(v.string()),
   },
+  returns: v.id("push_subscriptions"),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     validateDeviceId(args.deviceId);
@@ -135,7 +204,8 @@ export const register = mutation({
 
     const sanitizedUserAgent = args.userAgent ? args.userAgent.slice(0, 256) : undefined;
     const sanitizedOrigin = sanitizeOrigin(args.origin);
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
 
     const sameEndpointSubs = await ctx.db
       .query("push_subscriptions")
@@ -173,7 +243,16 @@ export const register = mutation({
         existing.isMobile === nextIsMobile &&
         existing.origin === nextOrigin;
 
-      if (unchanged) {
+      const lastUpdatedMs = Date.parse(existing.updatedAt);
+      const needsHeartbeatTouch =
+        !Number.isFinite(lastUpdatedMs) || nowMs - lastUpdatedMs >= UPDATED_AT_REFRESH_INTERVAL_MS;
+
+      if (unchanged && !needsHeartbeatTouch) {
+        return existing._id;
+      }
+
+      if (unchanged && needsHeartbeatTouch) {
+        await ctx.db.patch(existing._id, { updatedAt: now });
         return existing._id;
       }
 
@@ -188,7 +267,7 @@ export const register = mutation({
       });
       return existing._id;
     } else {
-      // Enforce subscription quota: prune oldest device if quota reached
+      // Enforce subscription quota: prune least-recently-seen device if quota reached
       const allSubscriptions = await ctx.db
         .query("push_subscriptions")
         .withIndex("by_user_device", (q) => q.eq("userId", user._id))
@@ -219,6 +298,7 @@ export const register = mutation({
 
 export const unregister = mutation({
   args: { deviceId: v.string() },
+  returns: v.boolean(),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     validateDeviceId(args.deviceId);
@@ -242,13 +322,30 @@ export const unregister = mutation({
 
 export const getPushDispatchContext = internalQuery({
   args: { userId: v.id("users") },
+  returns: v.object({
+    soundEnabled: v.boolean(),
+    subscriptions: v.array(
+      v.object({
+        _id: v.id("push_subscriptions"),
+        _creationTime: v.number(),
+        userId: v.id("users"),
+        deviceId: v.string(),
+        endpoint: v.string(),
+        p256dh: v.string(),
+        auth: v.string(),
+        userAgent: v.optional(v.string()),
+        isMobile: v.optional(v.boolean()),
+        origin: v.optional(v.string()),
+        updatedAt: v.string(),
+      })
+    ),
+  }),
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) {
-      return { notificationsEnabled: false, soundEnabled: true, subscriptions: [] };
+      return { soundEnabled: true, subscriptions: [] };
     }
 
-    const notificationsEnabled = user.settings?.notificationsEnabled ?? false;
     const soundEnabled = user.settings?.soundEnabled ?? true;
     const subscriptions = await ctx.db
       .query("push_subscriptions")
@@ -256,7 +353,6 @@ export const getPushDispatchContext = internalQuery({
       .take(MAX_PUSH_DEVICES_PER_USER);
 
     return {
-      notificationsEnabled,
       soundEnabled,
       subscriptions,
     };
@@ -265,6 +361,7 @@ export const getPushDispatchContext = internalQuery({
 
 export const deleteSubscriptionById = internalMutation({
   args: { id: v.id("push_subscriptions") },
+  returns: v.boolean(),
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
     if (existing) {
@@ -279,24 +376,54 @@ export const scheduleTestPush = mutation({
   args: {
     delayMs: v.optional(v.number()),
   },
+  returns: v.union(
+    v.object({
+      scheduled: v.literal(false),
+      reason: v.union(
+        v.literal("no_subscriptions"),
+        v.literal("rate_limited"),
+        v.literal("missing_vapid_key")
+      ),
+    }),
+    v.object({
+      scheduled: v.literal(true),
+      delayMs: v.number(),
+      deviceCount: v.number(),
+    })
+  ),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
+    const nowMs = Date.now();
+
+    if (
+      typeof user.lastTestPushAtMs === "number" &&
+      nowMs - user.lastTestPushAtMs < TEST_PUSH_RATE_LIMIT_MS
+    ) {
+      return { scheduled: false as const, reason: "rate_limited" as const };
+    }
+
+    if (!process.env.VAPID_PRIVATE_KEY?.trim()) {
+      return { scheduled: false as const, reason: "missing_vapid_key" as const };
+    }
+
     const subs = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_user_device", (q) => q.eq("userId", user._id))
       .take(MAX_PUSH_DEVICES_PER_USER);
 
     if (subs.length === 0) {
-      return { scheduled: false, reason: "no_subscriptions" as const };
+      return { scheduled: false as const, reason: "no_subscriptions" as const };
     }
 
     const clampedDelay = Math.max(0, Math.min(30_000, Math.round(args.delayMs ?? 5000)));
+    await ctx.db.patch(user._id, { lastTestPushAtMs: nowMs });
     await ctx.scheduler.runAfter(clampedDelay, internal.pushActions.sendTestPush, {
       userId: user._id,
-      scheduledAtMs: Date.now(),
+      scheduledAtMs: nowMs,
     });
-    return { scheduled: true, delayMs: clampedDelay, deviceCount: subs.length };
+    return { scheduled: true as const, delayMs: clampedDelay, deviceCount: subs.length };
   },
 });
+
 
 

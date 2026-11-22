@@ -223,26 +223,40 @@ describe("NotificationService & Service Worker mobile behavior", () => {
       "utf8"
     );
 
-    function createSwSandbox({ existingClients = [] as Array<{ url: string; focus: ReturnType<typeof vi.fn> }> } = {}) {
+    function createSwSandbox({
+      existingClients = [] as Array<{
+        url: string;
+        visibilityState?: string;
+        focus: ReturnType<typeof vi.fn>;
+        postMessage?: ReturnType<typeof vi.fn>;
+      }>,
+      existingNotifications = [] as Array<{ tag: string; close: ReturnType<typeof vi.fn> }>,
+    } = {}) {
       const listeners = new Map<string, (e: any) => void>();
       const shownNotifications: Array<{ title: string; options: any }> = [];
       const openWindow = vi.fn(async () => undefined);
+      const matchAll = vi.fn(async () => existingClients);
+      const getNotifications = vi.fn(async () => existingNotifications);
 
       const selfObj: any = {
         location: { origin: "https://pomodor.example" },
         addEventListener: (type: string, cb: (e: any) => void) => {
           listeners.set(type, cb);
         },
-        skipWaiting: vi.fn(),
+        skipWaiting: vi.fn(async () => undefined),
         clients: {
           claim: vi.fn(async () => undefined),
-          matchAll: vi.fn(async () => existingClients),
+          matchAll,
           openWindow,
         },
         registration: {
+          getNotifications,
           showNotification: vi.fn(async (title: string, options: any) => {
             shownNotifications.push({ title, options });
           }),
+          pushManager: {
+            subscribe: vi.fn(async () => ({ endpoint: "https://fcm.googleapis.com/fcm/send/rotated" })),
+          },
         },
       };
 
@@ -284,15 +298,44 @@ describe("NotificationService & Service Worker mobile behavior", () => {
         return { close };
       };
 
-      return { dispatchPush, dispatchNotificationClick, shownNotifications, openWindow };
+      const dispatchPushSubscriptionChange = async (oldSub?: any, newSub?: any) => {
+        let waitPromise: Promise<unknown> = Promise.resolve();
+        const cb = listeners.get("pushsubscriptionchange")!;
+        cb({
+          oldSubscription: oldSub,
+          newSubscription: newSub,
+          waitUntil: (p: Promise<unknown>) => {
+            waitPromise = p;
+          },
+        });
+        await waitPromise;
+      };
+
+      return {
+        dispatchPush,
+        dispatchNotificationClick,
+        dispatchPushSubscriptionChange,
+        shownNotifications,
+        openWindow,
+        matchAll,
+        getNotifications,
+      };
     }
 
     beforeEach(() => {
       vi.useRealTimers();
     });
 
-    it("unwraps Declarative Web Push (web_push: 8030) payloads and displays standard OS notification", async () => {
-      const { dispatchPush, shownNotifications } = createSwSandbox();
+    it("unwraps Declarative Web Push (web_push: 8030) payloads, propagates timestamp, and closes older session notifications", async () => {
+      const olderClose = vi.fn();
+      const testClose = vi.fn();
+      const { dispatchPush, shownNotifications } = createSwSandbox({
+        existingNotifications: [
+          { tag: "pomodor-session-run-old", close: olderClose },
+          { tag: "pomodor-test-123", close: testClose },
+        ],
+      });
+      const ts = 1795368615161;
       await dispatchPush({
         web_push: 8030,
         mutable: false,
@@ -301,25 +344,66 @@ describe("NotificationService & Service Worker mobile behavior", () => {
           body: "Your focus timer has finished. Time for a break.",
           navigate: "https://pomodor.example/",
           icon: "https://pomodor.example/icon-192.png",
+          badge: "https://pomodor.example/badge-72.png",
           tag: "pomodor-session-run-sw-1",
           silent: false,
-          timestamp: Date.now(),
+          timestamp: ts,
         },
       });
 
+      expect(olderClose).toHaveBeenCalledTimes(1);
+      expect(testClose).not.toHaveBeenCalled();
       expect(shownNotifications).toHaveLength(1);
       expect(shownNotifications[0].title).toBe("Pomodor — Focus session complete");
       expect(shownNotifications[0].options).toEqual({
         body: "Your focus timer has finished. Time for a break.",
         icon: "https://pomodor.example/icon-192.png",
-        badge: "/badge-72.png",
+        badge: "https://pomodor.example/badge-72.png",
         tag: "pomodor-session-run-sw-1",
         silent: false,
+        timestamp: ts,
         data: { navigate: "https://pomodor.example/" },
       });
       expect(shownNotifications[0].options.requireInteraction).toBeUndefined();
       expect(shownNotifications[0].options.renotify).toBeUndefined();
       expect(shownNotifications[0].options.vibrate).toBeUndefined();
+    });
+
+    it("silences incoming timer completion push when a visible client window is open (Decision 2A)", async () => {
+      const visibleSandbox = createSwSandbox({
+        existingClients: [
+          { url: "https://pomodor.example/", visibilityState: "visible", focus: vi.fn() },
+        ],
+      });
+      await visibleSandbox.dispatchPush({
+        web_push: 8030,
+        mutable: false,
+        notification: {
+          title: "Pomodor — Focus session complete",
+          body: "Done!",
+          tag: "pomodor-session-run-vis-1",
+          silent: false,
+        },
+      });
+      expect(visibleSandbox.shownNotifications[0].options.silent).toBe(true);
+
+      // Hidden client preserves audible OS notification
+      const hiddenSandbox = createSwSandbox({
+        existingClients: [
+          { url: "https://pomodor.example/", visibilityState: "hidden", focus: vi.fn() },
+        ],
+      });
+      await hiddenSandbox.dispatchPush({
+        web_push: 8030,
+        mutable: false,
+        notification: {
+          title: "Pomodor — Focus session complete",
+          body: "Done!",
+          tag: "pomodor-session-run-hid-1",
+          silent: false,
+        },
+      });
+      expect(hiddenSandbox.shownNotifications[0].options.silent).toBe(false);
     });
 
     it("supports flat JSON fallback and propagates silent: true cleanly", async () => {
@@ -339,7 +423,7 @@ describe("NotificationService & Service Worker mobile behavior", () => {
       expect(shownNotifications[0].options.renotify).toBeUndefined();
     });
 
-    it("focuses an existing same-origin tab or opens data.navigate on notificationclick", async () => {
+    it("focuses an existing same-origin tab, enforces same-origin navigate URL, and includes uncontrolled clients on notificationclick", async () => {
       const focus = vi.fn(async () => undefined);
       const withTab = createSwSandbox({
         existingClients: [{ url: "https://pomodor.example/", focus }],
@@ -348,6 +432,10 @@ describe("NotificationService & Service Worker mobile behavior", () => {
         navigate: "https://pomodor.example/",
       });
       expect(close).toHaveBeenCalledTimes(1);
+      expect(withTab.matchAll).toHaveBeenCalledWith({
+        type: "window",
+        includeUncontrolled: true,
+      });
       expect(focus).toHaveBeenCalledTimes(1);
       expect(withTab.openWindow).not.toHaveBeenCalled();
 
@@ -356,6 +444,32 @@ describe("NotificationService & Service Worker mobile behavior", () => {
         navigate: "https://pomodor.example/timer",
       });
       expect(withoutTab.openWindow).toHaveBeenCalledWith("https://pomodor.example/timer");
+
+      // Cross-origin navigate URL must be rejected and clamped to self.location.origin + '/'
+      const evilTab = createSwSandbox({ existingClients: [] });
+      await evilTab.dispatchNotificationClick({
+        navigate: "https://phishing.example.com/steal",
+      });
+      expect(evilTab.openWindow).toHaveBeenCalledWith("https://pomodor.example/");
+    });
+
+    it("handles pushsubscriptionchange by notifying open window clients to re-sync", async () => {
+      const postMessage = vi.fn();
+      const sandbox = createSwSandbox({
+        existingClients: [
+          {
+            url: "https://pomodor.example/",
+            visibilityState: "visible",
+            focus: vi.fn(),
+            postMessage,
+          },
+        ],
+      });
+      await sandbox.dispatchPushSubscriptionChange(
+        { options: { applicationServerKey: new Uint8Array(65) } },
+        null
+      );
+      expect(postMessage).toHaveBeenCalledWith({ type: "PUSH_SUBSCRIPTION_CHANGED" });
     });
   });
 
@@ -488,7 +602,7 @@ describe("NotificationService & Service Worker mobile behavior", () => {
 
     // Resumes WebKit 'interrupted' context and plays the 3 triad notes
     sound.playChime(0.7);
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(resumeMock).toHaveBeenCalledTimes(1);
     expect(startMock).toHaveBeenCalledTimes(3);
@@ -693,5 +807,212 @@ describe("NotificationService & Service Worker mobile behavior", () => {
       expect(createdOscs[i].disconnect).toHaveBeenCalledTimes(1);
       expect(createdGains[i].disconnect).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("SoundService safely handles NaN/subnormal volumes and throwing AudioContext constructors without crashing", async () => {
+    const { SoundService } = await import("../src/services/audio/SoundService");
+    const rampMock = vi.fn();
+    const startMock = vi.fn();
+    const mockCtx: any = {
+      state: "running",
+      currentTime: 1,
+      destination: {},
+      resume: vi.fn(async () => {}),
+      createOscillator: vi.fn(() => ({
+        type: "sine",
+        frequency: { setValueAtTime: vi.fn() },
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        start: startMock,
+        stop: vi.fn(),
+      })),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: rampMock },
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+      })),
+    };
+
+    vi.stubGlobal("window", {
+      AudioContext: vi.fn(function () {
+        return mockCtx;
+      }),
+    });
+
+    const sound = new SoundService();
+    // NaN / Infinity must be ignored safely
+    expect(() => sound.playChime(Number.NaN)).not.toThrow();
+    expect(() => sound.playChime(Number.POSITIVE_INFINITY)).not.toThrow();
+    expect(startMock).not.toHaveBeenCalled();
+
+    // Subnormal volume must clamp peakGain >= 0.001 so exponentialRamp never receives 0
+    expect(() => sound.playChime(1e-320)).not.toThrow();
+    expect(startMock).toHaveBeenCalledTimes(3);
+    expect(rampMock.mock.calls[0][0]).toBeGreaterThanOrEqual(0.001);
+
+    // Throwing AudioContext constructor must never crash prepareForPlayback or playChime
+    vi.stubGlobal("window", {
+      AudioContext: vi.fn(() => {
+        throw new Error("AudioContext quota exceeded");
+      }),
+    });
+    const sound2 = new SoundService();
+    expect(() => sound2.prepareForPlayback()).not.toThrow();
+    expect(() => sound2.playChime(0.8)).not.toThrow();
+  });
+
+  it("SoundService recycles zombie running AudioContext whose currentTime stays frozen after markStaleForRecovery()", async () => {
+    vi.useFakeTimers();
+    try {
+      const { SoundService } = await import("../src/services/audio/SoundService");
+      const firstStart = vi.fn();
+      const secondStart = vi.fn();
+      const firstClose = vi.fn(async () => {});
+
+      const makeCtx = (startFn: ReturnType<typeof vi.fn>, closeFn?: ReturnType<typeof vi.fn>) => ({
+        state: "running",
+        currentTime: 42,
+        destination: {},
+        resume: vi.fn(async () => {}),
+        close: closeFn ?? vi.fn(async () => {}),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: { setValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+          start: startFn,
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        })),
+      });
+
+      const firstCtx = makeCtx(firstStart, firstClose);
+      const secondCtx = makeCtx(secondStart);
+      const audioContextCtor = vi
+        .fn()
+        .mockImplementationOnce(function () {
+          return firstCtx;
+        })
+        .mockImplementationOnce(function () {
+          return secondCtx;
+        });
+
+      vi.stubGlobal("window", { AudioContext: audioContextCtor });
+
+      const sound = new SoundService();
+      sound.playChime(0.8);
+      expect(firstStart).toHaveBeenCalledTimes(3);
+
+      // Simulate wake from sleep where CoreAudio freezes ctx.currentTime at 42
+      sound.markStaleForRecovery();
+      sound.playChime(0.8);
+      // Should probe before scheduling on the frozen context
+      expect(firstStart).toHaveBeenCalledTimes(3);
+
+      vi.advanceTimersByTime(150);
+      expect(firstClose).toHaveBeenCalledTimes(1);
+      expect(audioContextCtor).toHaveBeenCalledTimes(2);
+      expect(secondStart).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("NotificationService clears failed SW registration cache, handles expired subscriptions, and cancels in-flight sync on unsubscribePush", async () => {
+    const { reg, pushManager } = setupBrowserMocks();
+    const registerSpy = (navigator as any).serviceWorker.register as ReturnType<typeof vi.fn>;
+
+    // 1. Transient SW registration failure does NOT permanently poison subsequent attempts
+    const getRegSpy = (navigator as any).serviceWorker.getRegistration as ReturnType<typeof vi.fn>;
+    (navigator as any).serviceWorker.ready = new Promise(() => {});
+    getRegSpy.mockResolvedValueOnce(null);
+    registerSpy.mockRejectedValueOnce(new Error("Offline during initial SW register"));
+    const svc = new NotificationService();
+    // Wait for initial constructor promise rejection to settle
+    await new Promise((r) => setTimeout(r, 0));
+
+    getRegSpy.mockResolvedValueOnce(null);
+    registerSpy.mockResolvedValueOnce(reg);
+    const ok = await svc.notify("Title", "Body", true);
+    expect(ok).toBe(true);
+    expect(registerSpy).toHaveBeenCalledTimes(2);
+
+    // 2. Expired PushSubscription (expirationTime <= Date.now()) is proactively replaced
+    const vapidKeyBytes = new Uint8Array(65);
+    vapidKeyBytes[0] = 0x04;
+    vapidKeyBytes.fill(0x44, 1);
+    const vapidB64u = btoa(String.fromCharCode(...vapidKeyBytes))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    const expiredSub = {
+      endpoint: "https://fcm.googleapis.com/fcm/send/expired",
+      expirationTime: Date.now() - 1000,
+      options: { applicationServerKey: vapidKeyBytes.buffer },
+      unsubscribe: vi.fn(async () => true),
+      toJSON: () => ({ keys: { p256dh: "OLD_P256DH", auth: "OLD_AUTH" } }),
+    };
+    const renewedSub = {
+      endpoint: "https://fcm.googleapis.com/fcm/send/renewed",
+      expirationTime: null,
+      options: { applicationServerKey: vapidKeyBytes.buffer },
+      unsubscribe: vi.fn(async () => true),
+      toJSON: () => ({ keys: { p256dh: "NEW_P256DH", auth: "NEW_AUTH" } }),
+    };
+    pushManager.getSubscription.mockResolvedValueOnce(expiredSub);
+    pushManager.subscribe.mockResolvedValueOnce(renewedSub);
+
+    const registerFn = vi.fn(async () => "sub-renewed");
+    const syncRes = await svc.syncPushSubscription({
+      vapidPublicKey: vapidB64u,
+      deviceId: "dev-1",
+      registerFn,
+    });
+    expect(syncRes).toEqual({ ok: true, status: "active" });
+    expect(expiredSub.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(1);
+    expect(registerFn).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "https://fcm.googleapis.com/fcm/send/renewed" })
+    );
+
+    // 3. unsubscribePush() invalidates an in-flight syncPushSubscription() so status stays unsubscribed
+    let resolveInFlightRegister!: () => void;
+    const slowRegisterFn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInFlightRegister = resolve;
+        })
+    );
+    pushManager.getSubscription.mockResolvedValue(renewedSub);
+
+    const inFlightSync = svc.syncPushSubscription({
+      vapidPublicKey: vapidB64u,
+      deviceId: "dev-1",
+      registerFn: slowRegisterFn,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // User toggles notifications OFF while registerFn is still in-flight
+    const unregisterFn = vi.fn(async () => {});
+    await svc.unsubscribePush(unregisterFn);
+    expect(svc.getPushStatus()).toBe("unsubscribed");
+
+    resolveInFlightRegister();
+    const staleSyncResult = await inFlightSync;
+    expect(staleSyncResult.ok).toBe(false);
+    expect(svc.getPushStatus()).toBe("unsubscribed");
+
+    // 4. resetPushStatus emits to subscribers cleanly
+    const statuses: string[] = [];
+    const unsubStatus = svc.subscribePushStatus((s) => statuses.push(s));
+    svc.resetPushStatus("unconfigured");
+    expect(svc.getPushStatus()).toBe("unconfigured");
+    expect(statuses).toContain("unconfigured");
+    unsubStatus();
   });
 });

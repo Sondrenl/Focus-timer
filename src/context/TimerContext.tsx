@@ -116,6 +116,21 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
   isAuthenticatedRef.current = isEffectiveAuthenticated;
 
+  const isConvexConnectedRef = useRef<boolean>(convexSync.isConvexConnected);
+  isConvexConnectedRef.current = convexSync.isConvexConnected;
+
+  const isDevicePushRegisteredRef = useRef<boolean | undefined>(
+    convexSync.devicePushStatus?.registered
+  );
+  isDevicePushRegisteredRef.current = convexSync.devicePushStatus?.registered;
+
+  const mountedAtMsRef = useRef<number>(Date.now());
+  const wasExpiredAtMountRef = useRef<boolean>(
+    initialState.status === 'RUNNING' &&
+      initialState.targetEndTime !== null &&
+      initialState.targetEndTime <= mountedAtMsRef.current
+  );
+
   const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
 
   const {
@@ -126,6 +141,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     settingsRef,
     sound,
     notifications,
+    isEffectiveAuthenticatedRef: isAuthenticatedRef,
+    isConvexConnectedRef,
+    isDevicePushRegisteredRef,
   });
 
   const {
@@ -345,6 +363,68 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep Web Audio unlocked for reloaded, remote-started, multi-tab, or auto-started running timers,
+  // and mark AudioContext for zombie-hardware health checks when returning from background/sleep.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    let gestureArmed = false;
+    const handleUnlockGesture = () => {
+      gestureArmed = false;
+      window.removeEventListener('pointerdown', handleUnlockGesture);
+      window.removeEventListener('keydown', handleUnlockGesture);
+      if (settingsRef.current.soundEnabled) {
+        sound.prepareForPlayback();
+      }
+    };
+
+    const armUnlockGesture = () => {
+      if (gestureArmed || statusRef.current !== 'RUNNING' || !settingsRef.current.soundEnabled) {
+        return;
+      }
+      gestureArmed = true;
+      window.addEventListener('pointerdown', handleUnlockGesture, { passive: true });
+      window.addEventListener('keydown', handleUnlockGesture, { passive: true });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        sound.markStaleForRecovery();
+        armUnlockGesture();
+      }
+    };
+
+    if (status === 'RUNNING' && settings.soundEnabled) {
+      armUnlockGesture();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (gestureArmed) {
+        window.removeEventListener('pointerdown', handleUnlockGesture);
+        window.removeEventListener('keydown', handleUnlockGesture);
+      }
+    };
+  }, [status, settings.soundEnabled, sound]);
+
+  const shouldDeferExpiredCompletion = useCallback(() => {
+    if (!wasExpiredAtMountRef.current) return false;
+    if (!isConvexConfigured || !isAuthenticatedRef.current) {
+      wasExpiredAtMountRef.current = false;
+      return false;
+    }
+    if (hasResolvedRemoteTimerRef.current) {
+      wasExpiredAtMountRef.current = false;
+      return false;
+    }
+    if (Date.now() - mountedAtMsRef.current >= 1500) {
+      wasExpiredAtMountRef.current = false;
+      return false;
+    }
+    return true;
+  }, [isConvexConfigured, hasResolvedRemoteTimerRef]);
+
   useTimerWorker({
     status,
     sessionType,
@@ -361,6 +441,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     activeTagIdRef,
     lastTickWallMsRef,
     handleCompleteRef,
+    shouldDeferExpiredCompletion,
     onStaleExpiration: handleStaleExpiration,
     setRemainingSeconds,
   });

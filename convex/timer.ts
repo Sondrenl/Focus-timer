@@ -277,7 +277,6 @@ export const complete = mutation({
     }
 
     const nowMs = Date.now();
-    const settings = user.settings ?? DEFAULT_SETTINGS;
     const sanitizedTagId = args.tagId !== undefined ? (args.tagId || undefined) : existing.tagId;
     const shouldAutoStart = Boolean(args.autoStartNext && args.nextTimerRunId);
 
@@ -351,13 +350,21 @@ export const complete = mutation({
 
       const withinPushFreshnessWindow =
         !existing.targetEndTime || nowMs - existing.targetEndTime <= 120_000;
-      if (settings.notificationsEnabled === true && withinPushFreshnessWindow) {
-        await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
-          userId: user._id,
-          sessionType: existing.sessionType,
-          timerRunId: existing.timerRunId || args.completedTimerRunId || `run-${nowMs}`,
-          completedAtMs,
-        });
+      if (withinPushFreshnessWindow) {
+        const hasPushSub = Boolean(
+          await ctx.db
+            .query("push_subscriptions")
+            .withIndex("by_user_device", (q) => q.eq("userId", user._id))
+            .first()
+        );
+        if (hasPushSub) {
+          await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
+            userId: user._id,
+            sessionType: existing.sessionType,
+            timerRunId: existing.timerRunId || args.completedTimerRunId || `run-${nowMs}`,
+            completedAtMs: Math.round(completedAtMs),
+          });
+        }
       }
 
       return nextPayload;
@@ -463,13 +470,23 @@ export const onTimerCompleted = internalMutation({
       updatedAtMs: nowMs,
     });
 
-    if (settings.notificationsEnabled === true) {
-      await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
-        userId: args.userId,
-        sessionType: timer.sessionType,
-        timerRunId: args.timerRunId,
-        completedAtMs,
-      });
+    const withinPushFreshnessWindow =
+      !timer.targetEndTime || nowMs - timer.targetEndTime <= 180_000;
+    if (withinPushFreshnessWindow) {
+      const hasPushSub = Boolean(
+        await ctx.db
+          .query("push_subscriptions")
+          .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
+          .first()
+      );
+      if (hasPushSub) {
+        await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
+          userId: args.userId,
+          sessionType: timer.sessionType,
+          timerRunId: args.timerRunId,
+          completedAtMs: Math.round(completedAtMs),
+        });
+      }
     }
 
     return null;

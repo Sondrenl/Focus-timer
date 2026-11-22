@@ -7,10 +7,14 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
-  const { settings, updateSettings } = useAuthProfile();
+  const { settings, updateSettings, sound } = useAuthProfile();
 
   const toggleSound = () => {
-    updateSettings({ soundEnabled: !settings.soundEnabled });
+    const nextEnabled = !settings.soundEnabled;
+    if (nextEnabled) {
+      sound.prepareForPlayback();
+    }
+    updateSettings({ soundEnabled: nextEnabled });
   };
 
   return (

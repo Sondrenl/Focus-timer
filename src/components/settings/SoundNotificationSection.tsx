@@ -91,18 +91,32 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       return;
     }
 
-    // Immediately enable in user settings
-    updateSettings({ notificationsEnabled: true });
-    onSaved();
-
     const currentPerm = notifications.getPermissionState();
+    if (currentPerm === 'unsupported') {
+      if (settings.notificationsEnabled) {
+        updateSettings({ notificationsEnabled: false });
+      }
+      showNotifFeedback('Notifications are not supported in this browser.');
+      return;
+    }
+
+    if (currentPerm === 'denied') {
+      if (settings.notificationsEnabled) {
+        updateSettings({ notificationsEnabled: false });
+      }
+      showNotifFeedback('Notifications are blocked in your browser site settings.');
+      return;
+    }
+
     if (currentPerm === 'granted') {
+      updateSettings({ notificationsEnabled: true });
+      onSaved();
       if (isPushAuthenticated && onSyncPush) {
         const res = await onSyncPush();
         showNotifFeedback(
           res.ok
-            ? 'Notifications & background lock-screen push enabled.'
-            : 'Notifications enabled for this device.'
+            ? 'Notifications & background lock-screen push enabled on this device.'
+            : 'Foreground alerts enabled — background push could not connect yet.'
         );
       } else {
         showNotifFeedback('Notifications enabled for this device.');
@@ -110,30 +124,33 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       return;
     }
 
-    if (currentPerm === 'unsupported') {
-      showNotifFeedback('Notifications are not supported in this browser.');
-      return;
-    }
-
-    if (currentPerm === 'denied') {
-      showNotifFeedback('Notifications are blocked in your browser site settings.');
-      return;
-    }
-
-    // Request permission from browser
+    // Request permission from browser before turning the toggle on
     const granted = await notifications.requestPermission();
     const updatedPerm = notifications.getPermissionState();
     setPermissionState(updatedPerm);
 
     if (granted) {
+      updateSettings({ notificationsEnabled: true });
+      onSaved();
       if (isPushAuthenticated && onSyncPush) {
-        await onSyncPush();
+        const res = await onSyncPush();
+        showNotifFeedback(
+          res.ok
+            ? 'Notifications & background lock-screen push enabled on this device.'
+            : 'Foreground alerts enabled — background push could not connect yet.'
+        );
+      } else {
+        showNotifFeedback('Notifications enabled for this device.');
       }
-      showNotifFeedback('Notifications enabled for this device.');
-    } else if (updatedPerm === 'denied') {
-      showNotifFeedback('Notifications are blocked in your browser site settings.');
     } else {
-      showNotifFeedback('Notification permission was not granted.');
+      if (settings.notificationsEnabled) {
+        updateSettings({ notificationsEnabled: false });
+      }
+      if (updatedPerm === 'denied') {
+        showNotifFeedback('Notifications are blocked in your browser site settings.');
+      } else {
+        showNotifFeedback('Notification permission was not granted.');
+      }
     }
   };
 
@@ -181,11 +198,23 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
     setIsSchedulingTestPush(true);
     try {
       if (onSyncPush) {
-        await onSyncPush();
+        const syncRes = await onSyncPush();
+        if (!syncRes.ok) {
+          showNotifFeedback(
+            syncRes.reason === 'VAPID public key is not configured on the server'
+              ? 'Server push keys are not configured yet.'
+              : 'Could not register this device for background push yet.'
+          );
+          return;
+        }
       }
       const res = await onScheduleTestPush();
       if (res.scheduled) {
         showNotifFeedback('Push scheduled in 5s — lock your phone screen now to test lock-screen & watch alerts.');
+      } else if (res.reason === 'rate_limited') {
+        showNotifFeedback('Please wait a few seconds before sending another test push.');
+      } else if (res.reason === 'missing_vapid_key') {
+        showNotifFeedback('Server push keys are not configured yet.');
       } else {
         showNotifFeedback('Background push subscription not ready yet.');
       }
@@ -215,13 +244,13 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
     if (permissionState === 'granted' && settings.notificationsEnabled) {
       if (isPushAuthenticated && pushStatus === 'active') {
         return {
-          text: 'Background Web Push active — delivers on locked screens & watches',
+          text: 'Background Web Push active on this device — delivers on locked screens & watches',
           className: 'text-emerald-600 dark:text-emerald-400',
         };
       }
       if (!isPushAuthenticated) {
         return {
-          text: 'Foreground alerts active — sign in for reliable background lock-screen push',
+          text: 'Foreground alerts active on this device — sign in for lock-screen push',
           className: 'text-emerald-600 dark:text-emerald-400',
         };
       }
@@ -231,26 +260,36 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           className: 'text-amber-600 dark:text-amber-400',
         };
       }
+      if (pushStatus === 'error') {
+        return {
+          text: 'Background push failed to connect — foreground alerts remain active',
+          className: 'text-amber-600 dark:text-amber-400',
+        };
+      }
+      if (pushStatus === 'unsupported') {
+        return {
+          text: 'Background push unsupported here — foreground alerts active on this device',
+          className: 'text-amber-600 dark:text-amber-400',
+        };
+      }
       return {
-        text: 'Permission granted — alerts active on this device',
-        className: 'text-emerald-600 dark:text-emerald-400',
+        text: 'Permission granted — connecting background push for this device…',
+        className: 'text-md-on-surface-variant',
       };
     }
     if (permissionState === 'granted' && !settings.notificationsEnabled) {
       return {
-        text: 'Permission granted — toggle switch on to receive alerts',
+        text: 'Permission granted — toggle switch on to enable alerts on this device',
         className: 'text-md-on-surface-variant',
       };
     }
     return {
-      text: 'Push notifications when intervals complete',
+      text: 'Push notifications for this device when intervals complete',
       className: 'text-md-on-surface-variant',
     };
   };
 
   const notifSubtitle = getNotificationSubtitle();
-  const osNotificationsOwnSound =
-    Boolean(settings.notificationsEnabled) && permissionState === 'granted';
 
   return (
     <Card variant="filled" className="p-6 bg-md-surface-container-low border border-md-outline-variant/20 flex flex-col gap-5">
@@ -271,7 +310,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           <div>
             <div className="text-sm font-semibold text-md-on-surface">Sound & Chime</div>
             <div className="text-xs text-md-on-surface-variant">
-              Uses OS alert sound when notifications are on, or web chime while the app is open
+              Plays the in-app chime while open, and enables OS alert sound in the background
             </div>
           </div>
           <div className="flex items-center gap-2.5 shrink-0">
@@ -284,6 +323,9 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
             <Switch
               checked={settings.soundEnabled}
               onChange={(val) => {
+                if (val) {
+                  sound.prepareForPlayback();
+                }
                 updateSettings({ soundEnabled: val });
                 onSaved();
               }}
@@ -292,17 +334,11 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         </div>
 
         {/* Sound Volume Slider */}
-        <div
-          className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4 transition-opacity ${
-            osNotificationsOwnSound ? 'opacity-60' : ''
-          }`}
-        >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-md-outline-variant/15 pt-4">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-md-on-surface">Chime Volume</div>
             <div className="text-xs text-md-on-surface-variant">
-              {osNotificationsOwnSound
-                ? 'Used for in-app web chime (OS volume controls system notifications)'
-                : 'Adjust in-app web chime volume'}
+              Adjust in-app web chime volume (OS volume controls background notifications)
             </div>
           </div>
           <div className="flex items-center gap-3.5 w-full sm:w-auto shrink-0">
@@ -314,6 +350,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
               value={settings.soundVolume ?? 0.8}
               onChange={(e) => {
                 const val = parseFloat(e.target.value);
+                sound.prepareForPlayback();
                 updateSettings({ soundVolume: Math.round(val * 100) / 100 });
               }}
               onMouseUp={onSaved}

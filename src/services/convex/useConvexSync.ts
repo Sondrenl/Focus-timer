@@ -1,10 +1,13 @@
 import { useCallback, useMemo } from 'react';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery, useMutation, useConvexConnectionState } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { isConvexConfigured, convexClient, getValidAuthToken } from './ConvexClient';
+import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
 export function useConvexSync(isAuthenticated: boolean) {
   const shouldQuery = isConvexConfigured && isAuthenticated;
+  const connectionState = useConvexConnectionState();
+  const isConvexConnected = isConvexConfigured && connectionState.isWebSocketConnected;
 
   // Only query Convex if Convex URL is configured and user is authenticated
   const convexUser = useQuery(
@@ -25,6 +28,11 @@ export function useConvexSync(isAuthenticated: boolean) {
   const vapidPublicKey = useQuery(
     api.push.getVapidPublicKey,
     shouldQuery ? {} : 'skip'
+  );
+
+  const devicePushStatus = useQuery(
+    api.push.getDeviceSubscriptionStatus,
+    shouldQuery ? { deviceId: DEVICE_ID } : 'skip'
   );
 
   // Mutations
@@ -200,20 +208,24 @@ export function useConvexSync(isAuthenticated: boolean) {
   return useMemo(
     () => ({
       isConvexConfigured,
+      isConvexConnected,
       convexUser,
       convexCoffee,
       convexSessions,
       vapidPublicKey,
+      devicePushStatus,
       setAuthToken,
       fetchTelemetryAttempts,
       fetchTelemetryEvents,
       mutations,
     }),
     [
+      isConvexConnected,
       convexUser,
       convexCoffee,
       convexSessions,
       vapidPublicKey,
+      devicePushStatus,
       setAuthToken,
       fetchTelemetryAttempts,
       fetchTelemetryEvents,

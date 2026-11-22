@@ -37,8 +37,14 @@ function pickConvexSettings(s: Partial<UserSettings>) {
     autoStartPomodoros: s.autoStartPomodoros,
     soundVolume: s.soundVolume,
     soundEnabled: s.soundEnabled,
-    notificationsEnabled: s.notificationsEnabled,
     keepAwake: s.keepAwake,
+  };
+}
+
+function pickLocalSettings(s: Partial<UserSettings>): Partial<UserSettings> {
+  return {
+    ...pickConvexSettings(s),
+    notificationsEnabled: s.notificationsEnabled,
   };
 }
 
@@ -103,6 +109,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     isConvexConfigured,
     convexUser,
     vapidPublicKey,
+    devicePushStatus,
     setAuthToken,
     mutations: convexMutations,
   } = convexSync;
@@ -410,8 +417,12 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         pendingSettingsMutationsRef.current === 0 &&
         now - lastLocalSettingsEditMsRef.current >= 2000
       ) {
-        const s = convexUser.settings;
         const cur = settingsRef.current;
+        const s: UserSettings = {
+          ...convexUser.settings,
+          // Notifications are per-device (Decision 4A); never let remote account settings overwrite this device's toggle
+          notificationsEnabled: cur.notificationsEnabled,
+        };
         const settingsChanged =
           cur.workDurationMinutes !== s.workDurationMinutes ||
           cur.shortBreakDurationMinutes !== s.shortBreakDurationMinutes ||
@@ -421,7 +432,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           cur.autoStartPomodoros !== s.autoStartPomodoros ||
           cur.soundVolume !== s.soundVolume ||
           cur.soundEnabled !== s.soundEnabled ||
-          cur.notificationsEnabled !== s.notificationsEnabled ||
           Boolean(cur.keepAwake) !== Boolean(s.keepAwake);
 
         if (settingsChanged) {
@@ -721,11 +731,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ): Promise<void> => {
       lastLocalSettingsEditMsRef.current = Date.now();
       const previousSettings = settingsRef.current;
-      const cleanValues = pickConvexSettings(newValues);
-      const definedValues = Object.fromEntries(
-        Object.entries(cleanValues).filter(([_, v]) => v !== undefined)
+      const localValues = pickLocalSettings(newValues);
+      const definedLocalValues = Object.fromEntries(
+        Object.entries(localValues).filter(([_, v]) => v !== undefined)
       ) as Partial<UserSettings>;
-      const merged = { ...settingsRef.current, ...definedValues };
+      const merged = { ...settingsRef.current, ...definedLocalValues };
       settingsRef.current = merged;
       setSettings(merged);
       await settingsRepository.save(merged);
@@ -737,10 +747,12 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         });
       }
 
-      if (isConvexConfigured && isEffectiveAuthenticated) {
+      const convexValues = pickConvexSettings(newValues);
+      const hasConvexChanges = Object.values(convexValues).some((v) => v !== undefined);
+      if (isConvexConfigured && isEffectiveAuthenticated && hasConvexChanges) {
         pendingSettingsMutationsRef.current += 1;
         convexMutations
-          .updateSettings(cleanValues)
+          .updateSettings(convexValues)
           .catch(console.warn)
           .finally(() => {
             pendingSettingsMutationsRef.current = Math.max(
@@ -769,6 +781,14 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         });
       }
 
+      if (isConvexConfigured && isEffectiveAuthenticated && !auth.isTokenExpired) {
+        void notificationService.unsubscribePush(() =>
+          convexMutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+        );
+      } else {
+        void notificationService.unsubscribePush();
+      }
+
       if (isConvexConfigured && isEffectiveAuthenticated) {
         pendingSettingsMutationsRef.current += 1;
         convexMutations
@@ -784,7 +804,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
       return defaultSettings;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [isConvexConfigured, isEffectiveAuthenticated, auth.isTokenExpired, convexMutations]
   );
 
   const { pushStatus, syncPushSubscription } = usePushSubscriptionSync({
@@ -794,6 +814,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     notificationsEnabled: settings.notificationsEnabled,
     settingsRef,
     vapidPublicKey,
+    isServerSubscriptionRegistered: devicePushStatus?.registered,
     registerPushSubscription: convexMutations.registerPushSubscription,
   });
 

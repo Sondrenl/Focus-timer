@@ -282,34 +282,34 @@ export const useTimerCloudSync = ({
 
       const now = Date.now();
 
-      // Trigger completion alert when remote signals completion or advances to next interval at end time
+      // Trigger completion alert when remote signals completion or advances to next interval at end time.
       // Never fire alerts if completion happened >60s ago (e.g. waking up from OS Doze/sleep).
+      // Allow 15s early tolerance to absorb normal cross-device clock skew without firing on early manual Skip.
       const STALE_ALERT_CUTOFF_MS = 60_000;
-      const targetPassedRecently =
-        targetEndTimeRef.current !== null &&
-        now >= targetEndTimeRef.current - 5000 &&
-        now - targetEndTimeRef.current <= STALE_ALERT_CUTOFF_MS;
       const targetNearOrJustPassed =
         targetEndTimeRef.current !== null &&
         targetEndTimeRef.current - now <= 15_000 &&
         now - targetEndTimeRef.current <= STALE_ALERT_CUTOFF_MS;
+      const remoteUpdatedRecently =
+        Math.abs(nowMs - remote.updatedAtMs) <= STALE_ALERT_CUTOFF_MS;
       const remoteCompletedRecently =
-        remote.status === 'COMPLETED' &&
-        nowMs - remote.updatedAtMs <= STALE_ALERT_CUTOFF_MS;
+        remote.status === 'COMPLETED' && remoteUpdatedRecently;
+      const remoteCompletedToIdle =
+        remote.status === 'IDLE' &&
+        remote.sessionType !== sessionTypeRef.current &&
+        targetNearOrJustPassed &&
+        remoteUpdatedRecently;
       const remoteAutoStartedNextInterval =
         remote.status === 'RUNNING' &&
         Boolean(remote.timerRunId) &&
         remote.timerRunId !== timerRunIdRef.current &&
         remote.sessionType !== sessionTypeRef.current &&
-        targetNearOrJustPassed;
+        targetNearOrJustPassed &&
+        remoteUpdatedRecently;
 
       if (
         statusRef.current === 'RUNNING' &&
-        (remoteCompletedRecently ||
-          (remote.status === 'IDLE' &&
-            remote.sessionType !== sessionTypeRef.current &&
-            targetPassedRecently) ||
-          remoteAutoStartedNextInterval)
+        (remoteCompletedRecently || remoteCompletedToIdle || remoteAutoStartedNextInterval)
       ) {
         const completedType = sessionTypeRef.current;
         const completedRunId = remoteAutoStartedNextInterval
@@ -621,8 +621,12 @@ export const useTimerCloudSync = ({
       if (hasRecentLocalAction) return;
 
       const isNewer = latestRemote.updatedAtMs > localUpdatedAtRef.current;
-      const missedRunningRemote =
+      const isStillActiveRemote =
         latestRemote.status === 'RUNNING' &&
+        typeof latestRemote.targetEndTime === 'number' &&
+        latestRemote.targetEndTime > now;
+      const missedRunningRemote =
+        isStillActiveRemote &&
         (statusRef.current !== 'RUNNING' ||
           (latestRemote.timerRunId ?? null) !== timerRunIdRef.current);
 

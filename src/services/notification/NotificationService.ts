@@ -43,9 +43,12 @@ export class NotificationService {
   private cachedRegistration: ServiceWorkerRegistration | null = null;
   private lastNotifiedSessionId: string | null = null;
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
+  private syncEpoch = 0;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
+  private pushResyncListeners = new Set<() => void>();
   private controllerChangeHandler: (() => void) | null = null;
+  private swMessageHandler: ((event: MessageEvent) => void) | null = null;
   private visibilityChangeHandler: (() => void) | null = null;
 
   constructor() {
@@ -56,7 +59,11 @@ export class NotificationService {
           this.cachedRegistration = reg;
           return reg;
         })
-        .catch(() => null);
+        .catch(() => {
+          // Clear cached failure promise so later retries can re-register once online
+          this.swRegistrationPromise = null;
+          return null;
+        });
 
       navigator.serviceWorker.ready
         .then((reg) => {
@@ -76,6 +83,19 @@ export class NotificationService {
       };
       navigator.serviceWorker.addEventListener('controllerchange', this.controllerChangeHandler);
 
+      this.swMessageHandler = (event: MessageEvent) => {
+        if (event.data && event.data.type === 'PUSH_SUBSCRIPTION_CHANGED') {
+          for (const listener of this.pushResyncListeners) {
+            try {
+              listener();
+            } catch {
+              // Ignore listener errors
+            }
+          }
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', this.swMessageHandler);
+
       if (typeof document !== 'undefined') {
         this.visibilityChangeHandler = () => {
           if (document.visibilityState === 'visible' && this.cachedRegistration) {
@@ -91,12 +111,17 @@ export class NotificationService {
     if (
       typeof navigator !== 'undefined' &&
       'serviceWorker' in navigator &&
-      this.controllerChangeHandler &&
       typeof navigator.serviceWorker.removeEventListener === 'function'
     ) {
-      navigator.serviceWorker.removeEventListener('controllerchange', this.controllerChangeHandler);
+      if (this.controllerChangeHandler) {
+        navigator.serviceWorker.removeEventListener('controllerchange', this.controllerChangeHandler);
+      }
+      if (this.swMessageHandler) {
+        navigator.serviceWorker.removeEventListener('message', this.swMessageHandler);
+      }
     }
     this.controllerChangeHandler = null;
+    this.swMessageHandler = null;
 
     if (typeof document !== 'undefined' && this.visibilityChangeHandler) {
       document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
@@ -105,6 +130,7 @@ export class NotificationService {
   }
 
   private setPushStatus(status: PushSubscriptionStatus): void {
+    if (this.pushStatus === status) return;
     this.pushStatus = status;
     for (const listener of this.pushStatusListeners) {
       try {
@@ -115,6 +141,11 @@ export class NotificationService {
     }
   }
 
+  resetPushStatus(status: PushSubscriptionStatus = 'unsubscribed'): void {
+    this.syncEpoch++;
+    this.setPushStatus(status);
+  }
+
   getPushStatus(): PushSubscriptionStatus {
     return this.pushStatus;
   }
@@ -123,6 +154,13 @@ export class NotificationService {
     this.pushStatusListeners.add(listener);
     return () => {
       this.pushStatusListeners.delete(listener);
+    };
+  }
+
+  subscribePushResyncRequested(listener: () => void): () => void {
+    this.pushResyncListeners.add(listener);
+    return () => {
+      this.pushResyncListeners.delete(listener);
     };
   }
 
@@ -159,7 +197,12 @@ export class NotificationService {
     return this.getPermissionState() === 'granted';
   }
 
-  private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
+  private getWindowPushManager(): PushManager | null {
+    if (typeof window === 'undefined') return null;
+    return (window as unknown as { pushManager?: PushManager }).pushManager ?? null;
+  }
+
+  private async getActiveRegistration(timeoutMs = 2500): Promise<ServiceWorkerRegistration | null> {
     if (this.cachedRegistration?.active) {
       return this.cachedRegistration;
     }
@@ -180,16 +223,22 @@ export class NotificationService {
           return reg;
         }
       } else {
-        const reg = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+        const reg = await navigator.serviceWorker
+          .register('/sw.js', { updateViaCache: 'none' })
+          .catch(() => null);
         if (reg?.active) {
           this.cachedRegistration = reg;
           return reg;
         }
       }
 
+      if (timeoutMs <= 0) {
+        return null;
+      }
+
       const readyReg = await Promise.race([
         navigator.serviceWorker.ready,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
       ]);
       if (readyReg?.active) {
         this.cachedRegistration = readyReg;
@@ -202,11 +251,12 @@ export class NotificationService {
   }
 
   private async getPushManager(): Promise<PushManager | null> {
-    const reg = await this.getActiveRegistration();
+    const windowPushManager = this.getWindowPushManager();
+    // Avoid blocking a Safari 18.4+/18.5+ user gesture for 2.5s waiting on SW activation
+    // when Declarative Web Push window.pushManager is already available.
+    const reg = await this.getActiveRegistration(windowPushManager ? 0 : 2500);
     if (reg?.pushManager) return reg.pushManager;
-    // Declarative Web Push (Safari 18.4+ / 18.5+) exposes window.pushManager directly
-    const windowPushManager = (window as unknown as { pushManager?: PushManager }).pushManager;
-    return windowPushManager ?? null;
+    return windowPushManager;
   }
 
   async getPushSubscriptionState(): Promise<PushSubscription | null> {
@@ -247,9 +297,14 @@ export class NotificationService {
       return this.pushSyncInFlight;
     }
 
+    const epoch = ++this.syncEpoch;
+
     const run = async (): Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> => {
       try {
         const pushManager = await this.getPushManager();
+        if (epoch !== this.syncEpoch) {
+          return { ok: false, status: this.pushStatus, reason: 'Superseded by unsubscribe or reset' };
+        }
         if (!pushManager) {
           this.setPushStatus('unsupported');
           return { ok: false, status: 'unsupported', reason: 'PushManager unavailable' };
@@ -257,6 +312,20 @@ export class NotificationService {
 
         const expectedKeyBytes = urlBase64ToUint8Array(trimmedKey);
         let subscription = await pushManager.getSubscription();
+
+        // Replace expired subscriptions proactively
+        if (
+          subscription &&
+          typeof subscription.expirationTime === 'number' &&
+          subscription.expirationTime <= Date.now()
+        ) {
+          try {
+            await subscription.unsubscribe();
+          } catch {
+            // Ignore unsubscribe failure and attempt fresh subscribe
+          }
+          subscription = null;
+        }
 
         // If VAPID public key rotated or differs, cleanly replace the stale subscription
         if (subscription?.options?.applicationServerKey) {
@@ -278,6 +347,10 @@ export class NotificationService {
           });
         }
 
+        if (epoch !== this.syncEpoch) {
+          return { ok: false, status: this.pushStatus, reason: 'Superseded by unsubscribe or reset' };
+        }
+
         const subJson = typeof subscription.toJSON === 'function' ? subscription.toJSON() : {};
         const p256dh = subJson.keys?.p256dh || '';
         const auth = subJson.keys?.auth || '';
@@ -297,23 +370,37 @@ export class NotificationService {
           origin: typeof window !== 'undefined' ? window.location?.origin : undefined,
         });
 
+        if (epoch !== this.syncEpoch) {
+          return { ok: false, status: this.pushStatus, reason: 'Superseded by unsubscribe or reset' };
+        }
+
         this.setPushStatus('active');
         return { ok: true, status: 'active' };
       } catch (err) {
+        if (epoch !== this.syncEpoch) {
+          return { ok: false, status: this.pushStatus, reason: 'Superseded by unsubscribe or reset' };
+        }
         const msg = err instanceof Error ? err.message : 'Push subscription failed';
         console.warn('[Push] Subscription sync failed:', msg);
         this.setPushStatus('error');
         return { ok: false, status: 'error', reason: msg };
       } finally {
-        this.pushSyncInFlight = null;
+        if (this.pushSyncInFlight) {
+          this.pushSyncInFlight = null;
+        }
       }
     };
 
-    this.pushSyncInFlight = run();
-    return this.pushSyncInFlight;
+    const promise = run();
+    this.pushSyncInFlight = promise;
+    return promise;
   }
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
+    // Invalidate any in-flight syncPushSubscription immediately so it cannot re-activate push
+    this.syncEpoch++;
+    this.setPushStatus('unsubscribed');
+
     if (unregisterFn) {
       try {
         await unregisterFn();
@@ -321,15 +408,30 @@ export class NotificationService {
         // Ignore backend unregister errors
       }
     }
+
+    // Unsubscribe both SW PushManager and Safari window.pushManager if present (prevents split-brain)
+    const managers: PushManager[] = [];
     try {
-      const sub = await this.getPushSubscriptionState();
-      if (sub) {
-        await sub.unsubscribe();
-      }
+      const reg = await this.getActiveRegistration(500);
+      if (reg?.pushManager) managers.push(reg.pushManager);
     } catch {
-      // Ignore browser unsubscribe errors
+      // Ignore
     }
-    this.setPushStatus('unsubscribed');
+    const winPm = this.getWindowPushManager();
+    if (winPm && !managers.includes(winPm)) {
+      managers.push(winPm);
+    }
+
+    for (const pm of managers) {
+      try {
+        const sub = await pm.getSubscription();
+        if (sub) {
+          await sub.unsubscribe();
+        }
+      } catch {
+        // Ignore browser unsubscribe errors
+      }
+    }
   }
 
   /**

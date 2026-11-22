@@ -24,6 +24,7 @@ export default defineSchema({
     avatarEmoji: v.optional(v.string()),
     dailyGoalMinutes: v.optional(v.number()),
     createdAt: v.optional(v.string()),
+    lastTestPushAtMs: v.optional(v.number()),
     settings: v.optional(
       v.object({
         workDurationMinutes: v.number(),

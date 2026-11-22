@@ -84,6 +84,22 @@ export class SettingsRepository implements ISettingsRepository {
       merged.soundVolume = Math.max(0, Math.min(1, merged.soundVolume));
     }
 
+    if (typeof merged.soundEnabled !== 'boolean') {
+      merged.soundEnabled = DEFAULT_SETTINGS.soundEnabled;
+    }
+    if (typeof merged.notificationsEnabled !== 'boolean') {
+      merged.notificationsEnabled = DEFAULT_SETTINGS.notificationsEnabled;
+    }
+    if (typeof merged.autoStartBreaks !== 'boolean') {
+      merged.autoStartBreaks = DEFAULT_SETTINGS.autoStartBreaks;
+    }
+    if (typeof merged.autoStartPomodoros !== 'boolean') {
+      merged.autoStartPomodoros = DEFAULT_SETTINGS.autoStartPomodoros;
+    }
+    if (typeof merged.keepAwake !== 'boolean') {
+      merged.keepAwake = DEFAULT_SETTINGS.keepAwake;
+    }
+
     return merged;
   }
 

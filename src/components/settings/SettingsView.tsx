@@ -230,6 +230,11 @@ export const SettingsView: React.FC = () => {
     setDailyGoalInput('120');
     updateSettings(DEFAULT_SETTINGS);
     updateProfile({ dailyGoalMinutes: 120 });
+    void notifications.unsubscribePush(
+      convexSync.isConvexConfigured && isEffectiveAuthenticated
+        ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+        : undefined
+    );
     showSaved();
   };
 
