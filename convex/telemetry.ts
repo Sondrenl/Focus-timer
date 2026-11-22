@@ -20,15 +20,21 @@ const MAX_RECORD_EVENTS_BATCH = 100;
 
 async function deleteTelemetryChunkForUser(
   ctx: MutationCtx,
-  userId: Id<"users">
+  userId: Id<"users">,
+  cutoffCreationTimeMs?: number
 ): Promise<boolean> {
   const attempts = await ctx.db
     .query("session_attempts")
     .withIndex("by_user_attempt", (q) => q.eq("userId", userId))
     .take(CLEAR_BATCH_SIZE);
 
+  let deletedAttempts = 0;
   for (const attempt of attempts) {
+    if (cutoffCreationTimeMs !== undefined && attempt._creationTime > cutoffCreationTimeMs) {
+      continue;
+    }
     await ctx.db.delete(attempt._id);
+    deletedAttempts += 1;
   }
 
   const events = await ctx.db
@@ -36,11 +42,19 @@ async function deleteTelemetryChunkForUser(
     .withIndex("by_user_event", (q) => q.eq("userId", userId))
     .take(CLEAR_BATCH_SIZE);
 
+  let deletedEvents = 0;
   for (const event of events) {
+    if (cutoffCreationTimeMs !== undefined && event._creationTime > cutoffCreationTimeMs) {
+      continue;
+    }
     await ctx.db.delete(event._id);
+    deletedEvents += 1;
   }
 
-  return attempts.length === CLEAR_BATCH_SIZE || events.length === CLEAR_BATCH_SIZE;
+  return (
+    (attempts.length === CLEAR_BATCH_SIZE && deletedAttempts > 0) ||
+    (events.length === CLEAR_BATCH_SIZE && deletedEvents > 0)
+  );
 }
 
 export const upsertAttempt = mutation({
@@ -257,7 +271,7 @@ export const discardAttempt = mutation({
       .query("ml_events")
       .withIndex("by_user_timestamp", (q) => q.eq("userId", user._id))
       .order("desc")
-      .take(25);
+      .take(200);
 
     for (const evt of recentEvents) {
       if (evt.attemptId !== args.attemptId) continue;
@@ -354,10 +368,12 @@ export const clear = mutation({
   returns: v.boolean(),
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const hasMore = await deleteTelemetryChunkForUser(ctx, user._id);
+    const cutoffCreationTimeMs = Date.now();
+    const hasMore = await deleteTelemetryChunkForUser(ctx, user._id, cutoffCreationTimeMs);
     if (hasMore) {
       await ctx.scheduler.runAfter(0, internal.telemetry.clearUserChunk, {
         userId: user._id,
+        cutoffCreationTimeMs,
       });
     }
     return true;
@@ -367,13 +383,19 @@ export const clear = mutation({
 export const clearUserChunk = internalMutation({
   args: {
     userId: v.id("users"),
+    cutoffCreationTimeMs: v.optional(v.number()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const hasMore = await deleteTelemetryChunkForUser(ctx, args.userId);
+    const hasMore = await deleteTelemetryChunkForUser(
+      ctx,
+      args.userId,
+      args.cutoffCreationTimeMs
+    );
     if (hasMore) {
       await ctx.scheduler.runAfter(0, internal.telemetry.clearUserChunk, {
         userId: args.userId,
+        cutoffCreationTimeMs: args.cutoffCreationTimeMs,
       });
     }
     return null;

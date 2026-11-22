@@ -182,13 +182,18 @@ export const getOrCreateUserForAuth = internalMutation({
     avatarUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const canonicalTokenId = `https://accounts.google.com|${args.sub}`;
+
     // 1. Search for existing user by email (links existing migrated account seamlessly)
     const existingByEmail = await ctx.db
       .query("users")
       .withIndex("email", (q) => q.eq("email", args.email))
       .first();
 
-    const safeAvatar = args.avatarUrl && args.avatarUrl.startsWith("https://") ? args.avatarUrl : undefined;
+    const safeAvatar =
+      args.avatarUrl && args.avatarUrl.startsWith("https://") && args.avatarUrl.length <= 2048
+        ? args.avatarUrl
+        : undefined;
 
     if (existingByEmail) {
       const patchData: Record<string, unknown> = {};
@@ -205,8 +210,11 @@ export const getOrCreateUserForAuth = internalMutation({
         patchData.avatarUrl = safeAvatar;
         patchData.image = safeAvatar;
       }
-      if (!existingByEmail.tokenIdentifier) {
-        patchData.tokenIdentifier = args.sub;
+      if (
+        !existingByEmail.tokenIdentifier ||
+        existingByEmail.tokenIdentifier === args.sub
+      ) {
+        patchData.tokenIdentifier = canonicalTokenId;
       }
       if (Object.keys(patchData).length > 0) {
         await ctx.db.patch(existingByEmail._id, patchData);
@@ -214,16 +222,24 @@ export const getOrCreateUserForAuth = internalMutation({
       return existingByEmail._id;
     }
 
-    // 2. Search by tokenIdentifier
-    const existingByToken = await ctx.db
-      .query("users")
-      .withIndex("by_token", (q) => q.eq("tokenIdentifier", args.sub))
-      .first();
+    // 2. Search by canonical tokenIdentifier, then legacy bare sub
+    const existingByToken =
+      (await ctx.db
+        .query("users")
+        .withIndex("by_token", (q) => q.eq("tokenIdentifier", canonicalTokenId))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_token", (q) => q.eq("tokenIdentifier", args.sub))
+        .first());
 
     if (existingByToken) {
       const patchData: Record<string, unknown> = {};
       if (existingByToken.email !== args.email) {
         patchData.email = args.email;
+      }
+      if (existingByToken.tokenIdentifier !== canonicalTokenId) {
+        patchData.tokenIdentifier = canonicalTokenId;
       }
       if (!existingByToken.emailVerificationTime) {
         patchData.emailVerificationTime = Date.now();
@@ -250,7 +266,7 @@ export const getOrCreateUserForAuth = internalMutation({
       dailyGoalMinutes: 120,
       createdAt: now,
       emailVerificationTime: Date.now(),
-      tokenIdentifier: args.sub,
+      tokenIdentifier: canonicalTokenId,
       settings: {
         ...DEFAULT_SETTINGS,
         updatedAt: now,

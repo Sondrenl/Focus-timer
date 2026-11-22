@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { createContext, useContext, useMemo, useRef, useState } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { BackupData } from '../types/user';
@@ -7,6 +7,10 @@ import { useAuthProfile } from './AuthProfileContext';
 import { useTagsData } from '../hooks/data/useTagsData';
 import { useSessionsData } from '../hooks/data/useSessionsData';
 import { useCoffeeData } from '../hooks/data/useCoffeeData';
+import {
+  useCloudMigration,
+  PendingGuestReconciliation,
+} from '../hooks/data/useCloudMigration';
 import { useBackupAndMigration } from '../hooks/data/useBackupAndMigration';
 
 export interface DataContextValue {
@@ -33,6 +37,8 @@ export interface DataContextValue {
     mode: 'merge' | 'replace'
   ) => Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }>;
   resetAllData: (scope: 'sessions-only' | 'factory-reset') => Promise<void>;
+  pendingGuestReconciliation: PendingGuestReconciliation | null;
+  pendingSyncCount: number;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -40,6 +46,8 @@ const DataContext = createContext<DataContextValue | null>(null);
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    registerFullSyncHandler,
     profile,
     settings,
     updateProfile,
@@ -49,6 +57,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     convexSync,
   } = useAuthProfile();
 
+  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
+  const setActiveTagIdRef = useRef<
+    ((id: string | null, options?: { skipTelemetry?: boolean }) => void) | null
+  >(null);
+
+  const {
+    syncBackupToConvexChunked,
+    isSyncGateActive,
+    pendingGuestReconciliation,
+    pendingSyncCount,
+  } = useCloudMigration({
+    isEffectiveAuthenticated,
+    isConvexAuthReady,
+    convexSync,
+    registerFullSyncHandler,
+    setActiveTagId: (id, options) => setActiveTagIdRef.current?.(id, options),
+  });
+
+  const isAdoptionPaused = isSyncGateActive || isBulkSyncing;
+  const currentUserId = convexSync.convexUser?.id ?? null;
+
   const {
     sessions,
     setSessions,
@@ -57,6 +86,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     reloadSampleData,
   } = useSessionsData({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    isAdoptionPaused,
+    currentUserId,
     convexSync,
   });
 
@@ -67,6 +99,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     removeCoffeeCup,
   } = useCoffeeData({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    isAdoptionPaused,
+    currentUserId,
     convexSync,
   });
 
@@ -84,13 +119,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     deleteTag,
   } = useTagsData({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    isAdoptionPaused,
+    currentUserId,
     convexSync,
     setSessions,
     setCoffeeCups,
   });
 
+  setActiveTagIdRef.current = setActiveTagId;
+
   const { exportBackup, importBackup, resetAllData } = useBackupAndMigration({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    currentUserId,
     profile,
     settings,
     updateProfile,
@@ -98,6 +140,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     resetProfileToDefaults,
     resetSettingsToDefaults,
     convexSync,
+    syncBackupToConvexChunked,
+    setIsBulkSyncing,
     tags,
     setTags,
     activeTagId,
@@ -130,6 +174,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       exportBackup,
       importBackup,
       resetAllData,
+      pendingGuestReconciliation,
+      pendingSyncCount,
     }),
     [
       isDemoEnvironment,
@@ -152,6 +198,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       exportBackup,
       importBackup,
       resetAllData,
+      pendingGuestReconciliation,
+      pendingSyncCount,
     ]
   );
 

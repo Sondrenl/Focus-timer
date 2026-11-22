@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { requireUser } from "./authHelper";
+import { requireUser, DEFAULT_TAGS } from "./authHelper";
 import { sanitizeTagColor, MAX_TAG_NAME_LENGTH, MAX_TAGS_PER_USER } from "./tags";
 import { TAG_ID_REGEX } from "./timerHelpers";
 import {
@@ -13,6 +13,20 @@ import {
 
 const REPLACE_DELETE_BATCH_SIZE = 500;
 const MERGE_DEDUP_SCAN_LIMIT = 4000;
+
+function sanitizeOptionalIso(raw: string | undefined, fallback: string): string {
+  if (!raw || raw.length > 64) return fallback;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? fallback : new Date(ms).toISOString();
+}
+
+function mintUniqueTagId(validTagIds: Set<string>): string {
+  let candidate = `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  while (validTagIds.has(candidate)) {
+    candidate = `tag-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+  return candidate;
+}
 
 async function deleteReplaceBatchForUser(
   ctx: MutationCtx,
@@ -95,6 +109,7 @@ export const importBackup = mutation({
         ),
         durationSeconds: v.number(),
         completedAt: v.string(),
+        timerRunId: v.optional(v.union(v.string(), v.null())),
       })
     ),
     coffeeCups: v.optional(
@@ -164,11 +179,16 @@ export const importBackup = mutation({
       if (Number.isNaN(parsedMs)) {
         return [];
       }
+      const sanitizedRunId =
+        typeof s.timerRunId === "string" && s.timerRunId.trim().length > 0
+          ? s.timerRunId.trim().slice(0, 128)
+          : undefined;
       return [
         {
           ...s,
           completedAtMs: parsedMs,
           completedAt: new Date(parsedMs).toISOString(),
+          timerRunId: sanitizedRunId,
         },
       ];
     });
@@ -189,10 +209,12 @@ export const importBackup = mutation({
       ];
     });
 
-    const makeSafeTagId = (rawId?: string): string =>
-      rawId && TAG_ID_REGEX.test(rawId)
-        ? rawId
-        : `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const makeSafeTagId = (rawId: string | undefined, validTagIds: Set<string>): string => {
+      if (rawId && TAG_ID_REGEX.test(rawId) && !validTagIds.has(rawId)) {
+        return rawId;
+      }
+      return mintUniqueTagId(validTagIds);
+    };
 
     if (args.mode === "replace") {
       // 1-2b. Clear existing data (bounded) unless caller already pre-cleared via clearForReplaceBatch
@@ -200,30 +222,68 @@ export const importBackup = mutation({
         await deleteReplaceBatchForUser(ctx, user._id);
       }
 
-      // 3. Format and replace tags, keeping track of valid/remapped tag IDs
+      // 3. Format and replace tags, deduplicating by normalized name and ID while keeping remap
       const tagIdRemap = new Map<string, string>();
       const validTagIds = new Set<string>();
-      const formattedTags = args.tags.map((t) => {
-        const canonicalId = makeSafeTagId(t.id);
+      const seenNames = new Map<string, string>();
+      const formattedTags: Array<{
+        id: string;
+        name: string;
+        color: string;
+        isArchived: boolean;
+        createdAt: string;
+        updatedAt: string;
+      }> = [];
+
+      for (const t of args.tags) {
+        const cleanName = t.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
+        const nameKey = cleanName.toLowerCase();
+        const existingByNameId = seenNames.get(nameKey);
+        if (existingByNameId) {
+          if (t.id) {
+            tagIdRemap.set(t.id, existingByNameId);
+          }
+          continue;
+        }
+
+        const canonicalId = makeSafeTagId(t.id, validTagIds);
         if (t.id) {
           tagIdRemap.set(t.id, canonicalId);
         }
         validTagIds.add(canonicalId);
-        const cleanName = t.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
+        seenNames.set(nameKey, canonicalId);
         const cleanColor = sanitizeTagColor(t.color);
-        return {
+        const createdAt = sanitizeOptionalIso(t.createdAt, now);
+        const updatedAt = sanitizeOptionalIso(t.updatedAt, createdAt);
+        formattedTags.push({
           id: canonicalId,
           name: cleanName,
           color: cleanColor,
           isArchived: t.isArchived ?? false,
-          createdAt: now,
-          updatedAt: now,
-        };
-      });
+          createdAt,
+          updatedAt,
+        });
+      }
+
+      if (formattedTags.length > MAX_TAGS_PER_USER) {
+        throw new Error(`Cannot exceed maximum limit of ${MAX_TAGS_PER_USER} tags.`);
+      }
 
       await ctx.db.patch(user._id, {
         tags: formattedTags,
       });
+
+      // Clear dangling tagId on active_timers if the replaced tag set no longer contains it
+      const activeTimer = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .first();
+      if (activeTimer?.tagId && !validTagIds.has(activeTimer.tagId)) {
+        await ctx.db.patch(activeTimer._id, {
+          tagId: undefined,
+          updatedAtMs: Date.now(),
+        });
+      }
 
       const resolveTagId = (rawTagId?: string | null): string | undefined => {
         if (!rawTagId) return undefined;
@@ -239,6 +299,7 @@ export const importBackup = mutation({
           sessionType: session.sessionType,
           durationSeconds: session.durationSeconds,
           completedAt: session.completedAt,
+          ...(session.timerRunId ? { timerRunId: session.timerRunId } : {}),
         });
       }
 
@@ -292,9 +353,9 @@ export const importBackup = mutation({
     }
 
     // MERGE MODE
-    // 1. Merge tags without duplicating existing names, and remap incoming tag IDs to canonical tag IDs
-    const existingTags = user.tags || [];
-    const tagMap = new Map<string, typeof existingTags[0]>();
+    // 1. Merge tags without duplicating existing names OR existing IDs, and remap incoming tag IDs
+    const existingTags = user.tags ?? DEFAULT_TAGS;
+    const tagMap = new Map<string, (typeof existingTags)[0]>();
     const tagIdRemap = new Map<string, string>();
     const validTagIds = new Set<string>();
 
@@ -314,15 +375,19 @@ export const importBackup = mutation({
           tagIdRemap.set(incoming.id, existingMatch.id);
         }
       } else {
-        const canonicalId = makeSafeTagId(incoming.id);
+        // If incoming.id collides with an existing tag ID (e.g. a renamed default tag),
+        // mint a fresh unique ID and remap all incoming references to it.
+        const canonicalId = makeSafeTagId(incoming.id, validTagIds);
         const cleanColor = sanitizeTagColor(incoming.color);
+        const createdAt = sanitizeOptionalIso(incoming.createdAt, now);
+        const updatedAt = sanitizeOptionalIso(incoming.updatedAt, createdAt);
         const newTag = {
           id: canonicalId,
           name: cleanName,
           color: cleanColor,
           isArchived: incoming.isArchived ?? false,
-          createdAt: now,
-          updatedAt: now,
+          createdAt,
+          updatedAt,
         };
         tagMap.set(key, newTag);
         if (incoming.id) {
@@ -337,7 +402,7 @@ export const importBackup = mutation({
       throw new Error(`Cannot exceed maximum limit of ${MAX_TAGS_PER_USER} tags.`);
     }
 
-    if (mergedTags.length !== existingTags.length) {
+    if (mergedTags.length !== existingTags.length || user.tags === undefined) {
       await ctx.db.patch(user._id, { tags: mergedTags });
     }
 
@@ -347,52 +412,82 @@ export const importBackup = mutation({
       return validTagIds.has(mapped) && TAG_ID_REGEX.test(mapped) ? mapped : undefined;
     };
 
-    // 2. Ingest sessions with deduplication by (sessionType + completedAt within ±45s)
-    const existingSessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .order("desc")
-      .take(MERGE_DEDUP_SCAN_LIMIT);
-    const existingSessionKeys = new Set(
-      existingSessions.map((s) => `${s.sessionType}-${s.completedAt}`)
-    );
-    const existingSessionTimestamps = existingSessions.map((s) => ({
-      sessionType: s.sessionType,
-      ms: new Date(s.completedAt).getTime(),
-    }));
+    // 2. Ingest sessions with range-bounded deduplication by timerRunId or (sessionType + ±45s)
+    if (cleanIncomingSessions.length > 0) {
+      let minIncomingMs = Infinity;
+      let maxIncomingMs = -Infinity;
+      for (const s of cleanIncomingSessions) {
+        if (s.completedAtMs < minIncomingMs) minIncomingMs = s.completedAtMs;
+        if (s.completedAtMs > maxIncomingMs) maxIncomingMs = s.completedAtMs;
+      }
+      const lowerIso = new Date(minIncomingMs - 45_000).toISOString();
+      const upperIso = new Date(maxIncomingMs + 45_000).toISOString();
 
-    for (const session of cleanIncomingSessions) {
-      const key = `${session.sessionType}-${session.completedAt}`;
-      const incomingMs = session.completedAtMs;
-      const isNearDuplicate = existingSessionTimestamps.some(
-        (e) =>
-          e.sessionType === session.sessionType &&
-          !Number.isNaN(e.ms) &&
-          Math.abs(e.ms - incomingMs) <= 45000
+      const existingSessions = await ctx.db
+        .query("sessions")
+        .withIndex("by_user_completed", (q) =>
+          q.eq("userId", user._id).gte("completedAt", lowerIso).lte("completedAt", upperIso)
+        )
+        .take(MERGE_DEDUP_SCAN_LIMIT);
+
+      const existingRunIds = new Set<string>();
+      for (const s of existingSessions) {
+        if (s.timerRunId) existingRunIds.add(s.timerRunId);
+      }
+      const existingSessionKeys = new Set(
+        existingSessions.map((s) => `${s.sessionType}-${s.completedAt}`)
       );
+      const existingSessionTimestamps = existingSessions.map((s) => ({
+        sessionType: s.sessionType,
+        ms: new Date(s.completedAt).getTime(),
+      }));
 
-      if (!existingSessionKeys.has(key) && !isNearDuplicate) {
-        existingSessionKeys.add(key);
-        existingSessionTimestamps.push({
-          sessionType: session.sessionType,
-          ms: incomingMs,
-        });
-        await ctx.db.insert("sessions", {
-          userId: user._id,
-          tagId: resolveMergedTagId(session.tagId),
-          sessionType: session.sessionType,
-          durationSeconds: session.durationSeconds,
-          completedAt: session.completedAt,
-        });
+      for (const session of cleanIncomingSessions) {
+        if (session.timerRunId && existingRunIds.has(session.timerRunId)) {
+          continue;
+        }
+        const key = `${session.sessionType}-${session.completedAt}`;
+        const incomingMs = session.completedAtMs;
+        const isNearDuplicate = existingSessionTimestamps.some(
+          (e) =>
+            e.sessionType === session.sessionType &&
+            !Number.isNaN(e.ms) &&
+            Math.abs(e.ms - incomingMs) <= 45000
+        );
+
+        if (!existingSessionKeys.has(key) && !isNearDuplicate) {
+          existingSessionKeys.add(key);
+          if (session.timerRunId) existingRunIds.add(session.timerRunId);
+          existingSessionTimestamps.push({
+            sessionType: session.sessionType,
+            ms: incomingMs,
+          });
+          await ctx.db.insert("sessions", {
+            userId: user._id,
+            tagId: resolveMergedTagId(session.tagId),
+            sessionType: session.sessionType,
+            durationSeconds: session.durationSeconds,
+            completedAt: session.completedAt,
+            ...(session.timerRunId ? { timerRunId: session.timerRunId } : {}),
+          });
+        }
       }
     }
 
-    // 3. Ingest coffee cups with deduplication by (date + createdAt)
+    // 3. Ingest coffee cups with date-range-bounded deduplication by (date + createdAt)
     if (cleanIncomingCups.length > 0) {
+      let minDate = cleanIncomingCups[0].date;
+      let maxDate = cleanIncomingCups[0].date;
+      for (const c of cleanIncomingCups) {
+        if (c.date < minDate) minDate = c.date;
+        if (c.date > maxDate) maxDate = c.date;
+      }
+
       const existingCups = await ctx.db
         .query("coffee_cups")
-        .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-        .order("desc")
+        .withIndex("by_user_date", (q) =>
+          q.eq("userId", user._id).gte("date", minDate).lte("date", maxDate)
+        )
         .take(MERGE_DEDUP_SCAN_LIMIT);
       const existingCupKeys = new Set(
         existingCups.map((c) => `${c.date}-${c.createdAt}`)
@@ -413,6 +508,7 @@ export const importBackup = mutation({
     }
 
     // 4. Ingest ML telemetry if supplied, deduplicating by attemptId / eventId
+    // and upgrading stale in_progress attempts when a finalized/newer version is imported
     if (args.mlTelemetry) {
       const seenAttemptIds = new Set<string>();
       for (const rawAttempt of args.mlTelemetry.sessionAttempts) {
@@ -430,12 +526,25 @@ export const importBackup = mutation({
           )
           .first();
 
+        const resolvedInitialTagId = resolveMergedTagId(parsed.value.initialTagId);
+        const resolvedTagId = resolveMergedTagId(parsed.value.tagId);
+
         if (!existing) {
           await ctx.db.insert("session_attempts", {
             userId: user._id,
             ...parsed.value,
-            initialTagId: resolveMergedTagId(parsed.value.initialTagId),
-            tagId: resolveMergedTagId(parsed.value.tagId),
+            initialTagId: resolvedInitialTagId,
+            tagId: resolvedTagId,
+          });
+        } else if (
+          existing.status === "in_progress" &&
+          (parsed.value.status !== "in_progress" ||
+            parsed.value.updatedAtMs > existing.updatedAtMs)
+        ) {
+          await ctx.db.patch(existing._id, {
+            ...parsed.value,
+            initialTagId: resolvedInitialTagId,
+            tagId: resolvedTagId,
           });
         }
       }

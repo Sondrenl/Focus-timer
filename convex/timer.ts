@@ -7,16 +7,17 @@ import {
   assertValidCycle,
   assertValidDurationSeconds,
   assertValidRemainingSeconds,
-  assertValidTagId,
   assertValidTimerRunId,
   cancelScheduledJob,
   computeServerNextInterval,
   generateScheduleNonce,
   reconcileCompletedSessionAttempt,
   recordCompletedSessionIfNotDuplicate,
+  resolveExistingUserTagId,
 } from "./timerHelpers";
 
 const MAX_UNATTENDED_SERVER_AUTO_STARTS = 1;
+const STALE_CLIENT_ACTION_TOLERANCE_MS = 5_000;
 
 export const getActive = query({
   args: {},
@@ -43,8 +44,47 @@ export const getActive = query({
       activeTagId: timer.tagId ?? null,
       timerRunId: timer.timerRunId ?? null,
       lastCompletedTimerRunId: timer.lastCompletedTimerRunId ?? null,
+      serverAutoStartStreak: timer.serverAutoStartStreak ?? 0,
       updatedAtMs: timer.updatedAtMs,
-      serverNowMs: Date.now(),
+    };
+  },
+});
+
+export const acknowledgeActive = mutation({
+  args: {
+    timerRunId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    assertValidTimerRunId(args.timerRunId, "timerRunId", true);
+    const now = Date.now();
+
+    const existing = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+
+    if (!existing) {
+      return { acknowledged: false, serverNowMs: now };
+    }
+
+    if (
+      existing.status === "RUNNING" &&
+      existing.timerRunId === args.timerRunId &&
+      (existing.serverAutoStartStreak ?? 0) > 0
+    ) {
+      await ctx.db.patch(existing._id, { serverAutoStartStreak: 0 });
+      return {
+        acknowledged: true,
+        updatedAtMs: existing.updatedAtMs,
+        serverNowMs: now,
+      };
+    }
+
+    return {
+      acknowledged: false,
+      updatedAtMs: existing.updatedAtMs,
+      serverNowMs: now,
     };
   },
 });
@@ -62,6 +102,8 @@ export const start = mutation({
     currentCycle: v.number(),
     tagId: v.optional(v.union(v.string(), v.null())),
     timerRunId: v.string(),
+    clientActionAtMs: v.optional(v.number()),
+    clientTargetEndTimeMs: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
@@ -74,9 +116,48 @@ export const start = mutation({
     }
     assertValidCycle(args.currentCycle, "currentCycle");
     assertValidTimerRunId(args.timerRunId, "timerRunId", true);
-    assertValidTagId(args.tagId);
+    if (args.clientActionAtMs !== undefined && !Number.isFinite(args.clientActionAtMs)) {
+      throw new Error("Invalid clientActionAtMs.");
+    }
+    if (args.clientTargetEndTimeMs !== undefined && !Number.isFinite(args.clientTargetEndTimeMs)) {
+      throw new Error("Invalid clientTargetEndTimeMs.");
+    }
+    const sanitizedTagId = resolveExistingUserTagId(user, args.tagId);
 
     const now = Date.now();
+    const existing = await ctx.db
+      .query("active_timers")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+
+    // Prevent stale offline starts from overwriting a newer active session on another device
+    if (
+      args.clientActionAtMs !== undefined &&
+      existing &&
+      existing.updatedAtMs > args.clientActionAtMs + STALE_CLIENT_ACTION_TOLERANCE_MS
+    ) {
+      return {
+        ...existing,
+        applied: false,
+        serverNowMs: now,
+      };
+    }
+
+    // Refuse to resurrect an already-elapsed offline start as a brand-new full timer
+    if (
+      args.clientTargetEndTimeMs !== undefined &&
+      args.clientTargetEndTimeMs <= now - STALE_CLIENT_ACTION_TOLERANCE_MS
+    ) {
+      return existing
+        ? {
+            ...existing,
+            applied: false,
+            rejectedReason: "already_elapsed" as const,
+            serverNowMs: now,
+          }
+        : null;
+    }
+
     const baseTotal = args.totalSeconds ?? args.durationSeconds;
     const remaining = Math.max(
       1,
@@ -84,13 +165,7 @@ export const start = mutation({
     );
     const total = Math.max(remaining, baseTotal);
     const targetEndTime = now + remaining * 1000;
-    const sanitizedTagId = args.tagId || undefined;
     const scheduleNonce = generateScheduleNonce(now);
-
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
 
     await cancelScheduledJob(ctx, existing?.scheduledCompletionId);
 
@@ -130,6 +205,7 @@ export const start = mutation({
 
     return {
       ...timerPayload,
+      applied: true,
       serverNowMs: now,
     };
   },
@@ -144,7 +220,8 @@ export const pause = mutation({
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx);
     assertValidRemainingSeconds(args.remainingSeconds, "remainingSeconds");
-    assertValidTagId(args.tagId);
+    const resolvedTagId =
+      args.tagId !== undefined ? resolveExistingUserTagId(user, args.tagId) : undefined;
     assertValidTimerRunId(args.expectedTimerRunId, "expectedTimerRunId");
 
     const existing = await ctx.db
@@ -175,7 +252,7 @@ export const pause = mutation({
       0,
       Math.min(existing.totalSeconds, Math.round(args.remainingSeconds))
     );
-    const nextTagId = args.tagId !== undefined ? (args.tagId || undefined) : existing.tagId;
+    const nextTagId = args.tagId !== undefined ? resolvedTagId : existing.tagId;
     if (
       existing.status === "PAUSED" &&
       existing.remainingSeconds === clampedRemaining &&
@@ -217,7 +294,7 @@ export const updateTag = mutation({
   },
   handler: async (ctx, args): Promise<any> => {
     const user = await requireUser(ctx, true);
-    assertValidTagId(args.tagId);
+    const sanitizedTagId = resolveExistingUserTagId(user, args.tagId);
     assertValidTimerRunId(args.expectedTimerRunId, "expectedTimerRunId");
 
     const existing = await ctx.db
@@ -238,7 +315,6 @@ export const updateTag = mutation({
       return { ...existing, applied: false, serverNowMs: now };
     }
 
-    const sanitizedTagId = args.tagId || undefined;
     if ((existing.tagId ?? undefined) === sanitizedTagId) {
       return { ...existing, applied: true, serverNowMs: now };
     }
@@ -271,17 +347,20 @@ export const reset = mutation({
     onlyIfIdle: v.optional(v.boolean()),
     expectedTimerRunId: v.optional(v.string()),
     expectedUpdatedAtMs: v.optional(v.number()),
+    clientActionAtMs: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
     assertValidDurationSeconds(args.durationSeconds, "durationSeconds");
     assertValidCycle(args.currentCycle, "currentCycle");
-    assertValidTagId(args.tagId);
+    const sanitizedTagId = resolveExistingUserTagId(user, args.tagId);
     assertValidTimerRunId(args.expectedTimerRunId, "expectedTimerRunId");
     if (args.expectedUpdatedAtMs !== undefined && !Number.isFinite(args.expectedUpdatedAtMs)) {
       throw new Error("Invalid expectedUpdatedAtMs.");
     }
-    const sanitizedTagId = args.tagId || undefined;
+    if (args.clientActionAtMs !== undefined && !Number.isFinite(args.clientActionAtMs)) {
+      throw new Error("Invalid clientActionAtMs.");
+    }
     const now = Date.now();
 
     const existing = await ctx.db
@@ -289,7 +368,7 @@ export const reset = mutation({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .first();
 
-    // Prevent stale/background resets from clobbering an active, paused, or newer timer
+    // Prevent stale/background/offline resets from clobbering an active, paused, or newer timer
     if (
       args.onlyIfIdle &&
       existing &&
@@ -307,6 +386,13 @@ export const reset = mutation({
       args.expectedUpdatedAtMs !== undefined &&
       existing &&
       existing.updatedAtMs > args.expectedUpdatedAtMs
+    ) {
+      return { ...existing, applied: false, serverNowMs: now };
+    }
+    if (
+      args.clientActionAtMs !== undefined &&
+      existing &&
+      existing.updatedAtMs > args.clientActionAtMs + STALE_CLIENT_ACTION_TOLERANCE_MS
     ) {
       return { ...existing, applied: false, serverNowMs: now };
     }
@@ -379,7 +465,8 @@ export const complete = mutation({
     assertValidCycle(args.nextCurrentCycle, "nextCurrentCycle");
     assertValidTimerRunId(args.completedTimerRunId, "completedTimerRunId");
     assertValidTimerRunId(args.nextTimerRunId, "nextTimerRunId");
-    assertValidTagId(args.tagId);
+    const resolvedTagId =
+      args.tagId !== undefined ? resolveExistingUserTagId(user, args.tagId) : undefined;
 
     const existing = await ctx.db
       .query("active_timers")
@@ -391,7 +478,7 @@ export const complete = mutation({
     }
 
     const nowMs = Date.now();
-    const sanitizedTagId = args.tagId !== undefined ? (args.tagId || undefined) : existing.tagId;
+    const sanitizedTagId = args.tagId !== undefined ? resolvedTagId : existing.tagId;
     const shouldAutoStart = Boolean(args.autoStartNext && args.nextTimerRunId);
 
     // Case 1: Server onTimerCompleted has NOT run yet — client beat it cleanly.
@@ -516,17 +603,25 @@ export const complete = mutation({
       };
     }
 
-    // Case 2b: onTimerCompleted ALREADY ran on the server and landed on IDLE (e.g. cap reached or settings synced late).
-    // Strictly require lastCompletedTimerRunId === completedTimerRunId so a stale tab can NEVER resurrect after Skip/Reset.
+    // Case 2b: onTimerCompleted ALREADY ran on the server and landed on IDLE (e.g. cap reached).
+    // Strictly require lastCompletedTimerRunId === completedTimerRunId AND verify server settings still
+    // enable auto-start for this interval so a waking stale client cannot force-start after user turned auto-start OFF.
+    const serverSettings = user.settings ?? DEFAULT_SETTINGS;
+    const serverAllowsAutoStart =
+      args.nextSessionType === "WORK"
+        ? Boolean(serverSettings.autoStartPomodoros)
+        : Boolean(serverSettings.autoStartBreaks);
+
     if (
       existing.status === "IDLE" &&
       shouldAutoStart &&
+      serverAllowsAutoStart &&
       args.nextTimerRunId &&
       Boolean(args.completedTimerRunId) &&
       existing.lastCompletedTimerRunId === args.completedTimerRunId &&
       existing.sessionType === args.nextSessionType &&
       existing.currentCycle === args.nextCurrentCycle &&
-      nowMs - existing.updatedAtMs < 120_000
+      nowMs - existing.updatedAtMs < 60_000
     ) {
       const nextTargetEndTime = nowMs + args.nextDurationSeconds * 1000;
       const nextScheduleNonce = generateScheduleNonce(nowMs);

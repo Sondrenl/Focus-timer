@@ -99,6 +99,7 @@ export function useTimerNewDayReset({
     }
 
     const now = new Date();
+    const nowAlignedMs = getServerAlignedNowMs();
     const currentDayKey = getLogicalDayKey(now);
     if (latestRemote && getLogicalDayKey(latestRemote.updatedAtMs) === currentDayKey) {
       const remoteIsAlreadyFresh =
@@ -114,14 +115,14 @@ export function useTimerNewDayReset({
       // If another device had activity within the last hour (e.g., active all-nighter past 04:00
       // or recent break/cycle transition), defer reset WITHOUT stamping currentDayKey so a later
       // >1h sleep still resets to WORK Cycle 1.
-      if (now.getTime() - latestRemote.updatedAtMs < INACTIVITY_THRESHOLD_MS) {
+      if (nowAlignedMs - latestRemote.updatedAtMs < INACTIVITY_THRESHOLD_MS) {
         return false;
       }
     }
 
     if (statusRef.current === 'PAUSED' || latestRemote?.status === 'PAUSED') {
       const pausedAtMs = Math.max(localUpdatedAtRef.current, latestRemote?.updatedAtMs ?? 0);
-      if (pausedAtMs > 0 && now.getTime() - pausedAtMs < INACTIVITY_THRESHOLD_MS) {
+      if (pausedAtMs > 0 && nowAlignedMs - pausedAtMs < INACTIVITY_THRESHOLD_MS) {
         return false;
       }
     }
@@ -160,10 +161,10 @@ export function useTimerNewDayReset({
 
       const defaultDuration = getDurationForType('WORK');
       const nowMs = getServerAlignedNowMs();
-      const prevUpdatedAtMs = Math.max(
-        localUpdatedAtRef.current,
-        latestRemote?.updatedAtMs ?? 0
-      );
+      const prevUpdatedAtMs =
+        typeof latestRemote?.updatedAtMs === 'number'
+          ? latestRemote.updatedAtMs
+          : localUpdatedAtRef.current;
 
       sessionTypeRef.current = 'WORK';
       statusRef.current = 'IDLE';

@@ -86,8 +86,13 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(derivedKey).toBeTypeOf("string");
     expect(derivedKey!.length).toBeGreaterThan(80);
 
-    // Explicit VAPID_PUBLIC_KEY overrides derivation if present
+    // JWK derivation takes precedence over explicit VAPID_PUBLIC_KEY to prevent VapidPkHashMismatch
     process.env.VAPID_PUBLIC_KEY = "explicit-test-vapid-key";
+    const stillDerivedKey = await t.query(api.push.getVapidPublicKey, {});
+    expect(stillDerivedKey).toBe(derivedKey);
+
+    // Explicit VAPID_PUBLIC_KEY is used when VAPID_PRIVATE_KEY is not a JWK (e.g. raw base64url)
+    process.env.VAPID_PRIVATE_KEY = "raw-base64url-private-key";
     const explicitKey = await t.query(api.push.getVapidPublicKey, {});
     expect(explicitKey).toBe("explicit-test-vapid-key");
   });

@@ -24,10 +24,10 @@ _Captured: 2026-11-20 (branch `chore/remove-dead-code` @ `25bb355`)_
 
 ---
 
-## 3. Auth, Cloud Sync & Multi-Device Conflicts
+## ~~3. Auth, Cloud Sync & Multi-Device Conflicts~~ *(Completed)*
 
-- [ ] **Long-idle / mobile wake reconnects**: Verify how Convex WebSocket auth and subscriptions recover after a phone or laptop sleeps for hours (expired/refreshed JWTs, missed timer completions, re-syncing push subscriptions in [`src/hooks/usePushSubscriptionSync.ts`](../src/hooks/usePushSubscriptionSync.ts)).
-- [ ] **Offline → online & local → cloud reconciliation**: Audit edge cases when sessions, tags, or settings are edited offline or concurrently across two open devices, and when signing in with pre-existing local data.
+- [x] ~~**Long-idle / mobile wake reconnects**: Verify how Convex WebSocket auth and subscriptions recover after a phone or laptop sleeps for hours (expired/refreshed JWTs, missed timer completions, re-syncing push subscriptions in [`src/hooks/usePushSubscriptionSync.ts`](../src/hooks/usePushSubscriptionSync.ts)).~~
+- [x] ~~**Offline → online & local → cloud reconciliation**: Audit edge cases when sessions, tags, or settings are edited offline or concurrently across two open devices, and when signing in with pre-existing local data.~~
 
 ---
 

@@ -238,13 +238,13 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     // Change tag while paused
     await asUser.mutation(api.timer.pause, {
       remainingSeconds: 1200,
-      tagId: "tag-work",
+      tagId: "tag-deep-work",
     });
 
     const activeTimer = await asUser.query(api.timer.getActive, {});
     expect(activeTimer?.status).toBe("PAUSED");
     expect(activeTimer?.remainingSeconds).toBe(1200);
-    expect(activeTimer?.activeTagId).toBe("tag-work");
+    expect(activeTimer?.activeTagId).toBe("tag-deep-work");
   });
 
   it("remaps duplicate-named tags and sanitizes orphaned tagIds during migrations.importBackup merge", async () => {
@@ -443,7 +443,24 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     active = await asUser.query(api.timer.getActive, {});
     expect(active?.status).toBe("IDLE");
 
-    // Matching Case 2 autoStartNext within 120s with matching lastCompletedTimerRunId transitions WORK cycle 2 to RUNNING
+    // Case 2b refuses stale client autoStartNext when server settings have autoStartPomodoros OFF
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "break-run-1",
+      nextSessionType: "WORK",
+      nextDurationSeconds: 1500,
+      nextCurrentCycle: 2,
+      autoStartNext: true,
+      nextTimerRunId: "blocked-work-run-2",
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("IDLE");
+
+    // Once server settings enable autoStartPomodoros, matching Case 2b transitions WORK cycle 2 to RUNNING
+    await asUser.mutation(api.users.updateSettings, {
+      autoStartPomodoros: true,
+    });
+
     await asUser.mutation(api.timer.complete, {
       completedTimerRunId: "break-run-1",
       nextSessionType: "WORK",

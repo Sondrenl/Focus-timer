@@ -201,7 +201,8 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
         const syncRes = await onSyncPush();
         if (!syncRes.ok) {
           showNotifFeedback(
-            syncRes.reason === 'VAPID public key is not configured on the server'
+            syncRes.status === 'unconfigured' ||
+              syncRes.reason === 'VAPID public key unavailable'
               ? 'Server push keys are not configured yet.'
               : 'Could not register this device for background push yet.'
           );

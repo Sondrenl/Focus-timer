@@ -9,6 +9,7 @@ import { TagManager } from './components/tags/TagManager';
 import { StatisticsView } from './components/stats/StatisticsView';
 import { SettingsView } from './components/settings/SettingsView';
 import { ProfileView } from './components/profile/ProfileView';
+import { GuestReconciliationModal } from './components/profile/GuestReconciliationModal';
 
 const MainContent: React.FC = () => {
   const { currentView } = useNavigation();
@@ -97,6 +98,8 @@ const MainContent: React.FC = () => {
           {currentView === 'profile' && <ProfileView />}
         </main>
       </div>
+
+      <GuestReconciliationModal />
     </div>
   );
 };

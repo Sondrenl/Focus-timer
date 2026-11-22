@@ -13,31 +13,50 @@ export async function getAuthenticatedUser(
   ctx: QueryCtx | MutationCtx,
   autoCreate: boolean = false
 ): Promise<Doc<"users"> | null> {
-  // 1. Check Convex Auth identity (minted from 30-day session)
-  try {
-    const authUserId = await getAuthUserId(ctx);
-    if (authUserId) {
-      const user = await ctx.db.get(authUserId as Id<"users">);
-      if (user) {
-        return user;
-      }
-    }
-  } catch {
-    // Continue to fallback
-  }
-
-  // 2. Fallback to direct JWT identity (direct Google ID token)
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     return null;
   }
 
+  // 1. Check Convex Auth identity (minted from 30-day session).
+  // Convex Auth tokens use issuer === CONVEX_SITE_URL and subject === "<userId>|<sessionId>".
+  // Never fall through to direct JWT fallback for Convex Auth identities (e.g. if the user
+  // document was deleted, return null instead of spawning a phantom row).
+  const convexSiteUrl = process.env.CONVEX_SITE_URL?.trim();
+  const isConvexAuthIdentity =
+    Boolean(convexSiteUrl && identity.issuer === convexSiteUrl) ||
+    (typeof identity.subject === "string" && identity.subject.includes("|"));
+
+  if (isConvexAuthIdentity) {
+    let convexAuthUserId: Id<"users"> | null = null;
+    try {
+      convexAuthUserId = await getAuthUserId(ctx);
+    } catch {
+      convexAuthUserId = null;
+    }
+    if (!convexAuthUserId) {
+      return null;
+    }
+    const normalizedId = ctx.db.normalizeId("users", convexAuthUserId);
+    if (!normalizedId) {
+      return null;
+    }
+    return (await ctx.db.get(normalizedId)) ?? null;
+  }
+
+  // 2. Fallback to direct JWT identity (non-Convex-Auth).
+  // Exact tokenIdentifier lookup is safe for any provider verified by auth.config.ts (or convex-test).
   let user = await ctx.db
     .query("users")
     .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
     .first();
 
-  if (!user && identity.subject && identity.subject !== identity.tokenIdentifier) {
+  const isGoogleIssuer =
+    identity.issuer === "https://accounts.google.com" ||
+    identity.issuer === "accounts.google.com";
+
+  // Bare subject lookup is ONLY permitted for verified Google issuers (legacy migration rows)
+  if (!user && isGoogleIssuer && identity.subject && identity.subject !== identity.tokenIdentifier) {
     user = await ctx.db
       .query("users")
       .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.subject))
@@ -46,6 +65,10 @@ export async function getAuthenticatedUser(
 
   if (user) {
     return user;
+  }
+
+  if (!isGoogleIssuer) {
+    return null;
   }
 
   // Fallback: match by email (only if explicitly verified) for users migrated from Cloudflare D1 or pre-seeded

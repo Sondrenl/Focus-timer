@@ -88,7 +88,11 @@ export class SessionRepository implements ISessionRepository {
       const all = await this.getAll();
       const sessionId =
         session.id || `session-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      const existing = all.find((s) => s.id === sessionId);
+      const existing = all.find(
+        (s) =>
+          s.id === sessionId ||
+          (Boolean(session.timerRunId) && s.timerRunId === session.timerRunId)
+      );
       if (existing) return existing;
       const newSession: CompletedSession = {
         ...session,

@@ -38,6 +38,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pendingBackup, setPendingBackup] = useState<BackupData | null>(null);
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -163,8 +164,10 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
   };
 
   const handleConfirmImport = async () => {
-    if (!pendingBackup) return;
+    if (!pendingBackup || isImporting) return;
 
+    setIsImporting(true);
+    onErrorMessage(null);
     try {
       const result = await importBackup(pendingBackup, importMode);
       setPendingBackup(null);
@@ -177,8 +180,12 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
       }
       onStatusMessage(`Import complete! Restored ${parts.join(', ')}.`);
       scheduleClearStatus();
-    } catch {
-      onErrorMessage('An error occurred during import.');
+    } catch (err: unknown) {
+      setPendingBackup(null);
+      const msg = err instanceof Error ? err.message : 'An error occurred during import.';
+      onErrorMessage(msg);
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -260,7 +267,10 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
       {/* Import Confirmation Modal */}
       <Modal
         isOpen={!!pendingBackup}
-        onClose={() => setPendingBackup(null)}
+        onClose={() => {
+          if (!isImporting) setPendingBackup(null);
+        }}
+        dismissible={!isImporting}
         title="Import Backup Data"
       >
         {pendingBackup && (
@@ -282,6 +292,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
                     type="radio"
                     name="importMode"
                     value="merge"
+                    disabled={isImporting}
                     checked={importMode === 'merge'}
                     onChange={() => setImportMode('merge')}
                     className="accent-md-primary"
@@ -299,6 +310,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
                     type="radio"
                     name="importMode"
                     value="replace"
+                    disabled={isImporting}
                     checked={importMode === 'replace'}
                     onChange={() => setImportMode('replace')}
                     className="accent-md-primary"
@@ -314,11 +326,21 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-md-outline-variant/20">
-              <Button variant="text" size="sm" onClick={() => setPendingBackup(null)}>
+              <Button
+                variant="text"
+                size="sm"
+                disabled={isImporting}
+                onClick={() => setPendingBackup(null)}
+              >
                 Cancel
               </Button>
-              <Button variant="filled" size="sm" onClick={handleConfirmImport}>
-                Confirm Import
+              <Button
+                variant="filled"
+                size="sm"
+                disabled={isImporting}
+                onClick={handleConfirmImport}
+              >
+                {isImporting ? 'Importing...' : 'Confirm Import'}
               </Button>
             </div>
           </div>

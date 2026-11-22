@@ -13,6 +13,15 @@ export class LocalStorageService implements IStorageService {
   constructor(prefix: string = 'pomodor:') {
     this.prefix = prefix;
     this.checkAvailability();
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('storage', (e: StorageEvent) => {
+        if (e.key === null) {
+          this.memoryCache.clear();
+        } else if (e.key.startsWith(this.prefix)) {
+          this.memoryCache.delete(e.key);
+        }
+      });
+    }
   }
 
   private checkAvailability(): void {

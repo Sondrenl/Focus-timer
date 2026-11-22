@@ -226,9 +226,9 @@ export const remove = mutation({
     const activeTimer = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .unique();
+      .first();
     if (activeTimer && activeTimer.tagId === args.id) {
-      await ctx.db.patch(activeTimer._id, { tagId: undefined });
+      await ctx.db.patch(activeTimer._id, { tagId: undefined, updatedAtMs: Date.now() });
     }
 
     // Clear orphaned tagId references in bounded batches and schedule continuation if needed
@@ -261,6 +261,12 @@ export const cleanupRemovedTagBatch = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // Re-check current user tags: if the tag was recreated/re-imported, abort cleanup immediately
+    const user = await ctx.db.get(args.userId);
+    if (!user || (user.tags ?? DEFAULT_TAGS).some((t) => t.id === args.tagId)) {
+      return null;
+    }
+
     const batchResult = await clearRemovedTagBatch(ctx, {
       userId: args.userId,
       tagId: args.tagId,
@@ -325,9 +331,9 @@ export const resetToDefaults = mutation({
     const activeTimer = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .unique();
+      .first();
     if (activeTimer && activeTimer.tagId && !DEFAULT_TAG_ID_SET.has(activeTimer.tagId)) {
-      await ctx.db.patch(activeTimer._id, { tagId: undefined });
+      await ctx.db.patch(activeTimer._id, { tagId: undefined, updatedAtMs: Date.now() });
     }
 
     const attempts = await ctx.db
@@ -399,6 +405,11 @@ export const cleanupResetTagsBatch = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    // Always evaluate against the user's live tag set so new custom tags created after resetToDefaults are never stripped
+    const validTagIdSet = new Set((user.tags ?? DEFAULT_TAGS).map((t) => t.id));
+
     if (args.stage === "sessions") {
       const page = await ctx.db
         .query("sessions")
@@ -407,7 +418,7 @@ export const cleanupResetTagsBatch = internalMutation({
         .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
 
       for (const s of page.page) {
-        if (s.tagId && !DEFAULT_TAG_ID_SET.has(s.tagId)) {
+        if (s.tagId && !validTagIdSet.has(s.tagId)) {
           await ctx.db.patch(s._id, { tagId: undefined });
         }
       }
@@ -436,7 +447,7 @@ export const cleanupResetTagsBatch = internalMutation({
         .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
 
       for (const c of page.page) {
-        if (c.tagId && !DEFAULT_TAG_ID_SET.has(c.tagId)) {
+        if (c.tagId && !validTagIdSet.has(c.tagId)) {
           await ctx.db.patch(c._id, { tagId: undefined });
         }
       }
@@ -465,8 +476,8 @@ export const cleanupResetTagsBatch = internalMutation({
         .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
 
       for (const a of page.page) {
-        const clearTag = Boolean(a.tagId && !DEFAULT_TAG_ID_SET.has(a.tagId));
-        const clearInitialTag = Boolean(a.initialTagId && !DEFAULT_TAG_ID_SET.has(a.initialTagId));
+        const clearTag = Boolean(a.tagId && !validTagIdSet.has(a.tagId));
+        const clearInitialTag = Boolean(a.initialTagId && !validTagIdSet.has(a.initialTagId));
         if (clearTag || clearInitialTag) {
           await ctx.db.patch(a._id, {
             ...(clearTag ? { tagId: undefined } : {}),
@@ -498,9 +509,9 @@ export const cleanupResetTagsBatch = internalMutation({
       .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
 
     for (const evt of page.page) {
-      const clearTag = Boolean(evt.tagId && !DEFAULT_TAG_ID_SET.has(evt.tagId));
-      const clearFrom = Boolean(evt.fromTagId && !DEFAULT_TAG_ID_SET.has(evt.fromTagId));
-      const clearTo = Boolean(evt.toTagId && !DEFAULT_TAG_ID_SET.has(evt.toTagId));
+      const clearTag = Boolean(evt.tagId && !validTagIdSet.has(evt.tagId));
+      const clearFrom = Boolean(evt.fromTagId && !validTagIdSet.has(evt.fromTagId));
+      const clearTo = Boolean(evt.toTagId && !validTagIdSet.has(evt.toTagId));
       if (clearTag || clearFrom || clearTo) {
         await ctx.db.patch(evt._id, {
           ...(clearTag ? { tagId: undefined } : {}),

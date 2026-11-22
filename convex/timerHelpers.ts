@@ -1,6 +1,6 @@
 import { MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
-import { DEFAULT_SETTINGS } from "./authHelper";
+import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "./authHelper";
 import { TAG_ID_REGEX } from "./telemetryValidators";
 
 export { TAG_ID_REGEX };
@@ -80,6 +80,21 @@ export function assertValidTagId(
   if (!TAG_ID_REGEX.test(value)) {
     throw new Error(errorMessage);
   }
+}
+
+/**
+ * Validates tagId format and ensures the tag actually exists in the user's tag list.
+ * Coerces deleted/nonexistent tagIds to undefined so concurrent multi-device writes
+ * after a tag deletion never leave permanent orphaned tag references.
+ */
+export function resolveExistingUserTagId(
+  user: { tags?: Array<{ id: string }> } | null | undefined,
+  rawTagId: string | null | undefined
+): string | undefined {
+  assertValidTagId(rawTagId);
+  if (!rawTagId) return undefined;
+  const userTags = user?.tags ?? DEFAULT_TAGS;
+  return userTags.some((t) => t.id === rawTagId) ? rawTagId : undefined;
 }
 
 export function generateScheduleNonce(nowMs: number): string {

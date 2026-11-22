@@ -1,15 +1,15 @@
 import { useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useConvexConnectionState } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
-import { isConvexConfigured, convexClient, getValidAuthToken } from './ConvexClient';
+import { isConvexConfigured, convexClient } from './ConvexClient';
 import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
-export function useConvexSync(isAuthenticated: boolean) {
-  const shouldQuery = isConvexConfigured && isAuthenticated;
+export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = isAuthenticated) {
+  const shouldQuery = isConvexConfigured && isAuthenticated && isAuthReady;
   const connectionState = useConvexConnectionState();
   const isConvexConnected = isConvexConfigured && connectionState.isWebSocketConnected;
 
-  // Only query Convex if Convex URL is configured and user is authenticated
+  // Only query Convex once Convex URL is configured AND WebSocket auth is genuinely ready
   const convexUser = useQuery(
     api.users.current,
     shouldQuery ? {} : 'skip'
@@ -61,7 +61,7 @@ export function useConvexSync(isAuthenticated: boolean) {
     async (
       options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
     ) => {
-      if (!isConvexConfigured || !isAuthenticated) return null;
+      if (!isConvexConfigured || !isAuthenticated || !isAuthReady) return null;
       const resolved =
         typeof options === 'number' ? { limit: options } : options;
       const limit = resolved.limit ?? 5000;
@@ -76,14 +76,14 @@ export function useConvexSync(isAuthenticated: boolean) {
         return null;
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, isAuthReady]
   );
 
   const fetchTelemetryEvents = useCallback(
     async (
       options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
     ) => {
-      if (!isConvexConfigured || !isAuthenticated) return null;
+      if (!isConvexConfigured || !isAuthenticated || !isAuthReady) return null;
       const resolved =
         typeof options === 'number' ? { limit: options } : options;
       const limit = resolved.limit ?? 5000;
@@ -98,47 +98,8 @@ export function useConvexSync(isAuthenticated: boolean) {
         return null;
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, isAuthReady]
   );
-
-  const setAuthToken = useCallback((token: string | null) => {
-    if (!isConvexConfigured) return;
-
-    try {
-      if (!token) {
-        try {
-          convexClient.clearAuth();
-        } catch (err) {
-          console.warn('Convex clearAuth error:', err);
-        }
-        convexClient.setAuth(async () => undefined);
-        return;
-      }
-
-      convexClient.setAuth(
-        async (args?: { forceRefreshToken?: boolean }) => {
-          try {
-            return getValidAuthToken(token, args);
-          } catch (err) {
-            console.warn('Error in Convex auth token fetcher:', err);
-            return undefined;
-          }
-        },
-        (isAuthenticatedState: boolean) => {
-          if (!isAuthenticatedState) {
-            console.warn('Convex authentication state: unauthenticated');
-          }
-        },
-        (isRefreshing: boolean) => {
-          if (isRefreshing) {
-            console.info('Convex WebSocket auth token refresh in progress...');
-          }
-        }
-      );
-    } catch (err) {
-      console.warn('Convex setAuth error:', err);
-    }
-  }, []);
 
   const wrapMutation = useCallback(
     <TArgs extends any[], TReturn>(
@@ -214,7 +175,6 @@ export function useConvexSync(isAuthenticated: boolean) {
       convexSessions,
       vapidPublicKey,
       devicePushStatus,
-      setAuthToken,
       fetchTelemetryAttempts,
       fetchTelemetryEvents,
       mutations,
@@ -226,7 +186,6 @@ export function useConvexSync(isAuthenticated: boolean) {
       convexSessions,
       vapidPublicKey,
       devicePushStatus,
-      setAuthToken,
       fetchTelemetryAttempts,
       fetchTelemetryEvents,
       mutations,

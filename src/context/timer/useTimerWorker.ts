@@ -120,12 +120,12 @@ export const useTimerWorker = ({
     const diffSec = Math.min(maxSec, rawDiffSec);
 
     if (diffSec <= 0) {
+      if (shouldDeferExpiredCompletion && shouldDeferExpiredCompletion()) {
+        return 0;
+      }
       if (diffMs < -900_000) {
         onStaleExpiration();
         return null;
-      }
-      if (shouldDeferExpiredCompletion && shouldDeferExpiredCompletion()) {
-        return 0;
       }
       remainingSecondsRef.current = 0;
       setRemainingSeconds(0);

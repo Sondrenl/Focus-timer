@@ -4,7 +4,12 @@ import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { DEFAULT_TAGS } from '../types/tag';
 import { useAuthProfile } from './AuthProfileContext';
 import { useData } from './DataContext';
-import { subscribeTimerState, subscribeReset, TAB_ID } from '../services/timer/TimerBroadcast';
+import {
+  subscribeAuthEvent,
+  subscribeTimerState,
+  subscribeReset,
+  TAB_ID,
+} from '../services/timer/TimerBroadcast';
 import { wakeLockService } from '../services/screen/WakeLockService';
 import { getDurationForType as getBaseDurationForType } from '../utils/timerTransitions';
 import {
@@ -43,8 +48,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sound,
     notifications,
     isEffectiveAuthenticated,
-    isConvexAuthAuthenticated,
-    isConvexAuthLoading,
+    isConvexAuthReady,
     convexSync,
   } = useAuthProfile();
 
@@ -116,6 +120,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
   isAuthenticatedRef.current = isEffectiveAuthenticated;
 
+  const isConvexAuthReadyRef = useRef<boolean>(isConvexAuthReady);
+  isConvexAuthReadyRef.current = isConvexAuthReady;
+
   const isConvexConnectedRef = useRef<boolean>(convexSync.isConvexConnected);
   isConvexConnectedRef.current = convexSync.isConvexConnected;
 
@@ -125,6 +132,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   isDevicePushRegisteredRef.current = convexSync.devicePushStatus?.registered;
 
   const mountedAtMsRef = useRef<number>(Date.now());
+  const wakeDeferredAtMsRef = useRef<number>(0);
   const serverClockOffsetMsRef = useRef<number>(0);
   const getServerAlignedNowMs = useCallback(
     () => Date.now() + serverClockOffsetMsRef.current,
@@ -140,6 +148,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const {
     dispatchCompletionAlert,
+    clearAlertClaim,
     triggerCompletionConfetti,
   } = useTimerAlerts({
     timerRunIdRef,
@@ -163,8 +172,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isConvexConfigured,
   } = useTimerCloudSync({
     isAuthenticated: isEffectiveAuthenticated,
-    isConvexAuthAuthenticated,
-    isConvexAuthLoading,
+    isConvexAuthReady,
+    isConvexConnected: convexSync.isConvexConnected,
+    isConvexConnectedRef,
     isAuthenticatedRef,
     sessionTypeRef,
     statusRef,
@@ -193,6 +203,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveTagId,
     getDurationForType,
     dispatchCompletionAlert,
+    clearAlertClaim,
+    recordSessionFallback: recordSession,
     triggerCompletionConfetti,
   });
 
@@ -402,20 +414,39 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [status, settings.soundEnabled, sound]);
 
   const shouldDeferExpiredCompletion = useCallback(() => {
-    if (!wasExpiredAtMountRef.current) return false;
+    const nowWall = Date.now();
     if (!isConvexConfigured || !isAuthenticatedRef.current) {
       wasExpiredAtMountRef.current = false;
+      wakeDeferredAtMsRef.current = 0;
       return false;
     }
-    if (hasResolvedRemoteTimerRef.current) {
-      wasExpiredAtMountRef.current = false;
+
+    // 1. Cold-mount deferral while remote timer hydrates (up to 2.5s)
+    if (wasExpiredAtMountRef.current) {
+      if (hasResolvedRemoteTimerRef.current && isConvexConnectedRef.current) {
+        wasExpiredAtMountRef.current = false;
+        return false;
+      }
+      if (nowWall - mountedAtMsRef.current >= 2500) {
+        wasExpiredAtMountRef.current = false;
+        return false;
+      }
+      return true;
+    }
+
+    // 2. Wake/sleep deferral when signed-in WebSocket is reconnecting or auth is refreshing (up to 2.5s)
+    if (!isConvexConnectedRef.current || !isConvexAuthReadyRef.current || !hasResolvedRemoteTimerRef.current) {
+      if (wakeDeferredAtMsRef.current === 0) {
+        wakeDeferredAtMsRef.current = nowWall;
+      }
+      if (nowWall - wakeDeferredAtMsRef.current < 2500) {
+        return true;
+      }
       return false;
     }
-    if (Date.now() - mountedAtMsRef.current >= 1500) {
-      wasExpiredAtMountRef.current = false;
-      return false;
-    }
-    return true;
+
+    wakeDeferredAtMsRef.current = 0;
+    return false;
   }, [isConvexConfigured, hasResolvedRemoteTimerRef]);
 
   useTimerWorker({
@@ -444,8 +475,44 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const unsubscribeState = subscribeTimerState((incoming) => {
       const now = Date.now();
       const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
-      if (!hasRecentLocalAction || incoming.updatedAtMs > localUpdatedAtRef.current) {
-        applyRemoteState(incoming);
+      const isStrictlyNewer = incoming.updatedAtMs > localUpdatedAtRef.current;
+      // Deterministic tie-breaker when two local tabs auto-start in the exact same millisecond
+      const isDeterministicTieWinner =
+        incoming.updatedAtMs === localUpdatedAtRef.current &&
+        Boolean(incoming.timerRunId) &&
+        Boolean(timerRunIdRef.current) &&
+        incoming.timerRunId! !== timerRunIdRef.current! &&
+        incoming.timerRunId! < timerRunIdRef.current!;
+
+      if (!hasRecentLocalAction || isStrictlyNewer || isDeterministicTieWinner) {
+        applyRemoteState(incoming, isDeterministicTieWinner);
+      }
+    });
+
+    const unsubscribeAuth = subscribeAuthEvent((payload) => {
+      if (payload.action === 'logout') {
+        const defaultDuration = Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60));
+        serverClockOffsetMsRef.current = 0;
+        sessionTypeRef.current = 'WORK';
+        statusRef.current = 'IDLE';
+        currentCycleRef.current = 1;
+        totalSecondsRef.current = defaultDuration;
+        remainingSecondsRef.current = defaultDuration;
+        targetEndTimeRef.current = null;
+        timerRunIdRef.current = null;
+        localUpdatedAtRef.current = 0;
+        lastLocalActionWallMsRef.current = 0;
+        prevActiveTagIdRef.current = DEFAULT_TAGS[0]?.id ?? null;
+
+        setSessionType('WORK');
+        setStatus('IDLE');
+        setCurrentCycle(1);
+        setTotalSeconds(defaultDuration);
+        setRemainingSeconds(defaultDuration);
+        setTargetEndTime(null);
+
+        wakeLockService.release();
+        telemetryTracker.invalidateDraftCache();
       }
     });
 
@@ -502,6 +569,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     return () => {
       unsubscribeState();
+      unsubscribeAuth();
       unsubscribeReset();
     };
   }, [getDurationForType, getServerAlignedNowMs, applyRemoteState, publishLocalTimerState]);

@@ -225,6 +225,11 @@ export function parseAndValidateBackupEntities(
       const duration = Number(s.durationSeconds ?? s.duration_seconds);
       const completed = s.completedAt || s.completed_at;
       const tag = s.tagId !== undefined ? s.tagId : s.tag_id !== undefined ? s.tag_id : null;
+      const rawRunId = s.timerRunId ?? s.timer_run_id;
+      const timerRunId =
+        typeof rawRunId === 'string' && rawRunId.trim().length > 0
+          ? rawRunId.trim().slice(0, 128)
+          : undefined;
       return {
         id:
           typeof s.id === 'string' && s.id.trim().length > 0
@@ -234,6 +239,7 @@ export function parseAndValidateBackupEntities(
         sessionType: type,
         durationSeconds: duration,
         completedAt: completed,
+        ...(timerRunId ? { timerRunId } : {}),
       };
     });
 
@@ -251,14 +257,18 @@ export function parseAndValidateBackupEntities(
       const date = c.date;
       return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
     })
-    .map((c: any) => {
+    .map((c: any, idx: number) => {
       const date = c.date;
       const tag = c.tagId !== undefined ? c.tagId : c.tag_id !== undefined ? c.tag_id : null;
+      const fallbackBaseMs = Date.parse(`${date}T12:00:00.000Z`);
+      const fallbackIso = !Number.isNaN(fallbackBaseMs)
+        ? new Date(fallbackBaseMs + idx).toISOString()
+        : `${date}T12:00:00.000Z`;
       const createdAt = isValidIsoTimestamp(c.createdAt)
         ? c.createdAt
         : isValidIsoTimestamp(c.created_at)
         ? c.created_at
-        : `${date}T12:00:00.000Z`;
+        : fallbackIso;
       return {
         id:
           typeof c.id === 'string' && c.id.trim().length > 0
@@ -335,7 +345,7 @@ export function sanitizeBackupProfile(
 ): Partial<UserProfile> | null {
   if (!rawProfile) return null;
   const safeDisplayName =
-    typeof rawProfile.displayName === 'string'
+    typeof rawProfile.displayName === 'string' && rawProfile.displayName.trim().length > 0
       ? rawProfile.displayName.trim().slice(0, 50)
       : undefined;
   const safeDailyGoal =
@@ -343,15 +353,20 @@ export function sanitizeBackupProfile(
       ? Math.max(1, Math.min(1440, Math.floor(rawProfile.dailyGoalMinutes)))
       : undefined;
   const safeAvatarEmoji =
-    typeof rawProfile.avatarEmoji === 'string'
-      ? rawProfile.avatarEmoji.trim().slice(0, 10)
+    typeof rawProfile.avatarEmoji === 'string' && rawProfile.avatarEmoji.trim().length > 0
+      ? rawProfile.avatarEmoji.trim().slice(0, 32)
       : undefined;
 
-  const safeProfileUpdate: Partial<UserProfile> = {
-    displayName: safeDisplayName,
-    avatarEmoji: safeAvatarEmoji,
-    dailyGoalMinutes: safeDailyGoal,
-  };
+  const safeProfileUpdate: Partial<UserProfile> = {};
+  if (safeDisplayName !== undefined) {
+    safeProfileUpdate.displayName = safeDisplayName;
+  }
+  if (safeAvatarEmoji !== undefined) {
+    safeProfileUpdate.avatarEmoji = safeAvatarEmoji;
+  }
+  if (safeDailyGoal !== undefined) {
+    safeProfileUpdate.dailyGoalMinutes = safeDailyGoal;
+  }
   if (
     !isEffectiveAuthenticated &&
     'avatarUrl' in rawProfile &&
@@ -361,5 +376,5 @@ export function sanitizeBackupProfile(
   ) {
     safeProfileUpdate.avatarUrl = rawProfile.avatarUrl;
   }
-  return safeProfileUpdate;
+  return Object.keys(safeProfileUpdate).length > 0 ? safeProfileUpdate : null;
 }

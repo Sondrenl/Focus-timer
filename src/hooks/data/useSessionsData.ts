@@ -3,29 +3,57 @@ import { CompletedSession } from '../../types/session';
 import { isSampleSessionId } from '../../services/repository/SessionRepository';
 import {
   broadcastSession,
+  subscribeAuthEvent,
   subscribeSessions,
+  subscribeSessionsSync,
   subscribeReset,
 } from '../../services/timer/TimerBroadcast';
 import { isPreviewOrDev, isProduction } from '../../utils/environment';
 import { sessionRepository } from '../../context/services';
 import { useAuthProfile } from '../../context/AuthProfileContext';
+import {
+  enqueueOutboxOperation,
+  getLocalDataOwnerUserId,
+  markGuestDataModified,
+  readOfflineOutbox,
+  removeOutboxOperation,
+} from '../../services/sync/offlineOutbox';
 
 interface UseSessionsDataParams {
   isEffectiveAuthenticated: boolean;
+  isConvexAuthReady: boolean;
+  isAdoptionPaused: boolean;
+  currentUserId: string | null;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
 }
 
 export function useSessionsData({
   isEffectiveAuthenticated,
+  isConvexAuthReady,
+  isAdoptionPaused,
+  currentUserId,
   convexSync,
 }: UseSessionsDataParams) {
-  const { isConvexConfigured, convexSessions, mutations: convexMutations } = convexSync;
+  const {
+    isConvexConfigured,
+    isConvexConnected,
+    convexSessions,
+    mutations: convexMutations,
+  } = convexSync;
 
   const [sessions, setSessions] = useState<CompletedSession[]>([]);
+  const sessionsRef = useRef<CompletedSession[]>(sessions);
+  sessionsRef.current = sessions;
 
   const pendingAddsRef = useRef<Map<string, CompletedSession>>(new Map());
+  const isConvexConnectedRef = useRef<boolean>(isConvexConnected);
+  isConvexConnectedRef.current = isConvexConnected;
 
   const isDemoEnvironment = useMemo(() => isPreviewOrDev(), []);
+
+  const getActiveOwnerUserId = useCallback((): string | null => {
+    return currentUserId ?? getLocalDataOwnerUserId();
+  }, [currentUserId]);
 
   // Initial load of sessions from local storage
   useEffect(() => {
@@ -63,11 +91,38 @@ export function useSessionsData({
     });
   }, [isEffectiveAuthenticated]);
 
-  // Reactive adoption of Convex sessions
+  // Reactive adoption of Convex sessions (paused during migration, outbox replay, and replace imports)
   useEffect(() => {
-    if (!isEffectiveAuthenticated || !Array.isArray(convexSessions)) return;
+    if (!isConvexAuthReady || isAdoptionPaused || !Array.isArray(convexSessions)) return;
+
+    const ownerId = getActiveOwnerUserId();
+    const outboxOps = ownerId ? readOfflineOutbox(ownerId) : [];
+
+    // If a reset_all is pending in the offline outbox, preserve the cleared local state until replayed
+    if (outboxOps.some((op) => op.kind === 'reset_all')) {
+      return;
+    }
+
     const serverSessions = convexSessions as CompletedSession[];
-    const pendingAdds = Array.from(pendingAddsRef.current.values());
+    const outboxAdds: CompletedSession[] = outboxOps
+      .filter((op): op is Extract<typeof op, { kind: 'record_session' }> => op.kind === 'record_session')
+      .map((op) => ({
+        id: op.payload.localId,
+        tagId: op.payload.tagId ?? null,
+        sessionType: op.payload.sessionType,
+        durationSeconds: op.payload.durationSeconds,
+        completedAt: op.payload.completedAt,
+        ...(op.payload.timerRunId ? { timerRunId: op.payload.timerRunId } : {}),
+      }));
+
+    const pendingMap = new Map<string, CompletedSession>();
+    for (const s of outboxAdds) {
+      pendingMap.set(s.id, s);
+    }
+    for (const [id, s] of pendingAddsRef.current.entries()) {
+      pendingMap.set(id, s);
+    }
+    const pendingAdds = Array.from(pendingMap.values());
 
     const serverIds = new Set(serverSessions.map((s) => s.id));
     const serverRunIds = new Set(
@@ -101,27 +156,28 @@ export function useSessionsData({
     const sorted = [...serverSessions, ...unconfirmedAdds].sort(
       (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
     );
-    setSessions((prev) => {
-      if (
-        prev.length === sorted.length &&
-        prev.every(
-          (s, i) =>
-            s.id === sorted[i].id &&
-            s.sessionType === sorted[i].sessionType &&
-            s.durationSeconds === sorted[i].durationSeconds &&
-            s.completedAt === sorted[i].completedAt &&
-            s.tagId === sorted[i].tagId &&
-            (s.timerRunId ?? null) === (sorted[i].timerRunId ?? null)
-        )
-      ) {
-        return prev;
-      }
-      sessionRepository.saveAll(sorted);
-      return sorted;
-    });
-  }, [convexSessions, isEffectiveAuthenticated]);
 
-  // Multi-tab BroadcastChannel synchronization for sessions
+    const prev = sessionsRef.current;
+    const isSame =
+      prev.length === sorted.length &&
+      prev.every(
+        (s, i) =>
+          s.id === sorted[i].id &&
+          s.sessionType === sorted[i].sessionType &&
+          s.durationSeconds === sorted[i].durationSeconds &&
+          s.completedAt === sorted[i].completedAt &&
+          s.tagId === sorted[i].tagId &&
+          (s.timerRunId ?? null) === (sorted[i].timerRunId ?? null)
+      );
+
+    if (!isSame) {
+      sessionsRef.current = sorted;
+      setSessions(sorted);
+      void sessionRepository.saveAll(sorted);
+    }
+  }, [convexSessions, isConvexAuthReady, isAdoptionPaused, getActiveOwnerUserId]);
+
+  // Multi-tab BroadcastChannel synchronization for sessions, bulk imports, resets, and logout
   useEffect(() => {
     const unsubSessions = subscribeSessions((incomingSession) => {
       const incomingMs = new Date(incomingSession.completedAt).getTime();
@@ -136,22 +192,36 @@ export function useSessionsData({
           return !isNaN(sMs) && !isNaN(incomingMs) && Math.abs(sMs - incomingMs) <= 5000;
         });
         if (isDuplicate) return prev;
-        const next = [...prev, incomingSession].sort(
+        return [...prev, incomingSession].sort(
           (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
         );
-        sessionRepository.saveAll(next);
-        return next;
       });
+    });
+
+    const unsubSessionsSync = subscribeSessionsSync((incomingSessions) => {
+      sessionsRef.current = incomingSessions;
+      setSessions(incomingSessions);
     });
 
     const unsubReset = subscribeReset(() => {
       pendingAddsRef.current.clear();
+      sessionsRef.current = [];
       setSessions([]);
+    });
+
+    const unsubAuth = subscribeAuthEvent((payload) => {
+      if (payload.action === 'logout') {
+        pendingAddsRef.current.clear();
+        sessionsRef.current = [];
+        setSessions([]);
+      }
     });
 
     return () => {
       unsubSessions();
+      unsubSessionsSync();
       unsubReset();
+      unsubAuth();
     };
   }, []);
 
@@ -173,8 +243,27 @@ export function useSessionsData({
       }
 
       const created = await sessionRepository.add(sessionData);
+      if (!isEffectiveAuthenticated) {
+        markGuestDataModified();
+      }
+
       const shouldSyncToCloud =
         isConvexConfigured && isEffectiveAuthenticated && !isSampleSessionId(created.id);
+      const ownerId = shouldSyncToCloud ? getActiveOwnerUserId() : null;
+      const queuedOp = ownerId
+        ? enqueueOutboxOperation(ownerId, {
+            kind: 'record_session',
+            payload: {
+              localId: created.id,
+              tagId: sessionData.tagId || undefined,
+              sessionType: sessionData.sessionType,
+              durationSeconds: sessionData.durationSeconds,
+              completedAt: created.completedAt,
+              timerRunId: sessionData.timerRunId || undefined,
+            },
+          })
+        : null;
+
       if (shouldSyncToCloud) {
         pendingAddsRef.current.set(created.id, created);
       }
@@ -196,7 +285,7 @@ export function useSessionsData({
       });
       broadcastSession(created);
 
-      if (shouldSyncToCloud) {
+      if (shouldSyncToCloud && isConvexAuthReady && isConvexConnectedRef.current) {
         convexMutations
           .recordSession({
             tagId: sessionData.tagId || undefined,
@@ -207,6 +296,9 @@ export function useSessionsData({
           })
           .then((serverSession) => {
             pendingAddsRef.current.delete(created.id);
+            if (queuedOp) {
+              removeOutboxOperation(queuedOp.id);
+            }
             if (serverSession && serverSession.id) {
               setSessions((prev) => {
                 if (
@@ -227,13 +319,22 @@ export function useSessionsData({
             }
           })
           .catch((err) => {
+            // Keep queuedOp in the persistent offline outbox so it replays on reconnect
             pendingAddsRef.current.delete(created.id);
             console.warn(err);
           });
+      } else if (shouldSyncToCloud) {
+        pendingAddsRef.current.delete(created.id);
       }
       return created;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [
+      isConvexConfigured,
+      isEffectiveAuthenticated,
+      isConvexAuthReady,
+      convexMutations,
+      getActiveOwnerUserId,
+    ]
   );
 
   // Sample data is strictly allowed ONLY on non-production builds when NOT signed into a real account

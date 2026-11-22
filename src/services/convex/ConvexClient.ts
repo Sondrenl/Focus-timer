@@ -30,32 +30,20 @@ export const convexClient = new ConvexReactClient(convexUrl, {
   unsavedChangesWarning: false,
 });
 
-// Intercept beforeunload at the root level to suppress any unwanted reload dialogs
-if (typeof window !== "undefined") {
-  window.addEventListener(
-    "beforeunload",
-    (e) => {
-      // Prevent browser "unsaved changes" prompts on refresh or tab navigation
-      e.stopImmediatePropagation();
-    },
-    { capture: true }
-  );
-}
+const TOKEN_CLOCK_SKEW_BUFFER_MS = 30_000;
 
 /**
- * Validates and retrieves an auth token for Convex WebSocket connections.
- * If candidate or stored token is expired (payload.exp * 1000 <= Date.now()),
- * it returns undefined rather than passing an expired token to Convex,
- * which prevents connection authentication rejection loops.
+ * Validates and retrieves a legacy Google ID token (used only for one-time migration
+ * to @convex-dev/auth). Rejects malformed tokens, applies a 30s clock-skew buffer,
+ * and treats absent localStorage tokens as signed-out when forceRefreshToken is true.
  */
 export function getValidAuthToken(
   token?: string | null,
   options?: { forceRefreshToken?: boolean }
 ): string | undefined {
   try {
-    let candidate = token;
+    let candidate = token ?? undefined;
 
-    // Check localStorage if forceRefreshToken is requested or if candidate token is not provided
     if ((options?.forceRefreshToken || !candidate) && typeof window !== "undefined") {
       try {
         const stored =
@@ -63,6 +51,9 @@ export function getValidAuthToken(
           localStorage.getItem("auth_token_v1");
         if (stored) {
           candidate = stored;
+        } else if (options?.forceRefreshToken) {
+          // Storage was cleared (e.g. signed out in another tab); never fall back to a stale closed-over token
+          return undefined;
         }
       } catch {
         // Ignore storage access errors
@@ -74,7 +65,16 @@ export function getValidAuthToken(
     }
 
     const payload = parseGoogleJwt(candidate);
-    if (payload?.exp && payload.exp * 1000 <= Date.now()) {
+    if (!payload) {
+      return undefined;
+    }
+
+    const isExpired =
+      typeof payload.exp === "number" &&
+      Number.isFinite(payload.exp) &&
+      payload.exp * 1000 <= Date.now() + TOKEN_CLOCK_SKEW_BUFFER_MS;
+
+    if (isExpired) {
       // Candidate token is expired. Attempt to find a renewed token in localStorage
       if (typeof window !== "undefined") {
         try {
@@ -83,7 +83,11 @@ export function getValidAuthToken(
             localStorage.getItem("auth_token_v1");
           if (freshStored && freshStored !== candidate) {
             const freshPayload = parseGoogleJwt(freshStored);
-            if (!freshPayload?.exp || freshPayload.exp * 1000 > Date.now()) {
+            if (
+              freshPayload &&
+              (!freshPayload.exp ||
+                freshPayload.exp * 1000 > Date.now() + TOKEN_CLOCK_SKEW_BUFFER_MS)
+            ) {
               return freshStored;
             }
           }
@@ -103,33 +107,4 @@ export function getValidAuthToken(
   }
 }
 
-// Eagerly restore legacy Google JWT auth ONLY if no persistent @convex-dev/auth session exists;
-// otherwise ConvexAuthProvider owns convexClient.setAuth with its 30-day auto-refreshing session.
-if (isConvexConfigured && typeof window !== "undefined" && !hasStoredConvexAuthSession()) {
-  try {
-    const storedToken =
-      localStorage.getItem(AUTH_TOKEN_KEY) ||
-      localStorage.getItem("auth_token_v1");
-    if (storedToken) {
-      const payload = parseGoogleJwt(storedToken);
-      if (payload && (!payload.exp || payload.exp * 1000 > Date.now())) {
-        convexClient.setAuth(
-          async (args) => getValidAuthToken(storedToken, args),
-          (isAuthenticated) => {
-            if (!isAuthenticated) {
-              console.warn("Convex eager auth expired or unauthenticated");
-            }
-          },
-          (isRefreshing) => {
-            if (isRefreshing) {
-              console.info("Convex eager auth token refresh in progress...");
-            }
-          }
-        );
-      }
-    }
-  } catch {
-    // Ignore storage errors
-  }
-}
 

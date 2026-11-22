@@ -6,6 +6,7 @@ import { CoffeeCup } from '../../types/coffee';
 import { isSampleSessionId } from '../../services/repository/SessionRepository';
 import {
   broadcastCoffeeCups,
+  broadcastSessionsSync,
   broadcastTags,
   broadcastReset,
 } from '../../services/timer/TimerBroadcast';
@@ -30,6 +31,12 @@ import {
   shiftDateDays,
   writeHydrationWatermark,
 } from '../../utils/backupSanitizers';
+import {
+  enqueueOutboxOperation,
+  getLocalDataOwnerUserId,
+  markGuestDataModified,
+  removeOutboxOperation,
+} from '../../services/sync/offlineOutbox';
 import { useCloudMigration } from './useCloudMigration';
 
 export {
@@ -40,8 +47,18 @@ export {
   writeHydrationWatermark,
 };
 
+function mintUniqueLocalTagId(existingIds: Set<string>): string {
+  let candidate = `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  while (existingIds.has(candidate)) {
+    candidate = `tag-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+  return candidate;
+}
+
 interface UseBackupAndMigrationParams {
   isEffectiveAuthenticated: boolean;
+  isConvexAuthReady?: boolean;
+  currentUserId?: string | null;
   profile: ReturnType<typeof useAuthProfile>['profile'];
   settings: ReturnType<typeof useAuthProfile>['settings'];
   updateProfile: ReturnType<typeof useAuthProfile>['updateProfile'];
@@ -49,6 +66,8 @@ interface UseBackupAndMigrationParams {
   resetProfileToDefaults: ReturnType<typeof useAuthProfile>['resetProfileToDefaults'];
   resetSettingsToDefaults: ReturnType<typeof useAuthProfile>['resetSettingsToDefaults'];
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
+  syncBackupToConvexChunked?: ReturnType<typeof useCloudMigration>['syncBackupToConvexChunked'];
+  setIsBulkSyncing?: React.Dispatch<React.SetStateAction<boolean>>;
   tags: Tag[];
   setTags: React.Dispatch<React.SetStateAction<Tag[]>>;
   activeTagId: string | null;
@@ -61,6 +80,8 @@ interface UseBackupAndMigrationParams {
 
 export function useBackupAndMigration({
   isEffectiveAuthenticated,
+  isConvexAuthReady: isConvexAuthReadyParam,
+  currentUserId,
   profile,
   settings,
   updateProfile,
@@ -68,6 +89,8 @@ export function useBackupAndMigration({
   resetProfileToDefaults,
   resetSettingsToDefaults,
   convexSync,
+  syncBackupToConvexChunked: syncBackupToConvexChunkedParam,
+  setIsBulkSyncing,
   tags,
   setTags,
   activeTagId,
@@ -77,11 +100,21 @@ export function useBackupAndMigration({
   coffeeCups,
   setCoffeeCups,
 }: UseBackupAndMigrationParams) {
-  const { isConvexConfigured, mutations: convexMutations } = convexSync;
-  const { syncBackupToConvexChunked } = useCloudMigration({
-    isEffectiveAuthenticated,
+  const isConvexAuthReady = isConvexAuthReadyParam ?? isEffectiveAuthenticated;
+  const {
+    isConvexConfigured,
+    isConvexConnected,
+    mutations: convexMutations,
+  } = convexSync;
+
+  // Fallback for direct unit test invocations that don't mount useCloudMigration separately
+  const fallbackMigration = useCloudMigration({
+    isEffectiveAuthenticated: syncBackupToConvexChunkedParam ? false : isEffectiveAuthenticated,
+    isConvexAuthReady,
     convexSync,
   });
+  const syncBackupToConvexChunked =
+    syncBackupToConvexChunkedParam ?? fallbackMigration.syncBackupToConvexChunked;
 
   const exportBackup = useCallback((): BackupData => {
     const cleanSessions = sessions.filter((s) => !isSampleSessionId(s.id));
@@ -114,228 +147,264 @@ export function useBackupAndMigration({
       data: BackupData,
       mode: 'merge' | 'replace'
     ): Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }> => {
-      const {
-        validTags,
-        validSessions,
-        validCoffee,
-        normalizeRawTagRef,
-      } = parseAndValidateBackupEntities(data, isEffectiveAuthenticated);
+      setIsBulkSyncing?.(true);
+      try {
+        const {
+          validTags,
+          validSessions,
+          validCoffee,
+          normalizeRawTagRef,
+        } = parseAndValidateBackupEntities(data, isEffectiveAuthenticated);
 
-      let finalTags: Tag[] = [];
-      let finalSessions: CompletedSession[] = [];
-      let finalCoffee: CoffeeCup[] = [];
-      let finalMlTelemetry: MlTelemetryExport | undefined;
-      let sessionsAdded = 0;
-      let tagsAdded = 0;
-      let coffeeAdded = 0;
+        let finalTags: Tag[] = [];
+        let finalSessions: CompletedSession[] = [];
+        let finalCoffee: CoffeeCup[] = [];
+        let finalMlTelemetry: MlTelemetryExport | undefined;
+        let sessionsAdded = 0;
+        let tagsAdded = 0;
+        let coffeeAdded = 0;
 
-      if (mode === 'replace') {
-        await sessionRepository.clear();
-        await coffeeRepository.clear();
+        if (mode === 'replace') {
+          await sessionRepository.clear();
+          await coffeeRepository.clear();
 
-        finalTags = validTags.length > 0 ? validTags : await tagRepository.resetToDefaults();
-        const validTagIds = new Set(finalTags.map((t) => t.id));
-        const resolveReplaceTagId = (rawTagId?: string | null): string | null => {
-          const normalized = normalizeRawTagRef(rawTagId);
-          if (!normalized) return null;
-          return validTagIds.has(normalized) ? normalized : null;
-        };
+          finalTags = validTags.length > 0 ? validTags : await tagRepository.resetToDefaults();
+          const validTagIds = new Set(finalTags.map((t) => t.id));
+          const resolveReplaceTagId = (rawTagId?: string | null): string | null => {
+            const normalized = normalizeRawTagRef(rawTagId);
+            if (!normalized) return null;
+            return validTagIds.has(normalized) ? normalized : null;
+          };
 
-        finalSessions = validSessions
-          .map((s) => ({ ...s, tagId: resolveReplaceTagId(s.tagId) }))
-          .sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
-        finalCoffee = validCoffee
-          .map((c) => ({ ...c, tagId: resolveReplaceTagId(c.tagId) }))
-          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          finalSessions = validSessions
+            .map((s) => ({ ...s, tagId: resolveReplaceTagId(s.tagId) }))
+            .sort((a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime());
+          finalCoffee = validCoffee
+            .map((c) => ({ ...c, tagId: resolveReplaceTagId(c.tagId) }))
+            .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-        await tagRepository.saveAll(finalTags);
-        await sessionRepository.saveAll(finalSessions);
-        await coffeeRepository.saveAll(finalCoffee);
+          await tagRepository.saveAll(finalTags);
+          await sessionRepository.saveAll(finalSessions);
+          await coffeeRepository.saveAll(finalCoffee);
 
-        finalMlTelemetry = sanitizeMlTelemetryForImport(data.mlTelemetry, resolveReplaceTagId);
-        if (finalMlTelemetry) {
-          await telemetryTracker.importTelemetry(finalMlTelemetry, 'replace');
-        } else {
-          await telemetryTracker.clearAll();
-        }
-
-        setTags(finalTags);
-        setSessions(finalSessions);
-        setCoffeeCups(finalCoffee);
-
-        if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
-          const nextActive = finalTags.find((t) => !t.isArchived);
-          setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
-        }
-
-        broadcastTags(finalTags);
-        broadcastCoffeeCups(finalCoffee);
-
-        sessionsAdded = finalSessions.length;
-        tagsAdded = finalTags.length;
-        coffeeAdded = finalCoffee.length;
-      } else {
-        const existingTagIds = new Set(tags.map((t) => t.id));
-        const existingTagByName = new Map(
-          tags.map((t) => [t.name.toLowerCase().trim(), t.id])
-        );
-        const tagIdRemap = new Map<string, string>();
-        tags.forEach((t) => tagIdRemap.set(t.id, t.id));
-
-        const newTagsToKeep: Tag[] = [];
-
-        for (const t of validTags) {
-          const nameKey = t.name.toLowerCase().trim();
-          const existingIdByName = existingTagByName.get(nameKey);
-          if (existingIdByName) {
-            tagIdRemap.set(t.id, existingIdByName);
-          } else if (existingTagIds.has(t.id)) {
-            tagIdRemap.set(t.id, t.id);
+          finalMlTelemetry = sanitizeMlTelemetryForImport(data.mlTelemetry, resolveReplaceTagId);
+          if (finalMlTelemetry) {
+            await telemetryTracker.importTelemetry(finalMlTelemetry, 'replace');
           } else {
-            newTagsToKeep.push(t);
-            existingTagIds.add(t.id);
-            existingTagByName.set(nameKey, t.id);
-            tagIdRemap.set(t.id, t.id);
-            tagsAdded++;
+            await telemetryTracker.clearAll();
+          }
+
+          setTags(finalTags);
+          setSessions(finalSessions);
+          setCoffeeCups(finalCoffee);
+
+          if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
+            const nextActive = finalTags.find((t) => !t.isArchived);
+            setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
+          }
+
+          broadcastTags(finalTags);
+          broadcastSessionsSync(finalSessions);
+          broadcastCoffeeCups(finalCoffee);
+
+          sessionsAdded = finalSessions.length;
+          tagsAdded = finalTags.length;
+          coffeeAdded = finalCoffee.length;
+        } else {
+          // Read fresh state from repositories instead of potentially stale React closures (H12)
+          const [freshTags, freshSessions, freshCoffee] = await Promise.all([
+            tagRepository.getAll(),
+            sessionRepository.getAll(),
+            coffeeRepository.getAll(),
+          ]);
+
+          const existingTagIds = new Set(freshTags.map((t) => t.id));
+          const existingTagByName = new Map(
+            freshTags.map((t) => [t.name.toLowerCase().trim(), t.id])
+          );
+          const tagIdRemap = new Map<string, string>();
+          freshTags.forEach((t) => tagIdRemap.set(t.id, t.id));
+
+          const newTagsToKeep: Tag[] = [];
+
+          for (const t of validTags) {
+            const nameKey = t.name.toLowerCase().trim();
+            const existingIdByName = existingTagByName.get(nameKey);
+            if (existingIdByName) {
+              tagIdRemap.set(t.id, existingIdByName);
+            } else {
+              // If t.id collides with an existing tag's ID under a different name (e.g. renamed default tag),
+              // mint a fresh unique ID and remap all incoming references so nothing is silently dropped (H4).
+              const canonicalId = existingTagIds.has(t.id)
+                ? mintUniqueLocalTagId(existingTagIds)
+                : t.id;
+              newTagsToKeep.push({ ...t, id: canonicalId });
+              existingTagIds.add(canonicalId);
+              existingTagByName.set(nameKey, canonicalId);
+              tagIdRemap.set(t.id, canonicalId);
+              tagsAdded++;
+            }
+          }
+          finalTags = [...freshTags, ...newTagsToKeep];
+          const validFinalTagIds = new Set(finalTags.map((t) => t.id));
+          const resolveMergeTagId = (rawTagId?: string | null): string | null => {
+            const normalized = normalizeRawTagRef(rawTagId);
+            if (!normalized) return null;
+            const mapped = tagIdRemap.get(normalized) ?? normalized;
+            return validFinalTagIds.has(mapped) ? mapped : null;
+          };
+
+          await tagRepository.saveAll(finalTags);
+          setTags(finalTags);
+          if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
+            const nextActive = finalTags.find((t) => !t.isArchived);
+            setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
+          }
+          broadcastTags(finalTags);
+
+          const baseSessions =
+            isProduction() || isEffectiveAuthenticated
+              ? freshSessions.filter((s) => !isSampleSessionId(s.id))
+              : freshSessions;
+          const existingSessionIds = new Set(baseSessions.map((s) => s.id));
+          const existingRunIds = new Set(
+            baseSessions.map((s) => s.timerRunId).filter((r): r is string => Boolean(r))
+          );
+          const existingSessionKeys = new Set(
+            baseSessions.map((s) => `${s.sessionType}-${s.completedAt}`)
+          );
+          const newSessionsToKeep: CompletedSession[] = [];
+
+          for (const s of validSessions) {
+            if (s.timerRunId && existingRunIds.has(s.timerRunId)) {
+              continue;
+            }
+            const sessionKey = `${s.sessionType}-${s.completedAt}`;
+            if (!existingSessionIds.has(s.id) && !existingSessionKeys.has(sessionKey)) {
+              newSessionsToKeep.push({
+                ...s,
+                tagId: resolveMergeTagId(s.tagId),
+              });
+              existingSessionIds.add(s.id);
+              existingSessionKeys.add(sessionKey);
+              if (s.timerRunId) existingRunIds.add(s.timerRunId);
+              sessionsAdded++;
+            }
+          }
+          finalSessions = [...baseSessions, ...newSessionsToKeep].sort(
+            (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
+          );
+          await sessionRepository.saveAll(finalSessions);
+          setSessions(finalSessions);
+          broadcastSessionsSync(finalSessions);
+
+          const existingCupIds = new Set(freshCoffee.map((c) => c.id));
+          const existingCupKeys = new Set(freshCoffee.map((c) => `${c.date}-${c.createdAt}`));
+          const newCoffeeToKeep: CoffeeCup[] = [];
+
+          for (const c of validCoffee) {
+            const cupKey = `${c.date}-${c.createdAt}`;
+            if (!existingCupIds.has(c.id) && !existingCupKeys.has(cupKey)) {
+              newCoffeeToKeep.push({
+                ...c,
+                tagId: resolveMergeTagId(c.tagId),
+              });
+              existingCupIds.add(c.id);
+              existingCupKeys.add(cupKey);
+              coffeeAdded++;
+            }
+          }
+          finalCoffee = [...freshCoffee, ...newCoffeeToKeep].sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          );
+          await coffeeRepository.saveAll(finalCoffee);
+          setCoffeeCups(finalCoffee);
+          broadcastCoffeeCups(finalCoffee);
+
+          finalMlTelemetry = sanitizeMlTelemetryForImport(data.mlTelemetry, resolveMergeTagId);
+          if (
+            finalMlTelemetry &&
+            (finalMlTelemetry.sessionAttempts.length > 0 || finalMlTelemetry.events.length > 0)
+          ) {
+            await telemetryTracker.importTelemetry(finalMlTelemetry, 'merge');
           }
         }
-        finalTags = [...tags, ...newTagsToKeep];
-        const validFinalTagIds = new Set(finalTags.map((t) => t.id));
-        const resolveMergeTagId = (rawTagId?: string | null): string | null => {
-          const normalized = normalizeRawTagRef(rawTagId);
-          if (!normalized) return null;
-          const mapped = tagIdRemap.get(normalized) ?? normalized;
-          return validFinalTagIds.has(mapped) ? mapped : null;
-        };
 
-        await tagRepository.saveAll(finalTags);
-        setTags(finalTags);
-        if (!activeTagId || !finalTags.some((t) => t.id === activeTagId && !t.isArchived)) {
-          const nextActive = finalTags.find((t) => !t.isArchived);
-          setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
+        if (!isEffectiveAuthenticated) {
+          markGuestDataModified();
         }
-        broadcastTags(finalTags);
 
-        const baseSessions =
-          isProduction() || isEffectiveAuthenticated
-            ? sessions.filter((s) => !isSampleSessionId(s.id))
-            : sessions;
-        const existingSessionIds = new Set(baseSessions.map((s) => s.id));
-        const existingSessionKeys = new Set(
-          baseSessions.map((s) => `${s.sessionType}-${s.completedAt}`)
-        );
-        const newSessionsToKeep: CompletedSession[] = [];
-
-        for (const s of validSessions) {
-          const sessionKey = `${s.sessionType}-${s.completedAt}`;
-          if (!existingSessionIds.has(s.id) && !existingSessionKeys.has(sessionKey)) {
-            newSessionsToKeep.push({
-              ...s,
-              tagId: resolveMergeTagId(s.tagId),
-            });
-            existingSessionIds.add(s.id);
-            existingSessionKeys.add(sessionKey);
-            sessionsAdded++;
-          }
+        const safeSettings = sanitizeBackupSettings(data.settings);
+        if (safeSettings && Object.keys(safeSettings).length > 0) {
+          await updateSettings(safeSettings, { skipTelemetry: true });
         }
-        finalSessions = [...baseSessions, ...newSessionsToKeep].sort(
-          (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
-        );
-        await sessionRepository.saveAll(finalSessions);
-        setSessions(finalSessions);
 
-        const existingCupIds = new Set(coffeeCups.map((c) => c.id));
-        const existingCupKeys = new Set(coffeeCups.map((c) => `${c.date}-${c.createdAt}`));
-        const newCoffeeToKeep: CoffeeCup[] = [];
-
-        for (const c of validCoffee) {
-          const cupKey = `${c.date}-${c.createdAt}`;
-          if (!existingCupIds.has(c.id) && !existingCupKeys.has(cupKey)) {
-            newCoffeeToKeep.push({
-              ...c,
-              tagId: resolveMergeTagId(c.tagId),
-            });
-            existingCupIds.add(c.id);
-            existingCupKeys.add(cupKey);
-            coffeeAdded++;
-          }
+        const safeProfileUpdate = sanitizeBackupProfile(data.profile, isEffectiveAuthenticated);
+        if (safeProfileUpdate) {
+          await updateProfile(safeProfileUpdate, { skipTelemetry: true });
         }
-        finalCoffee = [...coffeeCups, ...newCoffeeToKeep].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
-        await coffeeRepository.saveAll(finalCoffee);
-        setCoffeeCups(finalCoffee);
-        broadcastCoffeeCups(finalCoffee);
 
-        finalMlTelemetry = sanitizeMlTelemetryForImport(data.mlTelemetry, resolveMergeTagId);
         if (
-          finalMlTelemetry &&
-          (finalMlTelemetry.sessionAttempts.length > 0 || finalMlTelemetry.events.length > 0)
+          mode === 'replace' ||
+          (finalMlTelemetry &&
+            (finalMlTelemetry.sessionAttempts.length > 0 || finalMlTelemetry.events.length > 0))
         ) {
-          await telemetryTracker.importTelemetry(finalMlTelemetry, 'merge');
+          clearAllHydrationWatermarks();
         }
-      }
 
-      const safeSettings = sanitizeBackupSettings(data.settings);
-      if (safeSettings) {
-        await updateSettings(safeSettings, { skipTelemetry: true });
-      }
+        if (isConvexConfigured && isEffectiveAuthenticated) {
+          if (!isConvexAuthReady || isConvexConnected === false) {
+            throw new Error(
+              'Backup restored locally, but cloud sync requires an active internet connection.'
+            );
+          }
+          await syncBackupToConvexChunked(
+            mode,
+            finalTags.map((t) => ({
+              id: t.id,
+              name: t.name,
+              color: t.color,
+              isArchived: t.isArchived,
+              createdAt: t.createdAt,
+              updatedAt: t.updatedAt,
+            })),
+            finalSessions.map((s) => ({
+              id: s.id,
+              tagId: s.tagId || undefined,
+              sessionType: s.sessionType,
+              durationSeconds: s.durationSeconds,
+              completedAt: s.completedAt,
+              timerRunId: s.timerRunId || undefined,
+            })),
+            finalCoffee.map((c) => ({
+              id: c.id,
+              date: c.date,
+              tagId: c.tagId || undefined,
+              createdAt: c.createdAt,
+            })),
+            finalMlTelemetry
+          );
+        }
 
-      const safeProfileUpdate = sanitizeBackupProfile(data.profile, isEffectiveAuthenticated);
-      if (safeProfileUpdate) {
-        await updateProfile(safeProfileUpdate, { skipTelemetry: true });
+        return {
+          sessionsAdded,
+          tagsAdded,
+          coffeeAdded,
+        };
+      } finally {
+        setIsBulkSyncing?.(false);
       }
-
-      if (
-        mode === 'replace' ||
-        (finalMlTelemetry &&
-          (finalMlTelemetry.sessionAttempts.length > 0 || finalMlTelemetry.events.length > 0))
-      ) {
-        clearAllHydrationWatermarks();
-      }
-
-      if (isConvexConfigured && isEffectiveAuthenticated) {
-        syncBackupToConvexChunked(
-          mode,
-          finalTags.map((t) => ({
-            id: t.id,
-            name: t.name,
-            color: t.color,
-            isArchived: t.isArchived,
-          })),
-          finalSessions.map((s) => ({
-            id: s.id,
-            tagId: s.tagId || undefined,
-            sessionType: s.sessionType,
-            durationSeconds: s.durationSeconds,
-            completedAt: s.completedAt,
-          })),
-          finalCoffee.map((c) => ({
-            id: c.id,
-            date: c.date,
-            tagId: c.tagId || undefined,
-            createdAt: c.createdAt,
-          })),
-          finalMlTelemetry
-        ).catch(console.warn);
-      }
-
-      return {
-        sessionsAdded,
-        tagsAdded,
-        coffeeAdded,
-      };
     },
     [
       isEffectiveAuthenticated,
       isConvexConfigured,
-      tags,
+      isConvexAuthReady,
+      isConvexConnected,
       activeTagId,
-      sessions,
-      coffeeCups,
       updateSettings,
       updateProfile,
       syncBackupToConvexChunked,
+      setIsBulkSyncing,
       setTags,
       setActiveTagId,
       setSessions,
@@ -345,53 +414,81 @@ export function useBackupAndMigration({
 
   const resetAllData = useCallback(
     async (scope: 'sessions-only' | 'factory-reset'): Promise<void> => {
-      await sessionRepository.clear();
-      await coffeeRepository.clear();
-      await telemetryTracker.clearAll();
-      clearAllHydrationWatermarks();
+      setIsBulkSyncing?.(true);
       try {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.removeItem(LAST_DAY_RESET_STORAGE_KEY);
+        await sessionRepository.clear();
+        await coffeeRepository.clear();
+        await telemetryTracker.clearAll();
+        clearAllHydrationWatermarks();
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            window.localStorage.removeItem(LAST_DAY_RESET_STORAGE_KEY);
+          }
+        } catch {
+          // Ignore storage errors
         }
-      } catch {
-        // Ignore storage errors
-      }
-      setSessions([]);
-      setCoffeeCups([]);
-      broadcastCoffeeCups([]);
+        setSessions([]);
+        setCoffeeCups([]);
+        broadcastCoffeeCups([]);
 
-      if (scope === 'sessions-only') {
-        broadcastReset(scope);
+        if (scope === 'sessions-only') {
+          broadcastReset(scope);
+        } else {
+          const defaultTags = await tagRepository.resetToDefaults();
+          await resetSettingsToDefaults({ skipTelemetry: true });
+          await resetProfileToDefaults({ skipTelemetry: true });
+
+          setTags(defaultTags);
+          setActiveTagId(defaultTags[0]?.id || null, { skipTelemetry: true });
+
+          broadcastTags(defaultTags);
+          broadcastReset(scope);
+        }
+
         if (isConvexConfigured && isEffectiveAuthenticated) {
-          convexMutations.clearSessions({}).catch(console.warn);
-          convexMutations.clearCoffee({}).catch(console.warn);
-          convexMutations.clearTelemetry?.({}).catch(console.warn);
+          const ownerId = currentUserId ?? getLocalDataOwnerUserId();
+          const queuedOp = ownerId
+            ? enqueueOutboxOperation(ownerId, {
+                kind: 'reset_all',
+                payload: { scope },
+              })
+            : null;
+
+          if (isConvexAuthReady && isConvexConnected !== false) {
+            try {
+              // Run sequentially so clearSessions/clearCoffee/clearTelemetry complete
+              // before resetTags patches the user document (eliminates OCC races — H12)
+              await convexMutations.clearSessions({});
+              await convexMutations.clearCoffee({});
+              if (convexMutations.clearTelemetry) {
+                await convexMutations.clearTelemetry({});
+              }
+              if (scope === 'factory-reset') {
+                await convexMutations.resetTags({});
+              }
+              if (queuedOp) {
+                removeOutboxOperation(queuedOp.id);
+              }
+            } catch (err) {
+              // Keep queuedOp in persistent outbox so reset replays cleanly on reconnect
+              console.warn('Cloud reset failed (queued for retry):', err);
+            }
+          }
         }
-      } else {
-        const defaultTags = await tagRepository.resetToDefaults();
-        await resetSettingsToDefaults({ skipTelemetry: true });
-        await resetProfileToDefaults({ skipTelemetry: true });
-
-        setTags(defaultTags);
-        setActiveTagId(defaultTags[0]?.id || null, { skipTelemetry: true });
-
-        broadcastTags(defaultTags);
-        broadcastReset(scope);
-
-        if (isConvexConfigured && isEffectiveAuthenticated) {
-          convexMutations.clearSessions({}).catch(console.warn);
-          convexMutations.clearCoffee({}).catch(console.warn);
-          convexMutations.clearTelemetry?.({}).catch(console.warn);
-          convexMutations.resetTags({}).catch(console.warn);
-        }
+      } finally {
+        setIsBulkSyncing?.(false);
       }
     },
     [
       isConvexConfigured,
       isEffectiveAuthenticated,
+      isConvexAuthReady,
+      isConvexConnected,
+      currentUserId,
       convexMutations,
       resetSettingsToDefaults,
       resetProfileToDefaults,
+      setIsBulkSyncing,
       setActiveTagId,
       setSessions,
       setCoffeeCups,

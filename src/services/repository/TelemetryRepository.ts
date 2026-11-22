@@ -329,6 +329,24 @@ export class TelemetryRepository implements ITelemetryRepository {
         this.safeSetArray(ATTEMPTS_STORAGE_KEY, cleanedAttempts, MAX_LOCAL_ATTEMPTS);
       }
 
+      const events = await this.getEvents();
+      let eventsChanged = false;
+      const cleanedEvents = events.map((e) => {
+        if (e.tagId === tagId || e.fromTagId === tagId || e.toTagId === tagId) {
+          eventsChanged = true;
+          return {
+            ...e,
+            ...(e.tagId === tagId ? { tagId: null } : {}),
+            ...(e.fromTagId === tagId ? { fromTagId: null } : {}),
+            ...(e.toTagId === tagId ? { toTagId: null } : {}),
+          };
+        }
+        return e;
+      });
+      if (eventsChanged) {
+        this.safeSetArray(EVENTS_STORAGE_KEY, cleanedEvents, MAX_LOCAL_EVENTS);
+      }
+
       const draft = await this.getActiveDraft();
       if (draft && (draft.attempt.tagId === tagId || draft.attempt.initialTagId === tagId)) {
         try {

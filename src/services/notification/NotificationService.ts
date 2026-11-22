@@ -43,6 +43,7 @@ export class NotificationService {
   private cachedRegistration: ServiceWorkerRegistration | null = null;
   private lastNotifiedSessionId: string | null = null;
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
+  private lastRegisteredEndpoint: string | null = null;
   private syncEpoch = 0;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
@@ -77,6 +78,13 @@ export class NotificationService {
           .then((reg) => {
             if (reg) {
               this.cachedRegistration = reg;
+            }
+            for (const listener of this.pushResyncListeners) {
+              try {
+                listener();
+              } catch {
+                // Ignore listener errors
+              }
             }
           })
           .catch(() => {});
@@ -143,6 +151,10 @@ export class NotificationService {
 
   resetPushStatus(status: PushSubscriptionStatus = 'unsubscribed'): void {
     this.syncEpoch++;
+    this.pushSyncInFlight = null;
+    if (status !== 'active') {
+      this.lastRegisteredEndpoint = null;
+    }
     this.setPushStatus(status);
   }
 
@@ -252,9 +264,9 @@ export class NotificationService {
 
   private async getPushManager(): Promise<PushManager | null> {
     const windowPushManager = this.getWindowPushManager();
-    // Avoid blocking a Safari 18.4+/18.5+ user gesture for 2.5s waiting on SW activation
-    // when Declarative Web Push window.pushManager is already available.
-    const reg = await this.getActiveRegistration(windowPushManager ? 0 : 2500);
+    // Wait briefly for an active SW registration so platforms with both SW PushManager and
+    // window.pushManager don't flip-flop between managers across cold starts and later syncs.
+    const reg = await this.getActiveRegistration(windowPushManager ? 1000 : 2500);
     if (reg?.pushManager) return reg.pushManager;
     return windowPushManager;
   }
@@ -267,6 +279,22 @@ export class NotificationService {
       return await pushManager.getSubscription();
     } catch {
       return null;
+    }
+  }
+
+  async hasSubscriptionChanged(): Promise<boolean> {
+    if (!this.isPushSupported() || !this.hasPermission()) return false;
+    try {
+      const sub = await this.getPushSubscriptionState();
+      if (!sub || !sub.endpoint) {
+        return this.lastRegisteredEndpoint !== null || this.pushStatus === 'active';
+      }
+      if (typeof sub.expirationTime === 'number' && sub.expirationTime <= Date.now()) {
+        return true;
+      }
+      return this.lastRegisteredEndpoint !== null && sub.endpoint !== this.lastRegisteredEndpoint;
+    } catch {
+      return false;
     }
   }
 
@@ -298,6 +326,7 @@ export class NotificationService {
     }
 
     const epoch = ++this.syncEpoch;
+    let currentPromise: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
 
     const run = async (): Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> => {
       try {
@@ -374,6 +403,7 @@ export class NotificationService {
           return { ok: false, status: this.pushStatus, reason: 'Superseded by unsubscribe or reset' };
         }
 
+        this.lastRegisteredEndpoint = subscription.endpoint;
         this.setPushStatus('active');
         return { ok: true, status: 'active' };
       } catch (err) {
@@ -385,20 +415,23 @@ export class NotificationService {
         this.setPushStatus('error');
         return { ok: false, status: 'error', reason: msg };
       } finally {
-        if (this.pushSyncInFlight) {
+        if (currentPromise && this.pushSyncInFlight === currentPromise) {
           this.pushSyncInFlight = null;
         }
       }
     };
 
-    const promise = run();
-    this.pushSyncInFlight = promise;
-    return promise;
+    currentPromise = run();
+    this.pushSyncInFlight = currentPromise;
+    return currentPromise;
   }
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
     // Invalidate any in-flight syncPushSubscription immediately so it cannot re-activate push
+    // and clear pushSyncInFlight so a subsequent ON toggle starts a fresh sync instead of awaiting a doomed promise.
     this.syncEpoch++;
+    this.pushSyncInFlight = null;
+    this.lastRegisteredEndpoint = null;
     this.setPushStatus('unsubscribed');
 
     if (unregisterFn) {
@@ -412,7 +445,7 @@ export class NotificationService {
     // Unsubscribe both SW PushManager and Safari window.pushManager if present (prevents split-brain)
     const managers: PushManager[] = [];
     try {
-      const reg = await this.getActiveRegistration(500);
+      const reg = await this.getActiveRegistration(2000);
       if (reg?.pushManager) managers.push(reg.pushManager);
     } catch {
       // Ignore

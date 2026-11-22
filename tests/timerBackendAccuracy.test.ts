@@ -218,12 +218,12 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
 
     // 2. updateTag patches ONLY tagId without changing targetEndTime or status
     const tagRes = await asUser.mutation(api.timer.updateTag, {
-      tagId: "tag-work",
+      tagId: "tag-deep-work",
       expectedStatus: "RUNNING",
       expectedTimerRunId: "run-guard-1",
     });
     expect(tagRes?.applied).toBe(true);
-    expect(tagRes?.tagId).toBe("tag-work");
+    expect(tagRes?.tagId).toBe("tag-deep-work");
     expect(tagRes?.targetEndTime).toBe(originalTargetEnd);
 
     // updateTag with wrong expectedTimerRunId is rejected
@@ -233,7 +233,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
       expectedTimerRunId: "wrong-run",
     });
     expect(wrongTagRes?.applied).toBe(false);
-    expect(wrongTagRes?.tagId).toBe("tag-work");
+    expect(wrongTagRes?.tagId).toBe("tag-deep-work");
 
     // 3. complete >5s early returns rejectedReason: "too_early" and keeps RUNNING
     const earlyRes = await asUser.mutation(api.timer.complete, {

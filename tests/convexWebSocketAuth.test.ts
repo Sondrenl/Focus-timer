@@ -154,10 +154,34 @@ describe('Convex WebSocket Token Expiration & Reconnection Resilience', () => {
       expect(result).toBe(validStored);
     });
 
-    it('safely handles malformed token string without crashing', () => {
+    it('rejects malformed token string instead of passing garbage to Convex', () => {
       const result = getValidAuthToken('completely-malformed-token-xyz');
-      // If payload is not valid JWT, it returns candidate (fallback for non-JWT auth) without crashing
-      expect(result).toBe('completely-malformed-token-xyz');
+      expect(result).toBeUndefined();
+    });
+
+    it('returns undefined on forceRefreshToken when localStorage token was cleared (cross-tab sign-out)', () => {
+      const futureExpiry = Math.floor(Date.now() / 1000) + 3600;
+      const staleClosedOverToken = createMockJwt(futureExpiry);
+      // localStorage has no token (cleared by another tab signing out)
+      const result = getValidAuthToken(staleClosedOverToken, { forceRefreshToken: true });
+      expect(result).toBeUndefined();
+    });
+
+    it('rejects tokens within the 30-second clock-skew buffer', () => {
+      const almostExpired = Math.floor(Date.now() / 1000) + 15; // +15s (< 30s buffer)
+      const token = createMockJwt(almostExpired);
+      expect(getValidAuthToken(token)).toBeUndefined();
+    });
+
+    it('scopes hasStoredConvexAuthSession to the active convexUrl namespace and rejects expired lone JWTs', () => {
+      const pastExpiry = Math.floor(Date.now() / 1000) - 600;
+      mockStorage['__convexAuthJWT_httpsacrobaticoyster97convexcloud'] = createMockJwt(pastExpiry);
+      expect(hasStoredConvexAuthSession('https://acrobatic-oyster-97.convex.cloud')).toBe(false);
+
+      // Different deployment namespace must not match active namespace
+      mockStorage['__convexAuthRefreshToken_httpsotherdeploymentconvexcloud'] = 'refresh-other';
+      expect(hasStoredConvexAuthSession('https://acrobatic-oyster-97.convex.cloud')).toBe(false);
+      expect(hasStoredConvexAuthSession('https://other-deployment.convex.cloud')).toBe(true);
     });
 
     it('safely handles localStorage access errors without throwing', () => {

@@ -3,10 +3,10 @@ import { query, mutation, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireUser, getAuthenticatedUser } from "./authHelper";
 import {
-  assertValidTagId,
   assertValidTimerRunId,
   MAX_FUTURE_TIMESTAMP_SKEW_MS,
   recordCompletedSessionIfNotDuplicate,
+  resolveExistingUserTagId,
 } from "./timerHelpers";
 
 interface SessionData {
@@ -104,7 +104,7 @@ export const record = mutation({
       throw new Error("Invalid durationSeconds: must be a positive finite number up to 7 days.");
     }
 
-    assertValidTagId(args.tagId);
+    const sanitizedTagId = resolveExistingUserTagId(user, args.tagId);
     assertValidTimerRunId(args.timerRunId, "timerRunId");
 
     const nowMs = Date.now();
@@ -113,7 +113,6 @@ export const record = mutation({
       throw new Error("completedAt timestamp cannot be in the future.");
     }
     const completedAtMs = !Number.isNaN(parsedMs) ? parsedMs : nowMs;
-    const sanitizedTagId = args.tagId || undefined;
 
     const recorded = await recordCompletedSessionIfNotDuplicate(ctx, {
       userId: user._id,
@@ -133,6 +132,7 @@ const CLEAR_BATCH_SIZE = 2048;
 export const clearChunkInternal = internalMutation({
   args: {
     userId: v.id("users"),
+    cutoffCreationTimeMs: v.optional(v.number()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -141,13 +141,22 @@ export const clearChunkInternal = internalMutation({
       .withIndex("by_user_completed", (q) => q.eq("userId", args.userId))
       .take(CLEAR_BATCH_SIZE);
 
+    let deletedCount = 0;
     for (const session of sessions) {
+      if (
+        args.cutoffCreationTimeMs !== undefined &&
+        session._creationTime > args.cutoffCreationTimeMs
+      ) {
+        continue;
+      }
       await ctx.db.delete(session._id);
+      deletedCount += 1;
     }
 
-    if (sessions.length === CLEAR_BATCH_SIZE) {
+    if (sessions.length === CLEAR_BATCH_SIZE && deletedCount > 0) {
       await ctx.scheduler.runAfter(0, internal.sessions.clearChunkInternal, {
         userId: args.userId,
+        cutoffCreationTimeMs: args.cutoffCreationTimeMs,
       });
     }
     return null;
@@ -159,18 +168,23 @@ export const clear = mutation({
   returns: v.boolean(),
   handler: async (ctx) => {
     const user = await requireUser(ctx);
+    const cutoffCreationTimeMs = Date.now();
     const sessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
       .take(CLEAR_BATCH_SIZE);
 
+    let deletedCount = 0;
     for (const session of sessions) {
+      if (session._creationTime > cutoffCreationTimeMs) continue;
       await ctx.db.delete(session._id);
+      deletedCount += 1;
     }
 
-    if (sessions.length === CLEAR_BATCH_SIZE) {
+    if (sessions.length === CLEAR_BATCH_SIZE && deletedCount > 0) {
       await ctx.scheduler.runAfter(0, internal.sessions.clearChunkInternal, {
         userId: user._id,
+        cutoffCreationTimeMs,
       });
     }
 

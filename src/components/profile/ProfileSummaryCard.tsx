@@ -44,25 +44,54 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
   const [editGoalInput, setEditGoalInput] = useState(String(dailyGoalMinutes));
   const todayStr = useTodayKey();
 
+  const [initialEditValues, setInitialEditValues] = useState<{
+    displayName: string;
+    avatarEmoji: string;
+    dailyGoalMinutes: number;
+  }>({
+    displayName,
+    avatarEmoji: profile.avatarEmoji,
+    dailyGoalMinutes,
+  });
+
   const openEditModal = () => {
-    setEditName(profile.displayName || 'Focus Practitioner');
-    setEditEmoji(profile.avatarEmoji);
-    setEditGoalInput(String(dailyGoalMinutes));
+    const initialName = profile.displayName || 'Focus Practitioner';
+    const initialEmoji = profile.avatarEmoji;
+    const initialGoal = profile.dailyGoalMinutes || 120;
+    setInitialEditValues({
+      displayName: initialName,
+      avatarEmoji: initialEmoji,
+      dailyGoalMinutes: initialGoal,
+    });
+    setEditName(initialName);
+    setEditEmoji(initialEmoji);
+    setEditGoalInput(String(initialGoal));
     setIsEditingProfile(true);
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     const safeDisplayName = editName.trim().slice(0, 50) || 'Focus Practitioner';
+    const safeEmoji = editEmoji.trim().slice(0, 32);
     const parsedMinutes = parseInt(editGoalInput, 10);
     const safeGoal = !Number.isNaN(parsedMinutes)
       ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes)))
-      : dailyGoalMinutes;
-    await updateProfile({
-      displayName: safeDisplayName,
-      avatarEmoji: editEmoji.trim().slice(0, 32),
-      dailyGoalMinutes: safeGoal,
-    });
+      : initialEditValues.dailyGoalMinutes;
+
+    const patch: Partial<UserProfile> = {};
+    if (safeDisplayName !== initialEditValues.displayName) {
+      patch.displayName = safeDisplayName;
+    }
+    if (safeEmoji !== initialEditValues.avatarEmoji) {
+      patch.avatarEmoji = safeEmoji;
+    }
+    if (safeGoal !== initialEditValues.dailyGoalMinutes) {
+      patch.dailyGoalMinutes = safeGoal;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await updateProfile(patch);
+    }
     setIsEditingProfile(false);
   };
 

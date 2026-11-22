@@ -2,16 +2,27 @@ import { RemoteTimerState } from '../../types/timer';
 import { CoffeeCup } from '../../types/coffee';
 import { Tag } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
+import { UserSettings } from '../../types/settings';
+import { UserProfile } from '../../types/user';
 
 export type ResetScope = 'sessions-only' | 'factory-reset';
 
+export interface AuthBroadcastPayload {
+  action: 'logout' | 'login';
+  userId?: string | null;
+}
+
 export interface TimerBroadcastEvent {
   senderId: string;
-  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'RESET';
+  type?: 'TIMER' | 'COFFEE' | 'TAGS' | 'SESSION' | 'SESSIONS_SYNC' | 'SETTINGS' | 'PROFILE' | 'AUTH' | 'RESET';
   timer?: RemoteTimerState;
   coffeeCups?: CoffeeCup[];
   tags?: Tag[];
   session?: CompletedSession;
+  sessions?: CompletedSession[];
+  settings?: Partial<UserSettings>;
+  profile?: Partial<UserProfile>;
+  auth?: AuthBroadcastPayload;
   resetScope?: ResetScope;
 }
 
@@ -109,9 +120,60 @@ export const broadcastSession = (session: CompletedSession): void =>
 export const subscribeSessions = (callback: (session: CompletedSession) => void): (() => void) =>
   subscribePayload('SESSION', 'session', (p: any) => p && typeof p === 'object' && typeof p.id === 'string', callback);
 
-export interface ResetBroadcastMeta {
+export const broadcastSessionsSync = (sessions: CompletedSession[]): void =>
+  broadcastPayload('SESSIONS_SYNC', 'sessions', sessions);
+
+export const subscribeSessionsSync = (callback: (sessions: CompletedSession[]) => void): (() => void) =>
+  subscribePayload('SESSIONS_SYNC', 'sessions', (p: any) => Array.isArray(p), callback);
+
+export const broadcastSettings = (settings: Partial<UserSettings>): void =>
+  broadcastPayload('SETTINGS', 'settings', settings);
+
+export const subscribeSettings = (callback: (settings: Partial<UserSettings>) => void): (() => void) =>
+  subscribePayload('SETTINGS', 'settings', (p: any) => p && typeof p === 'object' && !Array.isArray(p), callback);
+
+export const broadcastProfile = (profile: Partial<UserProfile>): void =>
+  broadcastPayload('PROFILE', 'profile', profile);
+
+export const subscribeProfile = (callback: (profile: Partial<UserProfile>) => void): (() => void) =>
+  subscribePayload('PROFILE', 'profile', (p: any) => p && typeof p === 'object' && !Array.isArray(p), callback);
+
+export interface BroadcastMeta {
   isRemoteTab: boolean;
 }
+
+export type ResetBroadcastMeta = BroadcastMeta;
+
+const localAuthListeners = new Set<(payload: AuthBroadcastPayload, meta: BroadcastMeta) => void>();
+
+export const broadcastAuthEvent = (payload: AuthBroadcastPayload): void => {
+  localAuthListeners.forEach((fn) => {
+    try {
+      fn(payload, { isRemoteTab: false });
+    } catch (err) {
+      console.warn('Local auth listener error:', err);
+    }
+  });
+
+  broadcastPayload('AUTH', 'auth', payload);
+};
+
+export const subscribeAuthEvent = (
+  callback: (payload: AuthBroadcastPayload, meta: BroadcastMeta) => void
+): (() => void) => {
+  localAuthListeners.add(callback);
+  const unsubscribeChannel = subscribePayload(
+    'AUTH',
+    'auth',
+    (p: any) => p && typeof p === 'object' && (p.action === 'logout' || p.action === 'login'),
+    (payload) => callback(payload, { isRemoteTab: true })
+  );
+
+  return () => {
+    localAuthListeners.delete(callback);
+    unsubscribeChannel();
+  };
+};
 
 const localResetListeners = new Set<(scope: ResetScope, meta: ResetBroadcastMeta) => void>();
 

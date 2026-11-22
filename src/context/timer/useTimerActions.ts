@@ -56,7 +56,14 @@ interface UseTimerActionsParams {
   ) => void;
   publishTimerCompletion: (
     nextState: RemoteTimerState,
-    completedTimerRunId: string | null
+    completedTimerRunId: string | null,
+    completedSessionFallback?: {
+      tagId: string | null;
+      sessionType: SessionType;
+      durationSeconds: number;
+      completedAt: string;
+      timerRunId?: string | null;
+    }
   ) => void;
 }
 
@@ -81,7 +88,6 @@ export function useTimerActions({
   setRemainingSeconds,
   setTargetEndTime,
   getDurationForType,
-  recordSession,
   sound,
   dispatchCompletionAlert,
   triggerCompletionConfetti,
@@ -123,13 +129,13 @@ export function useTimerActions({
           ? currentTargetEnd
           : now;
 
-      void recordSession({
+      const completedSessionFallback = {
         tagId: activeTagIdRef.current,
         sessionType: completedType,
         durationSeconds: elapsedSeconds,
         completedAt: new Date(completedTimestampMs).toISOString(),
         timerRunId: currentRunId || undefined,
-      });
+      };
 
       void telemetryTracker.onSessionFinalized({
         attemptId: currentRunId,
@@ -197,9 +203,11 @@ export function useTimerActions({
             currentCycle: nextCycle,
             activeTagId: activeTagIdRef.current,
             timerRunId: newRunId,
+            lastCompletedTimerRunId: currentRunId,
             updatedAtMs: now,
           },
-          currentRunId
+          currentRunId,
+          completedSessionFallback
         );
       } else {
         timerRunIdRef.current = null;
@@ -218,9 +226,11 @@ export function useTimerActions({
             currentCycle: nextCycle,
             activeTagId: activeTagIdRef.current,
             timerRunId: null,
+            lastCompletedTimerRunId: currentRunId,
             updatedAtMs: now,
           },
-          currentRunId
+          currentRunId,
+          completedSessionFallback
         );
       }
     },
@@ -243,7 +253,6 @@ export function useTimerActions({
       setTargetEndTime,
       setStatus,
       setRemainingSeconds,
-      recordSession,
       publishTimerCompletion,
       dispatchCompletionAlert,
       triggerCompletionConfetti,
@@ -451,6 +460,10 @@ export function useTimerActions({
     if (targetEndTimeRef.current !== null) {
       const diffMs = targetEndTimeRef.current - now;
       if (diffMs <= 0) {
+        if (diffMs < -900_000) {
+          handleStaleExpiration();
+          return;
+        }
         remainingSecondsRef.current = 0;
         setRemainingSeconds(0);
         handleComplete(false);
@@ -503,6 +516,7 @@ export function useTimerActions({
     timerRunIdRef,
     getServerAlignedNowMs,
     handleComplete,
+    handleStaleExpiration,
     setTargetEndTime,
     setStatus,
     setRemainingSeconds,

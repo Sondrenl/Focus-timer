@@ -21,6 +21,7 @@ export interface RemoteTimerState {
   activeTagId: string | null;
   timerRunId: string | null;
   lastCompletedTimerRunId?: string | null;
+  serverAutoStartStreak?: number;
   updatedAtMs: number;
   serverNowMs?: number;
 }

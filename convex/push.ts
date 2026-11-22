@@ -150,9 +150,10 @@ export const getVapidPublicKey = query({
   args: {},
   returns: v.union(v.string(), v.null()),
   handler: async () => {
+    const derived = deriveVapidPublicKeyFromPrivateJwk(process.env.VAPID_PRIVATE_KEY);
+    if (derived) return derived;
     const explicit = process.env.VAPID_PUBLIC_KEY?.trim();
-    if (explicit) return explicit;
-    return deriveVapidPublicKeyFromPrivateJwk(process.env.VAPID_PRIVATE_KEY);
+    return explicit || null;
   },
 });
 

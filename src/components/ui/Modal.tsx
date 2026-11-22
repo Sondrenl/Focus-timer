@@ -6,6 +6,7 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  dismissible?: boolean;
 }
 
 const FOCUSABLE_SELECTOR =
@@ -16,6 +17,7 @@ export const Modal: React.FC<ModalProps> = ({
   onClose,
   title,
   children,
+  dismissible = true,
 }) => {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -23,6 +25,8 @@ export const Modal: React.FC<ModalProps> = ({
   const prevIsOpenRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const dismissibleRef = useRef(dismissible);
+  dismissibleRef.current = dismissible;
 
   // Capture previously focused element synchronously during render (before commit)
   // because child `autoFocus` runs during commitMount before useEffect executes.
@@ -47,7 +51,9 @@ export const Modal: React.FC<ModalProps> = ({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onCloseRef.current();
+        if (dismissibleRef.current) {
+          onCloseRef.current();
+        }
         return;
       }
 
@@ -97,7 +103,7 @@ export const Modal: React.FC<ModalProps> = ({
     <div
       className="fixed inset-0 z-50 flex items-start md:items-center justify-center pt-3 px-3 pb-4 md:p-4 overflow-y-auto"
       onClick={(e) => {
-        if (e.target === e.currentTarget) {
+        if (dismissible && e.target === e.currentTarget) {
           onClose();
         }
       }}
@@ -105,7 +111,7 @@ export const Modal: React.FC<ModalProps> = ({
       {/* Scrim / Backdrop */}
       <div
         className="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
+        onClick={dismissible ? onClose : undefined}
         aria-hidden="true"
       />
 
@@ -120,14 +126,16 @@ export const Modal: React.FC<ModalProps> = ({
       >
         <div className="flex items-center justify-between pb-2.5 md:pb-3 mb-3 border-b border-md-outline-variant/30">
           <h2 id={titleId} className="text-lg md:text-xl font-bold text-md-on-surface">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close modal"
-            className="w-10 h-10 md:w-auto md:h-auto md:p-1.5 flex items-center justify-center rounded-full text-md-on-surface-variant hover:bg-md-surface-variant transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {dismissible && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close modal"
+              className="w-10 h-10 md:w-auto md:h-auto md:p-1.5 flex items-center justify-center rounded-full text-md-on-surface-variant hover:bg-md-surface-variant transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
         <div>{children}</div>
       </div>
