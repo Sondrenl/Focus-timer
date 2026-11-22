@@ -109,16 +109,25 @@ export function shouldResetForNewDay({
     return false;
   }
 
-  // A new day is defined as being after 04:00
-  if (now.getHours() < NEW_DAY_HOUR_CUTOFF) {
-    return false;
-  }
-
   const currentLogicalDay = getLogicalDayKey(now);
 
   // If this logical day has already been reset, perform check once only
   if (lastResetDayKey === currentLogicalDay) {
     return false;
+  }
+
+  // Before 04:00 AM, the logical day is still yesterday.
+  // Preserve late-night sessions from the current logical day, but allow resetting
+  // if the stored reset key or last session is from an even older logical day (multi-day stale).
+  if (now.getHours() < NEW_DAY_HOUR_CUTOFF) {
+    const isMultiDayStaleFromResetKey =
+      lastResetDayKey !== null && lastResetDayKey < currentLogicalDay;
+    const isMultiDayStaleFromSession =
+      lastSessionTimeMs !== null &&
+      getLogicalDayKey(new Date(lastSessionTimeMs)) < currentLogicalDay;
+    if (!isMultiDayStaleFromResetKey && !isMultiDayStaleFromSession) {
+      return false;
+    }
   }
 
   // Must not have had any sessions in the last hour

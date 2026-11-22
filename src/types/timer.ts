@@ -20,5 +20,7 @@ export interface RemoteTimerState {
   currentCycle: number;
   activeTagId: string | null;
   timerRunId: string | null;
+  lastCompletedTimerRunId?: string | null;
   updatedAtMs: number;
+  serverNowMs?: number;
 }

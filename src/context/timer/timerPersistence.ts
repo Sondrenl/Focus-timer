@@ -80,15 +80,28 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     if (parsed.status === 'RUNNING' && parsed.targetEndTime) {
       const now = Date.now();
       const diffMs = parsed.targetEndTime - now;
-      const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+      const rawDiffSec = Math.max(0, Math.ceil(diffMs / 1000));
+      const diffSec =
+        parsed.totalSeconds > 0 ? Math.min(parsed.totalSeconds, rawDiffSec) : rawDiffSec;
 
       if (diffSec <= 0) {
         // If session expired more than 15 minutes ago while closed, reset to IDLE without recording stale session
         if (diffMs < -900000) {
+          const isFromPreviousDay =
+            getLogicalDayKey(new Date(parsed.targetEndTime)) !== getLogicalDayKey(new Date(now)) &&
+            now - parsed.targetEndTime >= INACTIVITY_THRESHOLD_MS;
+          if (isFromPreviousDay) {
+            parsed.sessionType = 'WORK';
+            parsed.currentCycle = 1;
+            parsed.totalSeconds = defaultSec;
+            parsed.remainingSeconds = defaultSec;
+            setLastResetDayKey(getLogicalDayKey(new Date(now)));
+          } else {
+            parsed.remainingSeconds = parsed.totalSeconds;
+          }
           parsed.status = 'IDLE';
           parsed.targetEndTime = null;
           parsed.timerRunId = null;
-          parsed.remainingSeconds = parsed.totalSeconds;
           parsed.updatedAtMs = 0;
           saveTimerState(parsed);
         } else {

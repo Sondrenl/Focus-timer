@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { TAB_ID } from '../../services/timer/TimerBroadcast';
@@ -39,6 +39,7 @@ interface UseTimerWorkerParams {
   localUpdatedAtRef: React.MutableRefObject<number>;
   activeTagIdRef: React.MutableRefObject<string | null>;
   lastTickWallMsRef: React.MutableRefObject<number>;
+  getServerAlignedNowMs: () => number;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
   shouldDeferExpiredCompletion?: () => boolean;
   onStaleExpiration: () => void;
@@ -60,6 +61,7 @@ export const useTimerWorker = ({
   localUpdatedAtRef,
   activeTagIdRef,
   lastTickWallMsRef,
+  getServerAlignedNowMs,
   handleCompleteRef,
   shouldDeferExpiredCompletion,
   onStaleExpiration,
@@ -110,10 +112,12 @@ export const useTimerWorker = ({
       return null;
     }
 
-    const now = Date.now();
+    const now = getServerAlignedNowMs();
     const target = targetEndTimeRef.current;
     const diffMs = target - now;
-    const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+    const rawDiffSec = Math.max(0, Math.ceil(diffMs / 1000));
+    const maxSec = totalSecondsRef.current > 0 ? totalSecondsRef.current : rawDiffSec;
+    const diffSec = Math.min(maxSec, rawDiffSec);
 
     if (diffSec <= 0) {
       if (diffMs < -900_000) {
@@ -139,6 +143,8 @@ export const useTimerWorker = ({
     statusRef,
     lastTickWallMsRef,
     targetEndTimeRef,
+    totalSecondsRef,
+    getServerAlignedNowMs,
     handleCompleteRef,
     shouldDeferExpiredCompletion,
     onStaleExpiration,
@@ -146,7 +152,11 @@ export const useTimerWorker = ({
     setRemainingSeconds,
   ]);
 
-  // Persistent Web Worker initialization
+  // Keep latest executeTick in a ref so the Blob Web Worker and listeners never respawn on settings changes
+  const executeTickRef = useRef(executeTick);
+  executeTickRef.current = executeTick;
+
+  // Persistent Web Worker initialization (created once per mount)
   useEffect(() => {
     let worker: Worker | null = null;
     let workerUrl: string | null = null;
@@ -159,7 +169,7 @@ export const useTimerWorker = ({
 
       worker.onmessage = (e) => {
         if (e.data === 'TICK') {
-          executeTick();
+          executeTickRef.current();
         }
       };
 
@@ -169,7 +179,7 @@ export const useTimerWorker = ({
         URL.revokeObjectURL(workerUrl);
         workerUrl = null;
       }
-      fallbackInterval = setInterval(executeTick, 250);
+      fallbackInterval = setInterval(() => executeTickRef.current(), 250);
     }
 
     return () => {
@@ -184,7 +194,7 @@ export const useTimerWorker = ({
         clearInterval(fallbackInterval);
       }
     };
-  }, [executeTick]);
+  }, []);
 
   // Visibility, pageshow, and focus sync listeners
   useEffect(() => {
@@ -196,7 +206,7 @@ export const useTimerWorker = ({
       }
 
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
-        const diffSec = executeTick();
+        const diffSec = executeTickRef.current();
         if (diffSec === null) return;
 
         const stateToSave: SavedTimerState = {
@@ -228,7 +238,6 @@ export const useTimerWorker = ({
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
   }, [
-    executeTick,
     statusRef,
     targetEndTimeRef,
     sessionTypeRef,
@@ -241,7 +250,7 @@ export const useTimerWorker = ({
 
   // Main-thread backup countdown timer
   useEffect(() => {
-    const backupInterval = setInterval(executeTick, 1000);
+    const backupInterval = setInterval(() => executeTickRef.current(), 1000);
     return () => clearInterval(backupInterval);
-  }, [executeTick]);
+  }, []);
 };

@@ -1,6 +1,7 @@
 import { CompletedSession } from '../../types/session';
 import { toDateKey, WEEKDAY_NAMES } from '../dates';
 import { formatDurationHoursMins } from '../formatters';
+import { getEffectiveSessionDate } from '../stats/focusStats';
 import { InsightContext, RawInsight } from './types';
 
 /**
@@ -35,31 +36,42 @@ export function generateCoreFocusInsights(
     const slotSeconds = new Array(48).fill(0);
 
     sessions.forEach((s) => {
-      const d = new Date(s.completedAt);
-      if (isNaN(d.getTime())) return;
+      const endDate = new Date(s.completedAt);
+      if (isNaN(endDate.getTime())) return;
       const durSec = Math.min(86400, Math.max(0, s.durationSeconds));
       if (durSec <= 0) return;
 
-      const endSec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
-      const rawStartSec = endSec - durSec;
-      const intervals: [number, number][] =
-        rawStartSec >= 0
-          ? [[rawStartSec, endSec]]
-          : [
-              [0, endSec],
-              [86400 + rawStartSec, 86400],
-            ];
+      const endMs = endDate.getTime();
+      const startMs = endMs - durSec * 1000;
+      const startDate = new Date(startMs);
 
-      for (const [intStart, intEnd] of intervals) {
+      const dayAnchor = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth(),
+        startDate.getDate()
+      );
+      const endDayAnchor = new Date(
+        endDate.getFullYear(),
+        endDate.getMonth(),
+        endDate.getDate()
+      );
+
+      while (dayAnchor <= endDayAnchor) {
+        const y = dayAnchor.getFullYear();
+        const m = dayAnchor.getMonth();
+        const day = dayAnchor.getDate();
         for (let k = 0; k < 48; k++) {
-          const slotStart = k * 1800;
-          const slotEnd = (k + 1) * 1800;
-          const overlapStart = Math.max(intStart, slotStart);
-          const overlapEnd = Math.min(intEnd, slotEnd);
+          const slotH = Math.floor(k / 2);
+          const slotM = (k % 2) * 30;
+          const winStart = new Date(y, m, day, slotH, slotM, 0, 0).getTime();
+          const winEnd = new Date(y, m, day, slotH, slotM + 30, 0, 0).getTime();
+          const overlapStart = Math.max(startMs, winStart);
+          const overlapEnd = Math.min(endMs, winEnd);
           if (overlapEnd > overlapStart) {
-            slotSeconds[k] += overlapEnd - overlapStart;
+            slotSeconds[k] += (overlapEnd - overlapStart) / 1000;
           }
         }
+        dayAnchor.setDate(dayAnchor.getDate() + 1);
       }
     });
 
@@ -109,11 +121,13 @@ export function generateCoreFocusInsights(
   // -------------------------------------------------------------
   const sessionPool = allSessions && allSessions.length > 0 ? allSessions : sessions;
   if (sessions.length >= 3) {
-    // Group all sessions by date key
+    // Group all sessions by effective local date key
     const sessionsByDate = new Map<string, CompletedSession[]>();
     sessionPool.forEach((s) => {
       if (!s.completedAt) return;
-      const key = toDateKey(s.completedAt);
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const key = toDateKey(effectiveDate);
       const list = sessionsByDate.get(key) || [];
       list.push(s);
       sessionsByDate.set(key, list);
@@ -232,10 +246,10 @@ export function generateCoreFocusInsights(
     const weekdayDates: Set<string>[] = Array.from({ length: 7 }, () => new Set<string>());
 
     sessions.forEach((s) => {
-      const d = new Date(s.completedAt);
-      if (isNaN(d.getTime())) return;
       const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
       if (dur <= 0) return;
+      const d = getEffectiveSessionDate(s.completedAt, dur);
+      if (!d) return;
       const dayIdx = d.getDay();
       weekdaySeconds[dayIdx] += dur;
       weekdayDates[dayIdx].add(toDateKey(d));
@@ -398,7 +412,9 @@ export function generateCoreFocusInsights(
       if (!s.completedAt || s.durationSeconds <= 0) return;
       const validTagId = resolveValidTagId(s.tagId);
       if (!validTagId) return;
-      const key = toDateKey(s.completedAt);
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const key = toDateKey(effectiveDate);
       const set = dayTagsMap.get(key) || new Set<string>();
       set.add(validTagId);
       dayTagsMap.set(key, set);

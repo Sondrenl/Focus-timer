@@ -1,8 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuthProfile } from '../context/AuthProfileContext';
 import { isProduction } from '../utils/environment';
 import { toDateKey } from '../utils/dates';
+import { isSampleSessionId } from '../services/repository/SessionRepository';
+import { useTodayKey } from './useTodayKey';
 import {
   generateAllPeriodInsights,
   selectTieredInsight,
@@ -58,7 +60,20 @@ export function useStatistics() {
     };
   });
 
-  const todayKey = toDateKey(new Date());
+  const todayKey = useTodayKey();
+  const prevTodayKeyRef = useRef(todayKey);
+
+  // If the user is viewing the current day/week/month/year when local midnight passes,
+  // automatically advance referenceDate so stats roll over live overnight.
+  useEffect(() => {
+    const prevTodayKey = prevTodayKeyRef.current;
+    if (prevTodayKey === todayKey) return;
+    prevTodayKeyRef.current = todayKey;
+
+    if (checkIsCurrentPeriod(periodType, referenceDate, prevTodayKey)) {
+      setReferenceDate(new Date());
+    }
+  }, [todayKey, periodType, referenceDate]);
 
   const goToPrev = () => {
     setReferenceDate((prev) => getAdjacentReferenceDate(prev, periodType, 'prev'));
@@ -102,12 +117,20 @@ export function useStatistics() {
 
     const tagDistribution = computeTagDistribution(filteredSessions, tags, totalFocusSeconds);
 
+    const dayOverlapCandidates =
+      periodType === 'day'
+        ? sessions.filter(
+            (s) => s.sessionType === 'WORK' && (!shouldExcludeSample || !isSampleSessionId(s.id))
+          )
+        : undefined;
+
     const activityBars = computeActivityBars(
       filteredSessions,
       periodType,
       referenceDate,
       startDate,
-      sanitizedCustomRange
+      sanitizedCustomRange,
+      dayOverlapCandidates
     );
 
     const productiveMetric = computeProductiveMetric(

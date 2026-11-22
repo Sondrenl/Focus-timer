@@ -21,6 +21,7 @@ interface UseTimerNewDayResetParams {
   sessions: CompletedSession[];
   convexSessions: unknown;
   isConvexConfigured: boolean;
+  hasResolvedRemoteTimer: boolean;
   isAuthenticatedRef: React.MutableRefObject<boolean>;
   hasResolvedRemoteTimerRef: React.MutableRefObject<boolean>;
   remoteTimerRef: React.MutableRefObject<any>;
@@ -36,6 +37,7 @@ interface UseTimerNewDayResetParams {
   settingsRef: React.MutableRefObject<UserSettings>;
   profileRef: React.MutableRefObject<{ dailyGoalMinutes: number }>;
   coffeeCupsRef: React.MutableRefObject<CoffeeCup[]>;
+  getServerAlignedNowMs: () => number;
   setSessionType: React.Dispatch<React.SetStateAction<SessionType>>;
   setStatus: React.Dispatch<React.SetStateAction<TimerStatus>>;
   setCurrentCycle: React.Dispatch<React.SetStateAction<number>>;
@@ -54,6 +56,7 @@ export function useTimerNewDayReset({
   sessions,
   convexSessions,
   isConvexConfigured,
+  hasResolvedRemoteTimer,
   isAuthenticatedRef,
   hasResolvedRemoteTimerRef,
   remoteTimerRef,
@@ -69,6 +72,7 @@ export function useTimerNewDayReset({
   settingsRef,
   profileRef,
   coffeeCupsRef,
+  getServerAlignedNowMs,
   setSessionType,
   setStatus,
   setCurrentCycle,
@@ -84,7 +88,7 @@ export function useTimerNewDayReset({
     if (
       isConvexConfigured &&
       isAuthenticatedRef.current &&
-      (!hasResolvedRemoteTimerRef.current || convexSessions === undefined)
+      (!hasResolvedRemoteTimer || !hasResolvedRemoteTimerRef.current || convexSessions === undefined)
     ) {
       return false;
     }
@@ -97,10 +101,22 @@ export function useTimerNewDayReset({
     const now = new Date();
     const currentDayKey = getLogicalDayKey(now);
     if (latestRemote && getLogicalDayKey(latestRemote.updatedAtMs) === currentDayKey) {
-      if (getLastResetDayKey() !== currentDayKey) {
-        setLastResetDayKey(currentDayKey);
+      const remoteIsAlreadyFresh =
+        latestRemote.status === 'IDLE' &&
+        latestRemote.sessionType === 'WORK' &&
+        latestRemote.currentCycle === 1;
+      if (remoteIsAlreadyFresh) {
+        if (getLastResetDayKey() !== currentDayKey) {
+          setLastResetDayKey(currentDayKey);
+        }
+        return false;
       }
-      return false;
+      // If another device had activity within the last hour (e.g., active all-nighter past 04:00
+      // or recent break/cycle transition), defer reset WITHOUT stamping currentDayKey so a later
+      // >1h sleep still resets to WORK Cycle 1.
+      if (now.getTime() - latestRemote.updatedAtMs < INACTIVITY_THRESHOLD_MS) {
+        return false;
+      }
     }
 
     if (statusRef.current === 'PAUSED' || latestRemote?.status === 'PAUSED') {
@@ -143,7 +159,7 @@ export function useTimerNewDayReset({
       }
 
       const defaultDuration = getDurationForType('WORK');
-      const nowMs = Date.now();
+      const nowMs = getServerAlignedNowMs();
       const prevUpdatedAtMs = Math.max(
         localUpdatedAtRef.current,
         latestRemote?.updatedAtMs ?? 0
@@ -181,7 +197,7 @@ export function useTimerNewDayReset({
         activeTagId: activeTagIdRef.current,
         deviceId: DEVICE_ID,
         tabId: TAB_ID,
-        lastActiveAtMs: nowMs,
+        lastActiveAtMs: Date.now(),
         wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
       };
       saveTimerState(resetState);
@@ -213,6 +229,7 @@ export function useTimerNewDayReset({
     sessions,
     convexSessions,
     isConvexConfigured,
+    hasResolvedRemoteTimer,
     isAuthenticatedRef,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,
@@ -228,6 +245,7 @@ export function useTimerNewDayReset({
     settingsRef,
     profileRef,
     coffeeCupsRef,
+    getServerAlignedNowMs,
     setSessionType,
     setStatus,
     setCurrentCycle,

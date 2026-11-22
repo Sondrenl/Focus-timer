@@ -11,6 +11,8 @@ import { formatDurationHoursMins } from '../../utils/formatters';
 import { toDateKey } from '../../utils/dates';
 import { isProduction } from '../../utils/environment';
 import { isSampleSessionId } from '../../services/repository/SessionRepository';
+import { useTodayKey } from '../../hooks/useTodayKey';
+import { getEffectiveSessionDate } from '../../utils/stats/focusStats';
 
 const AVATAR_EMOJI_OPTIONS = [
   '🍅', '⚡', '☕', '🚀', '🧠', '🔥', '🎯', '📚', '💻', '🧘', '🌱', '⭐',
@@ -40,6 +42,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
   const [editName, setEditName] = useState(displayName);
   const [editEmoji, setEditEmoji] = useState(profile.avatarEmoji);
   const [editGoalInput, setEditGoalInput] = useState(String(dailyGoalMinutes));
+  const todayStr = useTodayKey();
 
   const openEditModal = () => {
     setEditName(profile.displayName || 'Focus Practitioner');
@@ -74,10 +77,12 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
     0
   );
 
-  // Today's Focus Time in minutes (local calendar date)
-  const todayStr = toDateKey(new Date());
+  // Today's Focus Time in minutes (local calendar date, matching Statistics exact-midnight attribution)
   const todayFocusSeconds = workSessions
-    .filter((s) => toDateKey(s.completedAt) === todayStr)
+    .filter((s) => {
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      return effectiveDate ? toDateKey(effectiveDate) === todayStr : false;
+    })
     .reduce((acc, curr) => acc + Math.max(0, curr.durationSeconds), 0);
   const todayFocusMinutes = Math.floor(todayFocusSeconds / 60);
   const goalProgressPercent = Math.min(

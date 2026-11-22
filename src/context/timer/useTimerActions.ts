@@ -12,6 +12,8 @@ import {
   getLogicalDayKey,
   getLastResetDayKey,
   setLastResetDayKey,
+  NEW_DAY_HOUR_CUTOFF,
+  INACTIVITY_THRESHOLD_MS,
 } from '../../utils/newDayCheck';
 import { ResetTimerOptions } from './useTimerCloudSync';
 import { telemetryTracker } from '../services';
@@ -29,6 +31,7 @@ interface UseTimerActionsParams {
   settingsRef: React.MutableRefObject<UserSettings>;
   profileRef: React.MutableRefObject<{ dailyGoalMinutes: number }>;
   coffeeCupsRef: React.MutableRefObject<CoffeeCup[]>;
+  getServerAlignedNowMs: () => number;
   setSessionType: React.Dispatch<React.SetStateAction<SessionType>>;
   setStatus: React.Dispatch<React.SetStateAction<TimerStatus>>;
   setCurrentCycle: React.Dispatch<React.SetStateAction<number>>;
@@ -41,6 +44,7 @@ interface UseTimerActionsParams {
     sessionType: SessionType;
     durationSeconds: number;
     completedAt: string;
+    timerRunId?: string | null;
   }) => Promise<unknown>;
   sound: SoundService;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
@@ -69,6 +73,7 @@ export function useTimerActions({
   settingsRef,
   profileRef,
   coffeeCupsRef,
+  getServerAlignedNowMs,
   setSessionType,
   setStatus,
   setCurrentCycle,
@@ -94,23 +99,36 @@ export function useTimerActions({
 
       const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, currentRemaining));
 
-      wakeLockService.release();
+      const { nextType, nextCycle, nextDuration, shouldAutoStart } = computeNextInterval(
+        completedType,
+        currentCycleVal,
+        settingsRef.current
+      );
+
+      // Keep Wake Lock alive across auto-started transitions (status remains RUNNING so useTimerWorker's effect won't re-acquire)
+      if (!shouldAutoStart || settingsRef.current.keepAwake === false) {
+        wakeLockService.release();
+      } else {
+        wakeLockService.acquire();
+      }
 
       if (!silent) {
         dispatchCompletionAlert(completedType, currentRunId);
         triggerCompletionConfetti();
       }
 
+      const now = getServerAlignedNowMs();
       const completedTimestampMs =
-        currentTargetEnd !== null && currentTargetEnd < Date.now()
+        currentTargetEnd !== null && currentTargetEnd < now
           ? currentTargetEnd
-          : Date.now();
+          : now;
 
       void recordSession({
         tagId: activeTagIdRef.current,
         sessionType: completedType,
         durationSeconds: elapsedSeconds,
         completedAt: new Date(completedTimestampMs).toISOString(),
+        timerRunId: currentRunId || undefined,
       });
 
       void telemetryTracker.onSessionFinalized({
@@ -128,31 +146,27 @@ export function useTimerActions({
         targetEndTimeMs: currentTargetEnd,
       });
 
-      const completionDayKey = getLogicalDayKey(new Date());
-      if (getLastResetDayKey() !== completionDayKey) {
-        setLastResetDayKey(completionDayKey);
+      // Only stamp the reset key on first-ever completion after 04:00 AM; never overwrite an
+      // older logical day's key during an all-nighter carryover past 04:00 AM so post-all-nighter
+      // sleep (>1h) still triggers a clean reset to WORK Cycle 1.
+      const wallNow = new Date();
+      if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
+        setLastResetDayKey(getLogicalDayKey(wallNow));
       }
 
-      const { nextType, nextCycle, nextDuration, shouldAutoStart } = computeNextInterval(
-        completedType,
-        currentCycleVal,
-        settingsRef.current
-      );
-
-      const now = Date.now();
+      const nextTargetEnd = shouldAutoStart ? now + nextDuration * 1000 : null;
       sessionTypeRef.current = nextType;
       currentCycleRef.current = nextCycle;
       totalSecondsRef.current = nextDuration;
-      targetEndTimeRef.current = shouldAutoStart ? now + nextDuration * 1000 : null;
+      targetEndTimeRef.current = nextTargetEnd;
 
       setSessionType(nextType);
       setCurrentCycle(nextCycle);
       setTotalSeconds(nextDuration);
-      setTargetEndTime(shouldAutoStart ? now + nextDuration * 1000 : null);
+      setTargetEndTime(nextTargetEnd);
 
-      if (shouldAutoStart) {
-        const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        const nextTargetEnd = now + nextDuration * 1000;
+      if (shouldAutoStart && nextTargetEnd !== null) {
+        const newRunId = `run-${now}-${Math.random().toString(36).substring(2, 7)}`;
         timerRunIdRef.current = newRunId;
         statusRef.current = 'RUNNING';
         remainingSecondsRef.current = nextDuration;
@@ -221,6 +235,8 @@ export function useTimerActions({
       settingsRef,
       profileRef,
       coffeeCupsRef,
+      statusRef,
+      getServerAlignedNowMs,
       setSessionType,
       setCurrentCycle,
       setTotalSeconds,
@@ -259,9 +275,27 @@ export function useTimerActions({
       targetEndTimeMs: staleTargetEnd,
     });
 
-    const defaultDuration = getDurationForType(staleType);
+    const wallNowMs = Date.now();
+    const staleAnchorMs = staleTargetEnd ?? localUpdatedAtRef.current;
+    const isFromPreviousDay =
+      staleAnchorMs > 0 &&
+      getLogicalDayKey(new Date(staleAnchorMs)) !== getLogicalDayKey(new Date(wallNowMs)) &&
+      wallNowMs - staleAnchorMs >= INACTIVITY_THRESHOLD_MS;
+
+    const nextSessionType: SessionType = isFromPreviousDay ? 'WORK' : staleType;
+    const nextCycle = isFromPreviousDay ? 1 : staleCycle;
+    const defaultDuration = getDurationForType(nextSessionType);
     const prevUpdatedAtMs = localUpdatedAtRef.current;
-    const nowMs = Date.now();
+    const nowMs = getServerAlignedNowMs();
+
+    if (isFromPreviousDay) {
+      sessionTypeRef.current = 'WORK';
+      currentCycleRef.current = 1;
+      setSessionType('WORK');
+      setCurrentCycle(1);
+      setLastResetDayKey(getLogicalDayKey(new Date(wallNowMs)));
+    }
+
     statusRef.current = 'IDLE';
     targetEndTimeRef.current = null;
     timerRunIdRef.current = null;
@@ -276,12 +310,12 @@ export function useTimerActions({
 
     publishLocalTimerState(
       {
-        sessionType: staleType,
+        sessionType: nextSessionType,
         status: 'IDLE',
         remainingSeconds: defaultDuration,
         totalSeconds: defaultDuration,
         targetEndTime: null,
-        currentCycle: currentCycleRef.current,
+        currentCycle: nextCycle,
         activeTagId: activeTagIdRef.current,
         timerRunId: null,
         updatedAtMs: nowMs,
@@ -306,6 +340,9 @@ export function useTimerActions({
     coffeeCupsRef,
     statusRef,
     localUpdatedAtRef,
+    getServerAlignedNowMs,
+    setSessionType,
+    setCurrentCycle,
     setStatus,
     setTargetEndTime,
     setTotalSeconds,
@@ -323,12 +360,12 @@ export function useTimerActions({
     }
 
     const duration = remainingSecondsRef.current;
-    const now = Date.now();
+    const now = getServerAlignedNowMs();
     const calculatedTargetEnd = now + duration * 1000;
     const wasPaused = statusRef.current === 'PAUSED' && Boolean(timerRunIdRef.current);
     const runId = wasPaused
       ? timerRunIdRef.current!
-      : `run-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      : `run-${now}-${Math.random().toString(36).substring(2, 7)}`;
 
     targetEndTimeRef.current = calculatedTargetEnd;
     timerRunIdRef.current = runId;
@@ -358,8 +395,18 @@ export function useTimerActions({
       });
     }
 
-    const currentDayKey = getLogicalDayKey(new Date());
-    if (getLastResetDayKey() !== currentDayKey) {
+    // Stamp the logical day key when starting a fresh WORK Cycle 1 (or on first-ever start
+    // after 04:00 AM), but do NOT stamp when continuing an all-nighter break/later cycle past
+    // 04:00 AM so post-all-nighter sleep (>1h) still triggers a clean reset to WORK Cycle 1.
+    const wallNow = new Date();
+    const currentDayKey = getLogicalDayKey(wallNow);
+    const existingResetKey = getLastResetDayKey();
+    const isFreshWorkCycleOne =
+      !wasPaused && sessionTypeRef.current === 'WORK' && currentCycleRef.current === 1;
+    if (
+      existingResetKey !== currentDayKey &&
+      (isFreshWorkCycleOne || (existingResetKey === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF))
+    ) {
       setLastResetDayKey(currentDayKey);
     }
 
@@ -389,6 +436,7 @@ export function useTimerActions({
     activeTagIdRef,
     profileRef,
     coffeeCupsRef,
+    getServerAlignedNowMs,
     setTargetEndTime,
     setStatus,
     sound,
@@ -398,14 +446,23 @@ export function useTimerActions({
   const pause = useCallback(() => {
     if (statusRef.current !== 'RUNNING') return;
 
-    wakeLockService.release();
-
-    const now = Date.now();
+    const now = getServerAlignedNowMs();
     let currentRemaining = remainingSecondsRef.current;
     if (targetEndTimeRef.current !== null) {
       const diffMs = targetEndTimeRef.current - now;
-      currentRemaining = Math.max(1, Math.ceil(diffMs / 1000));
+      if (diffMs <= 0) {
+        remainingSecondsRef.current = 0;
+        setRemainingSeconds(0);
+        handleComplete(false);
+        return;
+      }
+      currentRemaining = Math.max(
+        1,
+        Math.min(totalSecondsRef.current, Math.ceil(diffMs / 1000))
+      );
     }
+
+    wakeLockService.release();
 
     targetEndTimeRef.current = null;
     statusRef.current = 'PAUSED';
@@ -444,6 +501,8 @@ export function useTimerActions({
     totalSecondsRef,
     currentCycleRef,
     timerRunIdRef,
+    getServerAlignedNowMs,
+    handleComplete,
     setTargetEndTime,
     setStatus,
     setRemainingSeconds,
@@ -453,12 +512,12 @@ export function useTimerActions({
   const reset = useCallback(() => {
     wakeLockService.release();
 
+    const nowMs = getServerAlignedNowMs();
     const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
     if (wasStarted) {
-      const now = Date.now();
       const currentRemaining =
         statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
-          ? Math.max(0, Math.ceil((targetEndTimeRef.current - now) / 1000))
+          ? Math.max(0, Math.min(totalSecondsRef.current, Math.ceil((targetEndTimeRef.current - nowMs) / 1000)))
           : remainingSecondsRef.current;
 
       void telemetryTracker.onSessionFinalized({
@@ -477,6 +536,11 @@ export function useTimerActions({
       });
     }
 
+    const wallNow = new Date();
+    if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
+      setLastResetDayKey(getLogicalDayKey(wallNow));
+    }
+
     const defaultDuration = getDurationForType(sessionTypeRef.current);
     targetEndTimeRef.current = null;
     timerRunIdRef.current = null;
@@ -489,7 +553,6 @@ export function useTimerActions({
     setRemainingSeconds(defaultDuration);
     setTotalSeconds(defaultDuration);
 
-    const nowMs = Date.now();
     publishLocalTimerState(
       {
         sessionType: sessionTypeRef.current,
@@ -516,6 +579,7 @@ export function useTimerActions({
     settingsRef,
     profileRef,
     coffeeCupsRef,
+    getServerAlignedNowMs,
     setTargetEndTime,
     setStatus,
     setRemainingSeconds,
@@ -533,12 +597,12 @@ export function useTimerActions({
     ) => {
       wakeLockService.release();
 
+      const nowMs = getServerAlignedNowMs();
       const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
       if (wasStarted) {
-        const now = Date.now();
         const currentRemaining =
           statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
-            ? Math.max(0, Math.ceil((targetEndTimeRef.current - now) / 1000))
+            ? Math.max(0, Math.min(totalSecondsRef.current, Math.ceil((targetEndTimeRef.current - nowMs) / 1000)))
             : remainingSecondsRef.current;
 
         void telemetryTracker.onSessionFinalized({
@@ -557,6 +621,13 @@ export function useTimerActions({
         });
       }
 
+      // Stamp the logical day key for first-time / post-clear users who manually navigate
+      // intervals so the 60s new-day check does not undo their Skip/Switch back to WORK Cycle 1.
+      const wallNow = new Date();
+      if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
+        setLastResetDayKey(getLogicalDayKey(wallNow));
+      }
+
       targetEndTimeRef.current = null;
       timerRunIdRef.current = null;
       sessionTypeRef.current = nextType;
@@ -572,7 +643,6 @@ export function useTimerActions({
       setTotalSeconds(nextDuration);
       setTargetEndTime(null);
 
-      const nowMs = Date.now();
       publishLocalTimerState(
         {
           sessionType: nextType,
@@ -600,6 +670,7 @@ export function useTimerActions({
       settingsRef,
       profileRef,
       coffeeCupsRef,
+      getServerAlignedNowMs,
       setSessionType,
       setCurrentCycle,
       setStatus,

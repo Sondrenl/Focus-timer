@@ -4,6 +4,7 @@ import { useData } from '../../context/DataContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
 import { toDateKey } from '../../utils/dates';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
+import { useTodayKey } from '../../hooks/useTodayKey';
 
 export type CoffeeShortcutAction = 'add' | 'remove' | null;
 
@@ -62,7 +63,7 @@ export const CoffeeWorkspace: React.FC = () => {
     }
   }, [activeTags, selectedTagId, activeTagId]);
 
-  const todayKey = toDateKey(new Date());
+  const todayKey = useTodayKey();
 
   // Filter cups for today and sort chronologically ascending
   const cupsForDate = useMemo(() => {
@@ -104,8 +105,8 @@ export const CoffeeWorkspace: React.FC = () => {
   }, [cupsForDate, tags]);
 
   const handleAdd = useCallback(async () => {
-    await addCoffeeCup(selectedTagId, todayKey);
-  }, [addCoffeeCup, selectedTagId, todayKey]);
+    await addCoffeeCup(selectedTagId, toDateKey(new Date()));
+  }, [addCoffeeCup, selectedTagId]);
 
   // Find cups logged for today matching the currently selected tag (or untagged if selectedTagId is null)
   const cupsOfSelectedTag = useMemo(() => {

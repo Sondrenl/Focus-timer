@@ -382,7 +382,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(active?.status).toBe("RUNNING");
     expect(active?.timerRunId).toBe("run-work-2");
 
-    // Simulate server onTimerCompleted finishing SHORT_BREAK 45s ago (auto-advanced to WORK cycle 2 IDLE)
+    // Simulate an IDLE state WITHOUT lastCompletedTimerRunId (e.g., user manually skipped/reset)
     const fortyFiveSecondsAgo = Date.now() - 45_000;
     await t.run(async (ctx) => {
       const existing = await ctx.db
@@ -398,7 +398,34 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
           targetEndTime: undefined,
           currentCycle: 2,
           timerRunId: undefined,
+          lastCompletedTimerRunId: undefined,
           updatedAtMs: fortyFiveSecondsAgo,
+        });
+      }
+    });
+
+    // Ghost auto-start without matching lastCompletedTimerRunId MUST be rejected
+    await asUser.mutation(api.timer.complete, {
+      completedTimerRunId: "break-run-1",
+      nextSessionType: "WORK",
+      nextDurationSeconds: 1500,
+      nextCurrentCycle: 2,
+      autoStartNext: true,
+      nextTimerRunId: "ghost-auto-work-run",
+    });
+
+    active = await asUser.query(api.timer.getActive, {});
+    expect(active?.status).toBe("IDLE");
+
+    // Now simulate server onTimerCompleted finishing SHORT_BREAK 45s ago (records lastCompletedTimerRunId)
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          lastCompletedTimerRunId: "break-run-1",
         });
       }
     });
@@ -416,7 +443,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     active = await asUser.query(api.timer.getActive, {});
     expect(active?.status).toBe("IDLE");
 
-    // Matching Case 2 autoStartNext within 120s transitions WORK cycle 2 to RUNNING
+    // Matching Case 2 autoStartNext within 120s with matching lastCompletedTimerRunId transitions WORK cycle 2 to RUNNING
     await asUser.mutation(api.timer.complete, {
       completedTimerRunId: "break-run-1",
       nextSessionType: "WORK",

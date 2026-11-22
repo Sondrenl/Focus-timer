@@ -4,6 +4,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Download, Upload, Check, AlertTriangle, Sparkles } from 'lucide-react';
 import { BackupData } from '../../types/user';
+import { toDateKey } from '../../utils/dates';
 
 interface DataManagementCardProps {
   exportBackup: () => BackupData;
@@ -64,7 +65,7 @@ export const DataManagementCard: React.FC<DataManagementCardProps> = ({
     const jsonStr = JSON.stringify(backup, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const dateStr = toDateKey(new Date());
 
     const a = document.createElement('a');
     a.href = url;

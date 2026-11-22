@@ -65,18 +65,19 @@ export const upsertAttempt = mutation({
       const existingIsFinalized = existing.status !== "in_progress";
       const incomingIsInProgress = normalized.status === "in_progress";
       const incomingIsOlder = normalized.updatedAtMs < existing.updatedAtMs;
-      const lockedByServerFinalization =
-        existingIsFinalized &&
-        existing.source === "server_scheduled" &&
-        normalized.source === "client";
-      const completedProtected =
-        existing.status === "completed" && normalized.status !== "completed";
-      const staleCannotOverwriteFinalized =
-        existingIsFinalized && normalized.status === "abandoned_stale";
       const upgradesStaleToExplicit =
         existing.status === "abandoned_stale" &&
         !incomingIsInProgress &&
         normalized.status !== "abandoned_stale";
+      const lockedByServerFinalization =
+        existingIsFinalized &&
+        existing.source === "server_scheduled" &&
+        normalized.source === "client" &&
+        !upgradesStaleToExplicit;
+      const completedProtected =
+        existing.status === "completed" && normalized.status !== "completed";
+      const staleCannotOverwriteFinalized =
+        existingIsFinalized && normalized.status === "abandoned_stale";
 
       if (
         lockedByServerFinalization ||

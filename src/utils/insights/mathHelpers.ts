@@ -1,5 +1,6 @@
 import { Tag } from '../../types/tag';
 import { toDateKey } from '../dates';
+import { getEffectiveSessionDate } from '../stats/focusStats';
 import { DailyFocusStat, GenerateInsightsParams, InsightContext } from './types';
 
 /**
@@ -29,17 +30,17 @@ export function buildInsightContext(params: GenerateInsightsParams): InsightCont
     return tagMap.get(validId)!.name;
   };
 
-  // Group data strictly by date (YYYY-MM-DD)
+  // Group data strictly by effective local date (YYYY-MM-DD), matching Statistics exact-midnight attribution
   const dateFocusMap = new Map<string, DailyFocusStat>();
   const dateCoffeeMap = new Map<string, number>();
 
   sessions.forEach((s) => {
     if (!s.completedAt) return;
-    const d = new Date(s.completedAt);
-    if (isNaN(d.getTime())) return;
     const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
     if (dur <= 0) return;
-    const key = toDateKey(s.completedAt);
+    const effectiveDate = getEffectiveSessionDate(s.completedAt, dur);
+    if (!effectiveDate) return;
+    const key = toDateKey(effectiveDate);
     const curr = dateFocusMap.get(key) || { seconds: 0, count: 0 };
     curr.seconds += dur;
     curr.count += 1;

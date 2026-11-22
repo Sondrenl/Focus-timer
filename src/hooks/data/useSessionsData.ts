@@ -70,23 +70,32 @@ export function useSessionsData({
     const pendingAdds = Array.from(pendingAddsRef.current.values());
 
     const serverIds = new Set(serverSessions.map((s) => s.id));
+    const serverRunIds = new Set(
+      serverSessions.map((s) => s.timerRunId).filter((r): r is string => Boolean(r))
+    );
     const serverTimes = serverSessions.map((s) => ({
       sessionType: s.sessionType,
       completedAt: s.completedAt,
+      timerRunId: s.timerRunId ?? null,
       ms: new Date(s.completedAt).getTime(),
     }));
 
     const unconfirmedAdds = pendingAdds.filter((a) => {
       if (serverIds.has(a.id)) return false;
+      if (a.timerRunId && serverRunIds.has(a.timerRunId)) return false;
       const aMs = new Date(a.completedAt).getTime();
-      return !serverTimes.some(
-        (r) =>
+      return !serverTimes.some((r) => {
+        if (a.timerRunId && r.timerRunId) {
+          return a.timerRunId === r.timerRunId;
+        }
+        return (
           r.completedAt === a.completedAt ||
           (r.sessionType === a.sessionType &&
             !isNaN(aMs) &&
             !isNaN(r.ms) &&
             Math.abs(r.ms - aMs) <= 45000)
-      );
+        );
+      });
     });
 
     const sorted = [...serverSessions, ...unconfirmedAdds].sort(
@@ -101,7 +110,8 @@ export function useSessionsData({
             s.sessionType === sorted[i].sessionType &&
             s.durationSeconds === sorted[i].durationSeconds &&
             s.completedAt === sorted[i].completedAt &&
-            s.tagId === sorted[i].tagId
+            s.tagId === sorted[i].tagId &&
+            (s.timerRunId ?? null) === (sorted[i].timerRunId ?? null)
         )
       ) {
         return prev;
@@ -118,6 +128,9 @@ export function useSessionsData({
       setSessions((prev) => {
         const isDuplicate = prev.some((s) => {
           if (s.id === incomingSession.id) return true;
+          if (s.timerRunId && incomingSession.timerRunId) {
+            return s.timerRunId === incomingSession.timerRunId;
+          }
           if (s.sessionType !== incomingSession.sessionType) return false;
           const sMs = new Date(s.completedAt).getTime();
           return !isNaN(sMs) && !isNaN(incomingMs) && Math.abs(sMs - incomingMs) <= 5000;
@@ -148,6 +161,9 @@ export function useSessionsData({
       const targetMs = new Date(sessionData.completedAt).getTime();
       const existingDuplicate = existingAll.find((s) => {
         if (sessionData.id && s.id === sessionData.id) return true;
+        if (sessionData.timerRunId && s.timerRunId) {
+          return s.timerRunId === sessionData.timerRunId;
+        }
         if (s.sessionType !== sessionData.sessionType) return false;
         const sMs = new Date(s.completedAt).getTime();
         return !isNaN(sMs) && !isNaN(targetMs) && Math.abs(sMs - targetMs) <= 5000;
@@ -187,6 +203,7 @@ export function useSessionsData({
             sessionType: sessionData.sessionType,
             durationSeconds: sessionData.durationSeconds,
             completedAt: created.completedAt,
+            timerRunId: sessionData.timerRunId || undefined,
           })
           .then((serverSession) => {
             pendingAddsRef.current.delete(created.id);

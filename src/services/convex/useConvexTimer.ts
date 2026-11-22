@@ -15,6 +15,7 @@ export function useConvexTimer(isAuthenticated: boolean, isAuthReady: boolean = 
   const pauseTimerMutation = useMutation(api.timer.pause);
   const resetTimerMutation = useMutation(api.timer.reset);
   const completeTimerMutation = useMutation(api.timer.complete);
+  const updateTagTimerMutation = useMutation(api.timer.updateTag);
 
   const mutations = useMemo(
     () => ({
@@ -22,12 +23,14 @@ export function useConvexTimer(isAuthenticated: boolean, isAuthReady: boolean = 
       pauseTimer: pauseTimerMutation,
       resetTimer: resetTimerMutation,
       completeTimer: completeTimerMutation,
+      updateTag: updateTagTimerMutation,
     }),
     [
       startTimerMutation,
       pauseTimerMutation,
       resetTimerMutation,
       completeTimerMutation,
+      updateTagTimerMutation,
     ]
   );
 

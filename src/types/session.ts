@@ -14,4 +14,6 @@ export interface CompletedSession {
   durationSeconds: number;
   /** ISO timestamp string when session completed */
   completedAt: string;
+  /** Optional timer run identifier for exact deduplication across clock skew and short runs */
+  timerRunId?: string | null;
 }

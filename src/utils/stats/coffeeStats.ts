@@ -168,9 +168,9 @@ export function computeCoffeePeakMetric(
     }
 
     const sortedDates = Array.from(dayCupCounts.keys()).sort();
-    const earliestDate = new Date(`${sortedDates[0]}T00:00:00.000`);
-    const latestDate = new Date(`${sortedDates[sortedDates.length - 1]}T00:00:00.000`);
-    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const earliestDate = new Date(`${sortedDates[0]}T12:00:00`);
+    const latestDate = new Date(`${sortedDates[sortedDates.length - 1]}T12:00:00`);
+    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
     const effectiveEndDate = latestDate > todayDate ? latestDate : todayDate;
 
     const weekdayOccurrences = new Array(7).fill(0);
@@ -183,7 +183,7 @@ export function computeCoffeePeakMetric(
     }
 
     dayCupCounts.forEach((count, dKey) => {
-      const d = new Date(`${dKey}T00:00:00.000`);
+      const d = new Date(`${dKey}T12:00:00`);
       weekdayTotalCups[d.getDay()] += count;
     });
 
@@ -213,7 +213,7 @@ export function computeCoffeePeakMetric(
 
   if (periodType === 'week') {
     if (maxCups > 0) {
-      const d = new Date(`${maxDayKey}T00:00:00.000`);
+      const d = new Date(`${maxDayKey}T12:00:00`);
       return {
         title: 'Peak Coffee Day',
         value: WEEKDAY_NAMES[d.getDay()],
@@ -231,7 +231,7 @@ export function computeCoffeePeakMetric(
 
   if (periodType === 'month') {
     if (maxCups > 0) {
-      const d = new Date(`${maxDayKey}T00:00:00.000`);
+      const d = new Date(`${maxDayKey}T12:00:00`);
       return {
         title: 'Peak Coffee Day',
         value: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
@@ -250,7 +250,7 @@ export function computeCoffeePeakMetric(
   if (periodType === 'year') {
     const monthCupCounts = new Array(12).fill(0);
     filteredCoffee.forEach((c) => {
-      const m = new Date(`${c.date}T00:00:00.000`).getMonth();
+      const m = new Date(`${c.date}T12:00:00`).getMonth();
       monthCupCounts[m] += 1;
     });
     let maxMonthIdx = 0;
@@ -314,7 +314,7 @@ export function computeCoffeePeakMetric(
 
   // custom
   if (maxCups > 0) {
-    const d = new Date(`${maxDayKey}T00:00:00.000`);
+    const d = new Date(`${maxDayKey}T12:00:00`);
     return {
       title: 'Peak Coffee Day',
       value: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,

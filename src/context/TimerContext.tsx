@@ -125,6 +125,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   isDevicePushRegisteredRef.current = convexSync.devicePushStatus?.registered;
 
   const mountedAtMsRef = useRef<number>(Date.now());
+  const serverClockOffsetMsRef = useRef<number>(0);
+  const getServerAlignedNowMs = useCallback(
+    () => Date.now() + serverClockOffsetMsRef.current,
+    []
+  );
   const wasExpiredAtMountRef = useRef<boolean>(
     initialState.status === 'RUNNING' &&
       initialState.targetEndTime !== null &&
@@ -148,9 +153,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const {
     publishLocalTimerState,
+    publishTagUpdate,
     publishTimerCompletion,
     applyRemoteState,
     isInitialMountDoneRef,
+    hasResolvedRemoteTimer,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,
     isConvexConfigured,
@@ -169,7 +176,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localUpdatedAtRef,
     lastLocalActionWallMsRef,
     lastTickWallMsRef,
+    activeTagIdRef,
     prevActiveTagIdRef,
+    serverClockOffsetMsRef,
+    getServerAlignedNowMs,
     settingsRef,
     profileRef,
     coffeeCupsRef,
@@ -183,6 +193,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveTagId,
     getDurationForType,
     dispatchCompletionAlert,
+    triggerCompletionConfetti,
   });
 
   const {
@@ -205,6 +216,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     settingsRef,
     profileRef,
     coffeeCupsRef,
+    getServerAlignedNowMs,
     setSessionType,
     setStatus,
     setCurrentCycle,
@@ -241,7 +253,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           remoteTimerRef.current?.status !== 'PAUSED';
 
         if (canPublishRemote) {
-          const now = Date.now();
+          const now = getServerAlignedNowMs();
           publishLocalTimerState(
             {
               sessionType: sessionTypeRef.current,
@@ -255,7 +267,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               updatedAtMs: now,
             },
             false,
-            { onlyIfNotRunning: true }
+            { onlyIfIdle: true }
           );
         }
       }
@@ -267,6 +279,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     settings.longBreakDurationMinutes,
     status,
     getDurationForType,
+    getServerAlignedNowMs,
     publishLocalTimerState,
     isInitialMountDoneRef,
     hasResolvedRemoteTimerRef,
@@ -297,31 +310,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     }
 
-    const now = Date.now();
-    const currentRemaining =
-      statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
-        ? Math.max(1, Math.ceil((targetEndTimeRef.current - now) / 1000))
-        : remainingSecondsRef.current;
-
-    publishLocalTimerState(
-      {
-        sessionType: sessionTypeRef.current,
-        status: statusRef.current,
-        remainingSeconds: currentRemaining,
-        totalSeconds: totalSecondsRef.current,
-        targetEndTime: targetEndTimeRef.current,
-        currentCycle: currentCycleRef.current,
-        activeTagId,
-        timerRunId: timerRunIdRef.current,
-        updatedAtMs: now,
-      },
-      false,
-      statusRef.current === 'IDLE' ? { onlyIfNotRunning: true } : undefined
-    );
+    publishTagUpdate(activeTagId);
   }, [
     activeTagId,
     consumeSkipTagTelemetry,
-    publishLocalTimerState,
+    publishTagUpdate,
     isInitialMountDoneRef,
     hasResolvedRemoteTimerRef,
     isConvexConfigured,
@@ -440,6 +433,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localUpdatedAtRef,
     activeTagIdRef,
     lastTickWallMsRef,
+    getServerAlignedNowMs,
     handleCompleteRef,
     shouldDeferExpiredCompletion,
     onStaleExpiration: handleStaleExpiration,
@@ -460,7 +454,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         scope === 'factory-reset'
           ? Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60))
           : getDurationForType('WORK');
-      const nowMs = Date.now();
+      const nowMs = getServerAlignedNowMs();
       const resetTagId =
         scope === 'factory-reset' ? (DEFAULT_TAGS[0]?.id ?? null) : activeTagIdRef.current;
 
@@ -510,12 +504,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       unsubscribeState();
       unsubscribeReset();
     };
-  }, [getDurationForType, applyRemoteState, publishLocalTimerState]);
+  }, [getDurationForType, getServerAlignedNowMs, applyRemoteState, publishLocalTimerState]);
 
   useTimerNewDayReset({
     sessions,
     convexSessions: convexSync.convexSessions,
     isConvexConfigured,
+    hasResolvedRemoteTimer,
     isAuthenticatedRef,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,
@@ -531,6 +526,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     settingsRef,
     profileRef,
     coffeeCupsRef,
+    getServerAlignedNowMs,
     setSessionType,
     setStatus,
     setCurrentCycle,

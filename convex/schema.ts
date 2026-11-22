@@ -76,6 +76,9 @@ export default defineSchema({
     currentCycle: v.number(),
     tagId: v.optional(v.string()),
     timerRunId: v.optional(v.string()),
+    lastCompletedTimerRunId: v.optional(v.string()),
+    scheduleNonce: v.optional(v.string()),
+    serverAutoStartStreak: v.optional(v.number()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
     peerPresence: v.optional(
@@ -89,7 +92,9 @@ export default defineSchema({
         mobileLastSeenMs: v.optional(v.number()),
       })
     ),
-  }).index("by_user", ["userId"]),
+  })
+    .index("by_user", ["userId"])
+    .index("by_status_updated", ["status", "updatedAtMs"]),
 
   // 3. Completed Sessions: Historical log
   // Compound index on ["userId", "completedAt"] covers both userId-only queries and date-range queries
@@ -103,9 +108,11 @@ export default defineSchema({
     ),
     durationSeconds: v.number(),
     completedAt: v.string(), // Lexicographically sortable ISO-8601 string
+    timerRunId: v.optional(v.string()),
   })
     .index("by_user_completed", ["userId", "completedAt"])
-    .index("by_user_tag", ["userId", "tagId"]),
+    .index("by_user_tag", ["userId", "tagId"])
+    .index("by_user_run", ["userId", "timerRunId"]),
 
   // 4. Coffee Log: Individual timestamped cups
   // Compound index on ["userId", "date"] covers both userId-only queries and date queries

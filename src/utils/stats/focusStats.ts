@@ -133,9 +133,26 @@ export function computeActivityBars(
   periodType: TimePeriodType,
   referenceDate: Date,
   startDate: Date,
-  sanitizedCustomRange: CustomDateRange
+  sanitizedCustomRange: CustomDateRange,
+  overlapCandidates?: StatSession[]
 ): ActivityBarStat[] {
   if (periodType === 'day') {
+    const y = referenceDate.getFullYear();
+    const m = referenceDate.getMonth();
+    const d = referenceDate.getDate();
+    const dayStartMs = new Date(y, m, d, 0, 0, 0, 0).getTime();
+    const dayEndMs = new Date(y, m, d + 1, 0, 0, 0, 0).getTime();
+
+    const hourWindows = Array.from({ length: 24 }, (_, h) => {
+      const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
+      const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
+      return {
+        winStart,
+        winEnd,
+        maxSec: Math.max(0, Math.round((winEnd - winStart) / 1000)),
+      };
+    });
+
     const hoursArray = Array.from({ length: 24 }, (_, i) => ({
       hour: i,
       seconds: 0,
@@ -151,22 +168,32 @@ export function computeActivityBars(
       if (hoursArray[endH]) {
         hoursArray[endH].count += 1;
       }
+    });
+
+    const candidates = overlapCandidates ?? filteredSessions;
+    candidates.forEach((s) => {
+      if (s.sessionType !== 'WORK') return;
+      const endDate = new Date(s.completedAt);
+      if (Number.isNaN(endDate.getTime())) return;
+      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
       if (dur <= 0) return;
 
       const endMs = endDate.getTime();
       const startMs = endMs - dur * 1000;
-      const y = anchorDate.getFullYear();
-      const m = anchorDate.getMonth();
-      const d = anchorDate.getDate();
+      if (endMs <= dayStartMs || startMs >= dayEndMs) return;
 
-      // Strictly attribute overlap within the session day's local [00:00, 24:00] window
+      // Attribute exact overlap within the viewed day's local [00:00, 24:00] window,
+      // including pre-midnight minutes of sessions completing after midnight on Day D+1.
       for (let h = 0; h < 24; h++) {
-        const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
-        const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
+        const { winStart, winEnd, maxSec } = hourWindows[h];
+        if (maxSec <= 0) continue;
         const overlapStart = Math.max(startMs, winStart);
         const overlapEnd = Math.min(endMs, winEnd);
         if (overlapEnd > overlapStart) {
-          hoursArray[h].seconds += Math.round((overlapEnd - overlapStart) / 1000);
+          hoursArray[h].seconds = Math.min(
+            maxSec,
+            hoursArray[h].seconds + Math.round((overlapEnd - overlapStart) / 1000)
+          );
         }
       }
     });
@@ -393,7 +420,10 @@ export function computeProductiveMetric(
   referenceDate: Date,
   isCurrentPeriod: boolean
 ): ProductiveMetric {
-  if (filteredSessions.length === 0) {
+  const hasDayBarData =
+    periodType === 'day' && activityBars.some((bar) => bar.totalSeconds > 0);
+
+  if (filteredSessions.length === 0 && !hasDayBarData) {
     return {
       title: 'Peak Productivity',
       value: 'N/A',
@@ -403,52 +433,35 @@ export function computeProductiveMetric(
   }
 
   if (periodType === 'day') {
-    const hourCounts = new Array(24).fill(0);
-    filteredSessions.forEach((s) => {
-      const endDate = new Date(s.completedAt);
-      if (Number.isNaN(endDate.getTime())) return;
-      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
-      if (dur <= 0) return;
-
-      const anchorDate = getEffectiveSessionDate(s.completedAt, dur) ?? endDate;
-      const endMs = endDate.getTime();
-      const startMs = endMs - dur * 1000;
-      const y = anchorDate.getFullYear();
-      const m = anchorDate.getMonth();
-      const d = anchorDate.getDate();
-
-      // Strictly attribute overlap within the session day's local [00:00, 24:00] window
-      for (let h = 0; h < 24; h++) {
-        const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
-        const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
-        const overlapStart = Math.max(startMs, winStart);
-        const overlapEnd = Math.min(endMs, winEnd);
-        if (overlapEnd > overlapStart) {
-          hourCounts[h] = Math.min(
-            3600,
-            hourCounts[h] + Math.round((overlapEnd - overlapStart) / 1000)
+    const dayBars =
+      activityBars.length === 24
+        ? activityBars
+        : computeActivityBars(
+            filteredSessions,
+            'day',
+            referenceDate,
+            referenceDate,
+            { start: '', end: '' }
           );
-        }
-      }
-    });
+
     let maxH = 0;
     let maxSec = -1;
-    hourCounts.forEach((sec, h) => {
-      if (sec > maxSec) {
-        maxSec = sec;
-        maxH = h;
+    dayBars.forEach((bar, idx) => {
+      if (bar.totalSeconds > maxSec) {
+        maxSec = bar.totalSeconds;
+        maxH = idx;
       }
     });
-    const clampedSec = Math.min(3600, Math.max(0, maxSec));
+    const peakSec = Math.max(0, maxSec);
     const nextH = (maxH + 1) % 24;
     return {
       title: 'Peak Focus Hour',
       value:
-        maxSec > 0
+        peakSec > 0
           ? `${maxH.toString().padStart(2, '0')}:00 – ${nextH.toString().padStart(2, '0')}:00`
           : 'N/A',
-      subtext: maxSec > 0 ? `${formatDurationHoursMins(clampedSec)} focused` : 'No sessions logged',
-      hasData: maxSec > 0,
+      subtext: peakSec > 0 ? `${formatDurationHoursMins(peakSec)} focused` : 'No sessions logged',
+      hasData: peakSec > 0,
     };
   }
 

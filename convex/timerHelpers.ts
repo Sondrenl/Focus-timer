@@ -27,17 +27,26 @@ export function assertValidDurationSeconds(value: number, fieldName = "durationS
   if (!Number.isFinite(value) || value < 1 || value > 86400) {
     throw new Error(`${fieldName} must be between 1 and 86400.`);
   }
+  if (!Number.isInteger(value)) {
+    throw new Error(`${fieldName} must be an integer.`);
+  }
 }
 
 export function assertValidRemainingSeconds(value: number, fieldName = "remainingSeconds"): void {
   if (!Number.isFinite(value) || value < 0 || value > 86400) {
     throw new Error(`${fieldName} must be between 0 and 86400.`);
   }
+  if (!Number.isInteger(value)) {
+    throw new Error(`${fieldName} must be an integer.`);
+  }
 }
 
 export function assertValidCycle(value: number, fieldName = "currentCycle"): void {
   if (!Number.isFinite(value) || value < 1 || value > 100) {
     throw new Error(`${fieldName} must be between 1 and 100.`);
+  }
+  if (!Number.isInteger(value)) {
+    throw new Error(`${fieldName} must be an integer.`);
   }
 }
 
@@ -73,6 +82,10 @@ export function assertValidTagId(
   }
 }
 
+export function generateScheduleNonce(nowMs: number): string {
+  return `sched-${nowMs}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 export async function recordCompletedSessionIfNotDuplicate(
   ctx: MutationCtx,
   params: {
@@ -81,6 +94,7 @@ export async function recordCompletedSessionIfNotDuplicate(
     sessionType: TimerSessionType;
     durationSeconds: number;
     completedAtMs: number;
+    timerRunId?: string | null;
   }
 ): Promise<{
   id: Id<"sessions">;
@@ -88,9 +102,36 @@ export async function recordCompletedSessionIfNotDuplicate(
   sessionType: TimerSessionType;
   durationSeconds: number;
   completedAt: string;
+  timerRunId: string | null;
   wasDuplicate: boolean;
 }> {
+  const cleanTimerRunId = params.timerRunId || undefined;
   const completedAtIso = new Date(params.completedAtMs).toISOString();
+
+  // 1. Primary exact deduplication by (userId, timerRunId) — immune to clock skew and safe for rapid short sessions
+  if (cleanTimerRunId) {
+    const exactMatch = await ctx.db
+      .query("sessions")
+      .withIndex("by_user_run", (q) =>
+        q.eq("userId", params.userId).eq("timerRunId", cleanTimerRunId)
+      )
+      .first();
+
+    if (exactMatch) {
+      return {
+        id: exactMatch._id,
+        tagId: exactMatch.tagId ?? null,
+        sessionType: exactMatch.sessionType,
+        durationSeconds: exactMatch.durationSeconds,
+        completedAt: exactMatch.completedAt,
+        timerRunId: exactMatch.timerRunId ?? null,
+        wasDuplicate: true,
+      };
+    }
+  }
+
+  // 2. Fallback window deduplication ONLY when matching against legacy run-less records
+  //    (or when caller didn't supply a timerRunId). Two distinct timerRunIds never collide.
   const recent = await ctx.db
     .query("sessions")
     .withIndex("by_user_completed", (q) =>
@@ -101,19 +142,26 @@ export async function recordCompletedSessionIfNotDuplicate(
     )
     .take(50);
 
-  const duplicate = recent.find(
-    (s) =>
-      s.sessionType === params.sessionType &&
-      Math.abs(Date.parse(s.completedAt) - params.completedAtMs) <= 45000
-  );
+  const duplicate = recent.find((s) => {
+    if (s.sessionType !== params.sessionType) return false;
+    if (cleanTimerRunId && s.timerRunId && s.timerRunId !== cleanTimerRunId) {
+      return false;
+    }
+    return Math.abs(Date.parse(s.completedAt) - params.completedAtMs) <= 45000;
+  });
 
   if (duplicate) {
+    // Backfill timerRunId onto an existing run-less duplicate so subsequent retries hit the exact index
+    if (cleanTimerRunId && !duplicate.timerRunId) {
+      await ctx.db.patch(duplicate._id, { timerRunId: cleanTimerRunId });
+    }
     return {
       id: duplicate._id,
       tagId: duplicate.tagId ?? null,
       sessionType: duplicate.sessionType,
       durationSeconds: duplicate.durationSeconds,
       completedAt: duplicate.completedAt,
+      timerRunId: cleanTimerRunId ?? duplicate.timerRunId ?? null,
       wasDuplicate: true,
     };
   }
@@ -124,6 +172,7 @@ export async function recordCompletedSessionIfNotDuplicate(
     sessionType: params.sessionType,
     durationSeconds: params.durationSeconds,
     completedAt: completedAtIso,
+    timerRunId: cleanTimerRunId,
   });
 
   return {
@@ -132,6 +181,7 @@ export async function recordCompletedSessionIfNotDuplicate(
     sessionType: params.sessionType,
     durationSeconds: params.durationSeconds,
     completedAt: completedAtIso,
+    timerRunId: cleanTimerRunId ?? null,
     wasDuplicate: false,
   };
 }
@@ -185,6 +235,7 @@ export function computeServerNextInterval(
   nextType: TimerSessionType;
   nextCycle: number;
   nextDurationSec: number;
+  shouldAutoStart: boolean;
 } {
   const settings = userSettings ?? DEFAULT_SETTINGS;
   const interval = Math.max(1, settings.longBreakInterval || 4);
@@ -215,6 +266,10 @@ export function computeServerNextInterval(
       ? settings.shortBreakDurationMinutes
       : settings.longBreakDurationMinutes;
   const nextDurationSec = Math.max(1, Math.round(nextMinutes * 60));
+  const shouldAutoStart =
+    nextType === "WORK"
+      ? Boolean(settings.autoStartPomodoros)
+      : Boolean(settings.autoStartBreaks);
 
-  return { nextType, nextCycle, nextDurationSec };
+  return { nextType, nextCycle, nextDurationSec, shouldAutoStart };
 }
