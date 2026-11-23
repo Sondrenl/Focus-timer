@@ -1,7 +1,5 @@
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 import { SessionType, TimerStatus, RemoteTimerState } from '../../types/timer';
-import { UserSettings } from '../../types/settings';
-import { CoffeeCup } from '../../types/coffee';
 import { SoundService } from '../../services/audio/SoundService';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import {
@@ -15,37 +13,20 @@ import {
   NEW_DAY_HOUR_CUTOFF,
   INACTIVITY_THRESHOLD_MS,
 } from '../../utils/newDayCheck';
-import { ResetTimerOptions } from './useTimerCloudSync';
+import {
+  CompletedSessionFallback,
+  ResetTimerOptions,
+  TimerSharedRefs,
+  TimerSnapshot,
+} from './useTimerCloudSync';
 import { telemetryTracker } from '../services';
 
 interface UseTimerActionsParams {
-  sessionTypeRef: React.MutableRefObject<SessionType>;
-  statusRef: React.MutableRefObject<TimerStatus>;
-  currentCycleRef: React.MutableRefObject<number>;
-  totalSecondsRef: React.MutableRefObject<number>;
-  remainingSecondsRef: React.MutableRefObject<number>;
-  targetEndTimeRef: React.MutableRefObject<number | null>;
-  timerRunIdRef: React.MutableRefObject<string | null>;
-  localUpdatedAtRef: React.MutableRefObject<number>;
-  activeTagIdRef: React.MutableRefObject<string | null>;
-  settingsRef: React.MutableRefObject<UserSettings>;
-  profileRef: React.MutableRefObject<{ dailyGoalMinutes: number }>;
-  coffeeCupsRef: React.MutableRefObject<CoffeeCup[]>;
+  refs: TimerSharedRefs;
   getServerAlignedNowMs: () => number;
-  setSessionType: React.Dispatch<React.SetStateAction<SessionType>>;
-  setStatus: React.Dispatch<React.SetStateAction<TimerStatus>>;
-  setCurrentCycle: React.Dispatch<React.SetStateAction<number>>;
-  setTotalSeconds: React.Dispatch<React.SetStateAction<number>>;
-  setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
-  setTargetEndTime: React.Dispatch<React.SetStateAction<number | null>>;
+  commitTimerSnapshot: (snapshot: TimerSnapshot) => void;
+  setRemainingSeconds: (sec: number) => void;
   getDurationForType: (type: SessionType) => number;
-  recordSession: (session: {
-    tagId: string | null;
-    sessionType: SessionType;
-    durationSeconds: number;
-    completedAt: string;
-    timerRunId?: string | null;
-  }) => Promise<unknown>;
   sound: SoundService;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
   triggerCompletionConfetti: () => void;
@@ -57,36 +38,15 @@ interface UseTimerActionsParams {
   publishTimerCompletion: (
     nextState: RemoteTimerState,
     completedTimerRunId: string | null,
-    completedSessionFallback?: {
-      tagId: string | null;
-      sessionType: SessionType;
-      durationSeconds: number;
-      completedAt: string;
-      timerRunId?: string | null;
-    }
+    completedSessionFallback?: CompletedSessionFallback
   ) => void;
 }
 
 export function useTimerActions({
-  sessionTypeRef,
-  statusRef,
-  currentCycleRef,
-  totalSecondsRef,
-  remainingSecondsRef,
-  targetEndTimeRef,
-  timerRunIdRef,
-  localUpdatedAtRef,
-  activeTagIdRef,
-  settingsRef,
-  profileRef,
-  coffeeCupsRef,
+  refs,
   getServerAlignedNowMs,
-  setSessionType,
-  setStatus,
-  setCurrentCycle,
-  setTotalSeconds,
+  commitTimerSnapshot,
   setRemainingSeconds,
-  setTargetEndTime,
   getDurationForType,
   sound,
   dispatchCompletionAlert,
@@ -94,25 +54,62 @@ export function useTimerActions({
   publishLocalTimerState,
   publishTimerCompletion,
 }: UseTimerActionsParams) {
+  const finalizeActiveRunIfStarted = useCallback(
+    (outcome: 'reset' | 'skipped' | 'switched', nowMs: number) => {
+      const status = refs.statusRef.current;
+      if (status !== 'RUNNING' && status !== 'PAUSED') return;
+
+      const currentRemaining =
+        status === 'RUNNING' && refs.targetEndTimeRef.current !== null
+          ? Math.max(
+              0,
+              Math.min(
+                refs.totalSecondsRef.current,
+                Math.ceil((refs.targetEndTimeRef.current - nowMs) / 1000)
+              )
+            )
+          : refs.remainingSecondsRef.current;
+
+      void telemetryTracker.onSessionFinalized({
+        attemptId: refs.timerRunIdRef.current,
+        outcome,
+        sessionType: refs.sessionTypeRef.current,
+        plannedDurationSeconds: refs.totalSecondsRef.current,
+        remainingSecondsAtEnd: currentRemaining,
+        cycleIndex: refs.currentCycleRef.current,
+        tagId: refs.activeTagIdRef.current,
+        settings: refs.settingsRef.current,
+        dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes,
+        wasStarted: true,
+        targetEndTimeMs: refs.targetEndTimeRef.current,
+      });
+    },
+    [refs]
+  );
+
+  const ensureResetDayKeyIfPastCutoff = useCallback(() => {
+    const wallNow = new Date();
+    if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
+      setLastResetDayKey(getLogicalDayKey(wallNow));
+    }
+  }, []);
+
   const handleComplete = useCallback(
     (silent = false) => {
-      const completedType = sessionTypeRef.current;
-      const currentRunId = timerRunIdRef.current;
-      const currentRemaining = remainingSecondsRef.current;
-      const currentTotal = totalSecondsRef.current;
-      const currentCycleVal = currentCycleRef.current;
-      const currentTargetEnd = targetEndTimeRef.current;
-
-      const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, currentRemaining));
+      const completedType = refs.sessionTypeRef.current;
+      const currentRunId = refs.timerRunIdRef.current;
+      const currentTotal = refs.totalSecondsRef.current;
+      const currentCycleVal = refs.currentCycleRef.current;
+      const currentTargetEnd = refs.targetEndTimeRef.current;
+      const elapsedSeconds = Math.max(1, currentTotal - Math.max(0, refs.remainingSecondsRef.current));
 
       const { nextType, nextCycle, nextDuration, shouldAutoStart } = computeNextInterval(
         completedType,
         currentCycleVal,
-        settingsRef.current
+        refs.settingsRef.current
       );
 
-      // Keep Wake Lock alive across auto-started transitions (status remains RUNNING so useTimerWorker's effect won't re-acquire)
-      if (!shouldAutoStart || settingsRef.current.keepAwake === false) {
+      if (!shouldAutoStart || refs.settingsRef.current.keepAwake === false) {
         wakeLockService.release();
       } else {
         wakeLockService.acquire();
@@ -125,12 +122,10 @@ export function useTimerActions({
 
       const now = getServerAlignedNowMs();
       const completedTimestampMs =
-        currentTargetEnd !== null && currentTargetEnd < now
-          ? currentTargetEnd
-          : now;
+        currentTargetEnd !== null && currentTargetEnd < now ? currentTargetEnd : now;
 
-      const completedSessionFallback = {
-        tagId: activeTagIdRef.current,
+      const completedSessionFallback: CompletedSessionFallback = {
+        tagId: refs.activeTagIdRef.current,
         sessionType: completedType,
         durationSeconds: elapsedSeconds,
         completedAt: new Date(completedTimestampMs).toISOString(),
@@ -144,115 +139,69 @@ export function useTimerActions({
         plannedDurationSeconds: currentTotal,
         remainingSecondsAtEnd: 0,
         cycleIndex: currentCycleVal,
-        tagId: activeTagIdRef.current,
-        settings: settingsRef.current,
-        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-        coffeeCups: coffeeCupsRef.current,
+        tagId: refs.activeTagIdRef.current,
+        settings: refs.settingsRef.current,
+        dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes,
         wasStarted: true,
         targetEndTimeMs: currentTargetEnd,
       });
 
-      // Only stamp the reset key on first-ever completion after 04:00 AM; never overwrite an
-      // older logical day's key during an all-nighter carryover past 04:00 AM so post-all-nighter
-      // sleep (>1h) still triggers a clean reset to WORK Cycle 1.
-      const wallNow = new Date();
-      if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
-        setLastResetDayKey(getLogicalDayKey(wallNow));
-      }
+      ensureResetDayKeyIfPastCutoff();
 
       const nextTargetEnd = shouldAutoStart ? now + nextDuration * 1000 : null;
-      sessionTypeRef.current = nextType;
-      currentCycleRef.current = nextCycle;
-      totalSecondsRef.current = nextDuration;
-      targetEndTimeRef.current = nextTargetEnd;
+      const newRunId =
+        shouldAutoStart && nextTargetEnd !== null
+          ? `run-${now}-${Math.random().toString(36).substring(2, 7)}`
+          : null;
+      const nextStatus: TimerStatus = newRunId ? 'RUNNING' : 'IDLE';
 
-      setSessionType(nextType);
-      setCurrentCycle(nextCycle);
-      setTotalSeconds(nextDuration);
-      setTargetEndTime(nextTargetEnd);
+      commitTimerSnapshot({
+        sessionType: nextType,
+        status: nextStatus,
+        currentCycle: nextCycle,
+        totalSeconds: nextDuration,
+        remainingSeconds: nextDuration,
+        targetEndTime: nextTargetEnd,
+        timerRunId: newRunId,
+      });
 
-      if (shouldAutoStart && nextTargetEnd !== null) {
-        const newRunId = `run-${now}-${Math.random().toString(36).substring(2, 7)}`;
-        timerRunIdRef.current = newRunId;
-        statusRef.current = 'RUNNING';
-        remainingSecondsRef.current = nextDuration;
-        setStatus('RUNNING');
-        setRemainingSeconds(nextDuration);
-
+      if (newRunId && nextTargetEnd !== null) {
         void telemetryTracker.onSessionStarted({
           attemptId: newRunId,
           sessionType: nextType,
           plannedDurationSeconds: nextDuration,
           cycleIndex: nextCycle,
-          tagId: activeTagIdRef.current,
+          tagId: refs.activeTagIdRef.current,
           autoStarted: true,
-          settings: settingsRef.current,
-          dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-          coffeeCups: coffeeCupsRef.current,
+          settings: refs.settingsRef.current,
+          dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes,
           targetEndTimeMs: nextTargetEnd,
           nowMs: now,
         });
-
-        publishTimerCompletion(
-          {
-            sessionType: nextType,
-            status: 'RUNNING',
-            remainingSeconds: nextDuration,
-            totalSeconds: nextDuration,
-            targetEndTime: nextTargetEnd,
-            currentCycle: nextCycle,
-            activeTagId: activeTagIdRef.current,
-            timerRunId: newRunId,
-            lastCompletedTimerRunId: currentRunId,
-            updatedAtMs: now,
-          },
-          currentRunId,
-          completedSessionFallback
-        );
-      } else {
-        timerRunIdRef.current = null;
-        statusRef.current = 'IDLE';
-        remainingSecondsRef.current = nextDuration;
-        setStatus('IDLE');
-        setRemainingSeconds(nextDuration);
-
-        publishTimerCompletion(
-          {
-            sessionType: nextType,
-            status: 'IDLE',
-            remainingSeconds: nextDuration,
-            totalSeconds: nextDuration,
-            targetEndTime: null,
-            currentCycle: nextCycle,
-            activeTagId: activeTagIdRef.current,
-            timerRunId: null,
-            lastCompletedTimerRunId: currentRunId,
-            updatedAtMs: now,
-          },
-          currentRunId,
-          completedSessionFallback
-        );
       }
+
+      publishTimerCompletion(
+        {
+          sessionType: nextType,
+          status: nextStatus,
+          remainingSeconds: nextDuration,
+          totalSeconds: nextDuration,
+          targetEndTime: nextTargetEnd,
+          currentCycle: nextCycle,
+          activeTagId: refs.activeTagIdRef.current,
+          timerRunId: newRunId,
+          lastCompletedTimerRunId: currentRunId,
+          updatedAtMs: now,
+        },
+        currentRunId,
+        completedSessionFallback
+      );
     },
     [
-      sessionTypeRef,
-      timerRunIdRef,
-      remainingSecondsRef,
-      totalSecondsRef,
-      currentCycleRef,
-      targetEndTimeRef,
-      activeTagIdRef,
-      settingsRef,
-      profileRef,
-      coffeeCupsRef,
-      statusRef,
+      refs,
       getServerAlignedNowMs,
-      setSessionType,
-      setCurrentCycle,
-      setTotalSeconds,
-      setTargetEndTime,
-      setStatus,
-      setRemainingSeconds,
+      commitTimerSnapshot,
+      ensureResetDayKeyIfPastCutoff,
       publishTimerCompletion,
       dispatchCompletionAlert,
       triggerCompletionConfetti,
@@ -262,30 +211,27 @@ export function useTimerActions({
   const handleStaleExpiration = useCallback(() => {
     wakeLockService.release();
 
-    const staleType = sessionTypeRef.current;
-    const staleRunId = timerRunIdRef.current;
-    const staleTotal = totalSecondsRef.current;
-    const staleRemaining = remainingSecondsRef.current;
-    const staleCycle = currentCycleRef.current;
-    const staleTargetEnd = targetEndTimeRef.current;
+    const staleType = refs.sessionTypeRef.current;
+    const staleRunId = refs.timerRunIdRef.current;
+    const staleCycle = refs.currentCycleRef.current;
+    const staleTargetEnd = refs.targetEndTimeRef.current;
 
     void telemetryTracker.onSessionFinalized({
       attemptId: staleRunId,
       outcome: 'abandoned_stale',
       sessionType: staleType,
-      plannedDurationSeconds: staleTotal,
-      remainingSecondsAtEnd: staleRemaining,
+      plannedDurationSeconds: refs.totalSecondsRef.current,
+      remainingSecondsAtEnd: refs.remainingSecondsRef.current,
       cycleIndex: staleCycle,
-      tagId: activeTagIdRef.current,
-      settings: settingsRef.current,
-      dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-      coffeeCups: coffeeCupsRef.current,
+      tagId: refs.activeTagIdRef.current,
+      settings: refs.settingsRef.current,
+      dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes,
       wasStarted: true,
       targetEndTimeMs: staleTargetEnd,
     });
 
     const wallNowMs = Date.now();
-    const staleAnchorMs = staleTargetEnd ?? localUpdatedAtRef.current;
+    const staleAnchorMs = staleTargetEnd ?? refs.localUpdatedAtRef.current;
     const isFromPreviousDay =
       staleAnchorMs > 0 &&
       getLogicalDayKey(new Date(staleAnchorMs)) !== getLogicalDayKey(new Date(wallNowMs)) &&
@@ -294,28 +240,23 @@ export function useTimerActions({
     const nextSessionType: SessionType = isFromPreviousDay ? 'WORK' : staleType;
     const nextCycle = isFromPreviousDay ? 1 : staleCycle;
     const defaultDuration = getDurationForType(nextSessionType);
-    const prevUpdatedAtMs = localUpdatedAtRef.current;
+    const prevUpdatedAtMs = refs.localUpdatedAtRef.current;
     const nowMs = getServerAlignedNowMs();
 
     if (isFromPreviousDay) {
-      sessionTypeRef.current = 'WORK';
-      currentCycleRef.current = 1;
-      setSessionType('WORK');
-      setCurrentCycle(1);
       setLastResetDayKey(getLogicalDayKey(new Date(wallNowMs)));
     }
 
-    statusRef.current = 'IDLE';
-    targetEndTimeRef.current = null;
-    timerRunIdRef.current = null;
-    totalSecondsRef.current = defaultDuration;
-    remainingSecondsRef.current = defaultDuration;
-    localUpdatedAtRef.current = nowMs;
-
-    setStatus('IDLE');
-    setTargetEndTime(null);
-    setTotalSeconds(defaultDuration);
-    setRemainingSeconds(defaultDuration);
+    refs.localUpdatedAtRef.current = nowMs;
+    commitTimerSnapshot({
+      sessionType: nextSessionType,
+      status: 'IDLE',
+      currentCycle: nextCycle,
+      totalSeconds: defaultDuration,
+      remainingSeconds: defaultDuration,
+      targetEndTime: null,
+      timerRunId: null,
+    });
 
     publishLocalTimerState(
       {
@@ -325,7 +266,7 @@ export function useTimerActions({
         totalSeconds: defaultDuration,
         targetEndTime: null,
         currentCycle: nextCycle,
-        activeTagId: activeTagIdRef.current,
+        activeTagId: refs.activeTagIdRef.current,
         timerRunId: null,
         updatedAtMs: nowMs,
       },
@@ -336,82 +277,53 @@ export function useTimerActions({
         expectedUpdatedAtMs: !staleRunId ? prevUpdatedAtMs : undefined,
       }
     );
-  }, [
-    sessionTypeRef,
-    timerRunIdRef,
-    totalSecondsRef,
-    remainingSecondsRef,
-    currentCycleRef,
-    targetEndTimeRef,
-    activeTagIdRef,
-    settingsRef,
-    profileRef,
-    coffeeCupsRef,
-    statusRef,
-    localUpdatedAtRef,
-    getServerAlignedNowMs,
-    setSessionType,
-    setCurrentCycle,
-    setStatus,
-    setTargetEndTime,
-    setTotalSeconds,
-    setRemainingSeconds,
-    getDurationForType,
-    publishLocalTimerState,
-  ]);
+  }, [refs, getServerAlignedNowMs, commitTimerSnapshot, getDurationForType, publishLocalTimerState]);
 
   const start = useCallback(() => {
-    if (statusRef.current === 'RUNNING') return;
+    if (refs.statusRef.current === 'RUNNING') return;
 
     sound.prepareForPlayback();
-    if (settingsRef.current.keepAwake !== false) {
+    if (refs.settingsRef.current.keepAwake !== false) {
       wakeLockService.acquire();
     }
 
-    const duration = remainingSecondsRef.current;
+    const duration = refs.remainingSecondsRef.current;
     const now = getServerAlignedNowMs();
     const calculatedTargetEnd = now + duration * 1000;
-    const wasPaused = statusRef.current === 'PAUSED' && Boolean(timerRunIdRef.current);
+    const wasPaused = refs.statusRef.current === 'PAUSED' && Boolean(refs.timerRunIdRef.current);
     const runId = wasPaused
-      ? timerRunIdRef.current!
+      ? refs.timerRunIdRef.current!
       : `run-${now}-${Math.random().toString(36).substring(2, 7)}`;
 
-    targetEndTimeRef.current = calculatedTargetEnd;
-    timerRunIdRef.current = runId;
-    statusRef.current = 'RUNNING';
-
-    setTargetEndTime(calculatedTargetEnd);
-    setStatus('RUNNING');
+    commitTimerSnapshot({
+      status: 'RUNNING',
+      remainingSeconds: duration,
+      targetEndTime: calculatedTargetEnd,
+      timerRunId: runId,
+    });
 
     if (wasPaused) {
-      void telemetryTracker.onSessionResumed({
-        targetEndTimeMs: calculatedTargetEnd,
-        nowMs: now,
-      });
+      void telemetryTracker.onSessionResumed({ targetEndTimeMs: calculatedTargetEnd, nowMs: now });
     } else {
       void telemetryTracker.onSessionStarted({
         attemptId: runId,
-        sessionType: sessionTypeRef.current,
-        plannedDurationSeconds: totalSecondsRef.current,
-        cycleIndex: currentCycleRef.current,
-        tagId: activeTagIdRef.current,
+        sessionType: refs.sessionTypeRef.current,
+        plannedDurationSeconds: refs.totalSecondsRef.current,
+        cycleIndex: refs.currentCycleRef.current,
+        tagId: refs.activeTagIdRef.current,
         autoStarted: false,
-        settings: settingsRef.current,
-        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-        coffeeCups: coffeeCupsRef.current,
+        settings: refs.settingsRef.current,
+        dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes,
         targetEndTimeMs: calculatedTargetEnd,
         nowMs: now,
       });
     }
 
-    // Stamp the logical day key when starting a fresh WORK Cycle 1 (or on first-ever start
-    // after 04:00 AM), but do NOT stamp when continuing an all-nighter break/later cycle past
-    // 04:00 AM so post-all-nighter sleep (>1h) still triggers a clean reset to WORK Cycle 1.
     const wallNow = new Date();
     const currentDayKey = getLogicalDayKey(wallNow);
     const existingResetKey = getLastResetDayKey();
     const isFreshWorkCycleOne =
-      !wasPaused && sessionTypeRef.current === 'WORK' && currentCycleRef.current === 1;
+      !wasPaused && refs.sessionTypeRef.current === 'WORK' && refs.currentCycleRef.current === 1;
     if (
       existingResetKey !== currentDayKey &&
       (isFreshWorkCycleOne || (existingResetKey === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF))
@@ -421,184 +333,79 @@ export function useTimerActions({
 
     publishLocalTimerState(
       {
-        sessionType: sessionTypeRef.current,
+        sessionType: refs.sessionTypeRef.current,
         status: 'RUNNING',
         remainingSeconds: duration,
-        totalSeconds: totalSecondsRef.current,
+        totalSeconds: refs.totalSecondsRef.current,
         targetEndTime: calculatedTargetEnd,
-        currentCycle: currentCycleRef.current,
-        activeTagId: activeTagIdRef.current,
+        currentCycle: refs.currentCycleRef.current,
+        activeTagId: refs.activeTagIdRef.current,
         timerRunId: runId,
         updatedAtMs: now,
       },
       true
     );
-  }, [
-    statusRef,
-    settingsRef,
-    remainingSecondsRef,
-    timerRunIdRef,
-    targetEndTimeRef,
-    sessionTypeRef,
-    totalSecondsRef,
-    currentCycleRef,
-    activeTagIdRef,
-    profileRef,
-    coffeeCupsRef,
-    getServerAlignedNowMs,
-    setTargetEndTime,
-    setStatus,
-    sound,
-    publishLocalTimerState,
-  ]);
+  }, [refs, getServerAlignedNowMs, commitTimerSnapshot, sound, publishLocalTimerState]);
 
   const pause = useCallback(() => {
-    if (statusRef.current !== 'RUNNING') return;
+    if (refs.statusRef.current !== 'RUNNING') return;
 
     const now = getServerAlignedNowMs();
-    let currentRemaining = remainingSecondsRef.current;
-    if (targetEndTimeRef.current !== null) {
-      const diffMs = targetEndTimeRef.current - now;
+    let currentRemaining = refs.remainingSecondsRef.current;
+    if (refs.targetEndTimeRef.current !== null) {
+      const diffMs = refs.targetEndTimeRef.current - now;
       if (diffMs <= 0) {
         if (diffMs < -900_000) {
           handleStaleExpiration();
           return;
         }
-        remainingSecondsRef.current = 0;
+        refs.remainingSecondsRef.current = 0;
         setRemainingSeconds(0);
         handleComplete(false);
         return;
       }
       currentRemaining = Math.max(
         1,
-        Math.min(totalSecondsRef.current, Math.ceil(diffMs / 1000))
+        Math.min(refs.totalSecondsRef.current, Math.ceil(diffMs / 1000))
       );
     }
 
     wakeLockService.release();
 
-    targetEndTimeRef.current = null;
-    statusRef.current = 'PAUSED';
-    remainingSecondsRef.current = currentRemaining;
-
-    setTargetEndTime(null);
-    setStatus('PAUSED');
-    setRemainingSeconds(currentRemaining);
+    commitTimerSnapshot({
+      status: 'PAUSED',
+      remainingSeconds: currentRemaining,
+      targetEndTime: null,
+      timerRunId: refs.timerRunIdRef.current,
+    });
 
     void telemetryTracker.onSessionPaused({
       remainingSeconds: currentRemaining,
-      tagId: activeTagIdRef.current,
+      tagId: refs.activeTagIdRef.current,
       nowMs: now,
     });
 
     publishLocalTimerState(
       {
-        sessionType: sessionTypeRef.current,
+        sessionType: refs.sessionTypeRef.current,
         status: 'PAUSED',
         remainingSeconds: currentRemaining,
-        totalSeconds: totalSecondsRef.current,
+        totalSeconds: refs.totalSecondsRef.current,
         targetEndTime: null,
-        currentCycle: currentCycleRef.current,
-        activeTagId: activeTagIdRef.current,
-        timerRunId: timerRunIdRef.current,
+        currentCycle: refs.currentCycleRef.current,
+        activeTagId: refs.activeTagIdRef.current,
+        timerRunId: refs.timerRunIdRef.current,
         updatedAtMs: now,
       },
       true
     );
   }, [
-    statusRef,
-    remainingSecondsRef,
-    targetEndTimeRef,
-    activeTagIdRef,
-    sessionTypeRef,
-    totalSecondsRef,
-    currentCycleRef,
-    timerRunIdRef,
+    refs,
     getServerAlignedNowMs,
     handleComplete,
     handleStaleExpiration,
-    setTargetEndTime,
-    setStatus,
     setRemainingSeconds,
-    publishLocalTimerState,
-  ]);
-
-  const reset = useCallback(() => {
-    wakeLockService.release();
-
-    const nowMs = getServerAlignedNowMs();
-    const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
-    if (wasStarted) {
-      const currentRemaining =
-        statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
-          ? Math.max(0, Math.min(totalSecondsRef.current, Math.ceil((targetEndTimeRef.current - nowMs) / 1000)))
-          : remainingSecondsRef.current;
-
-      void telemetryTracker.onSessionFinalized({
-        attemptId: timerRunIdRef.current,
-        outcome: 'reset',
-        sessionType: sessionTypeRef.current,
-        plannedDurationSeconds: totalSecondsRef.current,
-        remainingSecondsAtEnd: currentRemaining,
-        cycleIndex: currentCycleRef.current,
-        tagId: activeTagIdRef.current,
-        settings: settingsRef.current,
-        dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-        coffeeCups: coffeeCupsRef.current,
-        wasStarted: true,
-        targetEndTimeMs: targetEndTimeRef.current,
-      });
-    }
-
-    const wallNow = new Date();
-    if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
-      setLastResetDayKey(getLogicalDayKey(wallNow));
-    }
-
-    const defaultDuration = getDurationForType(sessionTypeRef.current);
-    targetEndTimeRef.current = null;
-    timerRunIdRef.current = null;
-    statusRef.current = 'IDLE';
-    remainingSecondsRef.current = defaultDuration;
-    totalSecondsRef.current = defaultDuration;
-
-    setTargetEndTime(null);
-    setStatus('IDLE');
-    setRemainingSeconds(defaultDuration);
-    setTotalSeconds(defaultDuration);
-
-    publishLocalTimerState(
-      {
-        sessionType: sessionTypeRef.current,
-        status: 'IDLE',
-        remainingSeconds: defaultDuration,
-        totalSeconds: defaultDuration,
-        targetEndTime: null,
-        currentCycle: currentCycleRef.current,
-        activeTagId: activeTagIdRef.current,
-        timerRunId: null,
-        updatedAtMs: nowMs,
-      },
-      true
-    );
-  }, [
-    statusRef,
-    targetEndTimeRef,
-    remainingSecondsRef,
-    timerRunIdRef,
-    sessionTypeRef,
-    totalSecondsRef,
-    currentCycleRef,
-    activeTagIdRef,
-    settingsRef,
-    profileRef,
-    coffeeCupsRef,
-    getServerAlignedNowMs,
-    setTargetEndTime,
-    setStatus,
-    setRemainingSeconds,
-    setTotalSeconds,
-    getDurationForType,
+    commitTimerSnapshot,
     publishLocalTimerState,
   ]);
 
@@ -607,55 +414,22 @@ export function useTimerActions({
       nextType: SessionType,
       nextCycle: number,
       nextDuration: number,
-      outcome: 'skipped' | 'switched'
+      outcome: 'reset' | 'skipped' | 'switched'
     ) => {
       wakeLockService.release();
-
       const nowMs = getServerAlignedNowMs();
-      const wasStarted = statusRef.current === 'RUNNING' || statusRef.current === 'PAUSED';
-      if (wasStarted) {
-        const currentRemaining =
-          statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null
-            ? Math.max(0, Math.min(totalSecondsRef.current, Math.ceil((targetEndTimeRef.current - nowMs) / 1000)))
-            : remainingSecondsRef.current;
+      finalizeActiveRunIfStarted(outcome, nowMs);
+      ensureResetDayKeyIfPastCutoff();
 
-        void telemetryTracker.onSessionFinalized({
-          attemptId: timerRunIdRef.current,
-          outcome,
-          sessionType: sessionTypeRef.current,
-          plannedDurationSeconds: totalSecondsRef.current,
-          remainingSecondsAtEnd: currentRemaining,
-          cycleIndex: currentCycleRef.current,
-          tagId: activeTagIdRef.current,
-          settings: settingsRef.current,
-          dailyGoalMinutes: profileRef.current.dailyGoalMinutes,
-          coffeeCups: coffeeCupsRef.current,
-          wasStarted: true,
-          targetEndTimeMs: targetEndTimeRef.current,
-        });
-      }
-
-      // Stamp the logical day key for first-time / post-clear users who manually navigate
-      // intervals so the 60s new-day check does not undo their Skip/Switch back to WORK Cycle 1.
-      const wallNow = new Date();
-      if (getLastResetDayKey() === null && wallNow.getHours() >= NEW_DAY_HOUR_CUTOFF) {
-        setLastResetDayKey(getLogicalDayKey(wallNow));
-      }
-
-      targetEndTimeRef.current = null;
-      timerRunIdRef.current = null;
-      sessionTypeRef.current = nextType;
-      currentCycleRef.current = nextCycle;
-      statusRef.current = 'IDLE';
-      remainingSecondsRef.current = nextDuration;
-      totalSecondsRef.current = nextDuration;
-
-      setSessionType(nextType);
-      setCurrentCycle(nextCycle);
-      setStatus('IDLE');
-      setRemainingSeconds(nextDuration);
-      setTotalSeconds(nextDuration);
-      setTargetEndTime(null);
+      commitTimerSnapshot({
+        sessionType: nextType,
+        status: 'IDLE',
+        currentCycle: nextCycle,
+        totalSeconds: nextDuration,
+        remainingSeconds: nextDuration,
+        targetEndTime: null,
+        timerRunId: null,
+      });
 
       publishLocalTimerState(
         {
@@ -665,7 +439,7 @@ export function useTimerActions({
           totalSeconds: nextDuration,
           targetEndTime: null,
           currentCycle: nextCycle,
-          activeTagId: activeTagIdRef.current,
+          activeTagId: refs.activeTagIdRef.current,
           timerRunId: null,
           updatedAtMs: nowMs,
         },
@@ -673,53 +447,42 @@ export function useTimerActions({
       );
     },
     [
-      statusRef,
-      targetEndTimeRef,
-      remainingSecondsRef,
-      timerRunIdRef,
-      sessionTypeRef,
-      totalSecondsRef,
-      currentCycleRef,
-      activeTagIdRef,
-      settingsRef,
-      profileRef,
-      coffeeCupsRef,
+      refs,
       getServerAlignedNowMs,
-      setSessionType,
-      setCurrentCycle,
-      setStatus,
-      setRemainingSeconds,
-      setTotalSeconds,
-      setTargetEndTime,
+      finalizeActiveRunIfStarted,
+      ensureResetDayKeyIfPastCutoff,
+      commitTimerSnapshot,
       publishLocalTimerState,
     ]
   );
 
+  const reset = useCallback(() => {
+    const type = refs.sessionTypeRef.current;
+    transitionToIdleInterval(type, refs.currentCycleRef.current, getDurationForType(type), 'reset');
+  }, [refs, getDurationForType, transitionToIdleInterval]);
+
   const skip = useCallback(() => {
     const { nextType, nextCycle, nextDuration } = computeNextInterval(
-      sessionTypeRef.current,
-      currentCycleRef.current,
-      settingsRef.current
+      refs.sessionTypeRef.current,
+      refs.currentCycleRef.current,
+      refs.settingsRef.current
     );
     transitionToIdleInterval(nextType, nextCycle, nextDuration, 'skipped');
-  }, [sessionTypeRef, currentCycleRef, settingsRef, transitionToIdleInterval]);
+  }, [refs, transitionToIdleInterval]);
 
   const previousInterval = useCallback(() => {
     const { previousType, previousCycle, previousDuration } = computePreviousInterval(
-      sessionTypeRef.current,
-      currentCycleRef.current,
-      settingsRef.current
+      refs.sessionTypeRef.current,
+      refs.currentCycleRef.current,
+      refs.settingsRef.current
     );
     transitionToIdleInterval(previousType, previousCycle, previousDuration, 'switched');
-  }, [sessionTypeRef, currentCycleRef, settingsRef, transitionToIdleInterval]);
+  }, [refs, transitionToIdleInterval]);
 
   const toggleStartPause = useCallback(() => {
-    if (statusRef.current === 'RUNNING') {
-      pause();
-    } else {
-      start();
-    }
-  }, [statusRef, pause, start]);
+    if (refs.statusRef.current === 'RUNNING') pause();
+    else start();
+  }, [refs, pause, start]);
 
   return {
     handleComplete,

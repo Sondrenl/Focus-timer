@@ -1,5 +1,5 @@
 import { Tag } from '../../types/tag';
-import { isSampleSessionId } from '../../services/repository/SessionRepository';
+import { isSampleSessionId } from '../../services/storage/guestRepositories';
 import { sanitizeHexColor } from '../colors';
 import { toDateKey, WEEKDAY_NAMES, MONTH_NAMES } from '../dates';
 import { formatDurationHoursMins } from '../formatters';

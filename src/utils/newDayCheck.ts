@@ -1,5 +1,5 @@
 import { toDateKey } from './dates';
-import { isSampleSessionId } from '../services/repository/SessionRepository';
+import { isSampleSessionId } from '../services/storage/guestRepositories';
 
 export const NEW_DAY_HOUR_CUTOFF = 4; // 04:00 AM local time
 export const INACTIVITY_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour

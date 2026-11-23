@@ -7,7 +7,6 @@ import { AuthState } from '../../types/user';
 interface CloudSyncCardProps {
   auth: AuthState;
   isLoggingOut?: boolean;
-  pendingSyncCount?: number;
   loginWithGoogle: (credential: string) => Promise<void>;
   logout: () => void;
   syncWithCloud: () => Promise<void>;
@@ -18,7 +17,6 @@ const MAX_GIS_POLL_ATTEMPTS = 25;
 export const CloudSyncCard: React.FC<CloudSyncCardProps> = ({
   auth,
   isLoggingOut = false,
-  pendingSyncCount = 0,
   logout,
   syncWithCloud,
 }) => {
@@ -106,13 +104,7 @@ export const CloudSyncCard: React.FC<CloudSyncCardProps> = ({
             disabled={auth.isSyncing || isLoggingOut}
           >
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${auth.isSyncing ? 'animate-spin' : ''}`} />
-            <span>
-              {auth.isSyncing
-                ? 'Syncing...'
-                : pendingSyncCount > 0
-                  ? `Sync Now (${pendingSyncCount})`
-                  : 'Sync Now'}
-            </span>
+            <span>{auth.isSyncing ? 'Syncing...' : 'Sync Now'}</span>
           </Button>
         )}
       </div>
@@ -126,11 +118,6 @@ export const CloudSyncCard: React.FC<CloudSyncCardProps> = ({
               {auth.lastSyncedAt && (
                 <p className="text-[11px] text-md-outline mt-0.5">
                   Last synced: {new Date(auth.lastSyncedAt).toLocaleTimeString()}
-                </p>
-              )}
-              {pendingSyncCount > 0 && (
-                <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5">
-                  {pendingSyncCount} offline change{pendingSyncCount === 1 ? '' : 's'} queued to sync
                 </p>
               )}
             </div>

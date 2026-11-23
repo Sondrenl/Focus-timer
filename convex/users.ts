@@ -10,10 +10,12 @@ import {
   MAX_DAILY_GOAL_MINUTES,
 } from "./defaultData";
 
-/**
- * Returns the currently authenticated user with their embedded preferences and tags.
- * Provides the entire core application shell in a single atomic reactive query!
- */
+function assertRange(val: number | undefined, min: number, max: number, label: string): void {
+  if (val !== undefined && (!Number.isFinite(val) || val < min || val > max)) {
+    throw new Error(`${label} must be between ${min} and ${max}.`);
+  }
+}
+
 export const current = query({
   args: {},
   handler: async (ctx) => {
@@ -42,7 +44,8 @@ export const updateProfile = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
-    const updates: Record<string, any> = {};
+    const updates: Record<string, unknown> = {};
+
     if (args.displayName !== undefined) {
       const trimmed = args.displayName.trim();
       if (trimmed.length > 100) {
@@ -63,13 +66,7 @@ export const updateProfile = mutation({
       }
     }
     if (args.dailyGoalMinutes !== undefined) {
-      if (
-        !Number.isFinite(args.dailyGoalMinutes) ||
-        args.dailyGoalMinutes < 1 ||
-        args.dailyGoalMinutes > MAX_DAILY_GOAL_MINUTES
-      ) {
-        throw new Error(`Daily goal minutes must be between 1 and ${MAX_DAILY_GOAL_MINUTES}.`);
-      }
+      assertRange(args.dailyGoalMinutes, 1, MAX_DAILY_GOAL_MINUTES, "Daily goal minutes");
       if (args.dailyGoalMinutes !== user.dailyGoalMinutes) {
         updates.dailyGoalMinutes = args.dailyGoalMinutes;
       }
@@ -99,81 +96,33 @@ export const updateSettings = mutation({
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
 
-    if (
-      args.workDurationMinutes !== undefined &&
-      (!Number.isFinite(args.workDurationMinutes) ||
-        args.workDurationMinutes < MIN_DURATION_MINUTES ||
-        args.workDurationMinutes > MAX_WORK_DURATION_MINUTES)
-    ) {
-      throw new Error(
-        `workDurationMinutes must be between ${MIN_DURATION_MINUTES} and ${MAX_WORK_DURATION_MINUTES}.`
-      );
-    }
-    if (
-      args.shortBreakDurationMinutes !== undefined &&
-      (!Number.isFinite(args.shortBreakDurationMinutes) ||
-        args.shortBreakDurationMinutes < MIN_DURATION_MINUTES ||
-        args.shortBreakDurationMinutes > MAX_SHORT_BREAK_MINUTES)
-    ) {
-      throw new Error(
-        `shortBreakDurationMinutes must be between ${MIN_DURATION_MINUTES} and ${MAX_SHORT_BREAK_MINUTES}.`
-      );
-    }
-    if (
-      args.longBreakDurationMinutes !== undefined &&
-      (!Number.isFinite(args.longBreakDurationMinutes) ||
-        args.longBreakDurationMinutes < MIN_DURATION_MINUTES ||
-        args.longBreakDurationMinutes > MAX_LONG_BREAK_MINUTES)
-    ) {
-      throw new Error(
-        `longBreakDurationMinutes must be between ${MIN_DURATION_MINUTES} and ${MAX_LONG_BREAK_MINUTES}.`
-      );
-    }
-    if (
-      args.longBreakInterval !== undefined &&
-      (!Number.isFinite(args.longBreakInterval) ||
-        args.longBreakInterval < 1 ||
-        args.longBreakInterval > MAX_LONG_BREAK_INTERVAL)
-    ) {
-      throw new Error(`longBreakInterval must be between 1 and ${MAX_LONG_BREAK_INTERVAL}.`);
-    }
-    if (args.soundVolume !== undefined && (!Number.isFinite(args.soundVolume) || args.soundVolume < 0 || args.soundVolume > 1)) {
-      throw new Error("soundVolume must be between 0 and 1.");
-    }
-
-    const now = new Date().toISOString();
+    assertRange(args.workDurationMinutes, MIN_DURATION_MINUTES, MAX_WORK_DURATION_MINUTES, "workDurationMinutes");
+    assertRange(args.shortBreakDurationMinutes, MIN_DURATION_MINUTES, MAX_SHORT_BREAK_MINUTES, "shortBreakDurationMinutes");
+    assertRange(args.longBreakDurationMinutes, MIN_DURATION_MINUTES, MAX_LONG_BREAK_MINUTES, "longBreakDurationMinutes");
+    assertRange(args.longBreakInterval, 1, MAX_LONG_BREAK_INTERVAL, "longBreakInterval");
+    assertRange(args.soundVolume, 0, 1, "soundVolume");
 
     const cleanUpdates = Object.fromEntries(
-      Object.entries(args).filter(([_, val]) => val !== undefined)
+      Object.entries(args).filter(([, val]) => val !== undefined)
     );
 
     const currentSettings = user.settings ?? DEFAULT_SETTINGS;
     const hasChanges = Object.entries(cleanUpdates).some(
-      ([key, val]) => (currentSettings as any)[key] !== val
+      ([key, val]) => (currentSettings as Record<string, unknown>)[key] !== val
     );
-
-    if (!hasChanges) {
-      return currentSettings;
-    }
+    if (!hasChanges) return currentSettings;
 
     const mergedSettings = {
       ...currentSettings,
       ...cleanUpdates,
-      updatedAt: now,
+      updatedAt: new Date().toISOString(),
     };
 
-    await ctx.db.patch(user._id, {
-      settings: mergedSettings,
-    });
-
+    await ctx.db.patch(user._id, { settings: mergedSettings });
     return mergedSettings;
   },
 });
 
-/**
- * Internal mutation for Convex Auth to link existing accounts (e.g. sondrelassen@gmail.com)
- * or create a new user document upon cryptographic verification of credentials.
- */
 export const getOrCreateUserForAuth = internalMutation({
   args: {
     email: v.string(),
@@ -183,47 +132,16 @@ export const getOrCreateUserForAuth = internalMutation({
   },
   handler: async (ctx, args) => {
     const canonicalTokenId = `https://accounts.google.com|${args.sub}`;
-
-    // 1. Search for existing user by email (links existing migrated account seamlessly)
-    const existingByEmail = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", args.email))
-      .first();
-
     const safeAvatar =
       args.avatarUrl && args.avatarUrl.startsWith("https://") && args.avatarUrl.length <= 2048
         ? args.avatarUrl
         : undefined;
 
-    if (existingByEmail) {
-      const patchData: Record<string, unknown> = {};
-      if (!existingByEmail.emailVerificationTime) {
-        patchData.emailVerificationTime = Date.now();
-      }
-      if (!existingByEmail.displayName && args.name) {
-        patchData.displayName = args.name;
-      }
-      if (!existingByEmail.name && args.name) {
-        patchData.name = args.name;
-      }
-      if (safeAvatar && existingByEmail.avatarUrl !== safeAvatar) {
-        patchData.avatarUrl = safeAvatar;
-        patchData.image = safeAvatar;
-      }
-      if (
-        !existingByEmail.tokenIdentifier ||
-        existingByEmail.tokenIdentifier === args.sub
-      ) {
-        patchData.tokenIdentifier = canonicalTokenId;
-      }
-      if (Object.keys(patchData).length > 0) {
-        await ctx.db.patch(existingByEmail._id, patchData);
-      }
-      return existingByEmail._id;
-    }
-
-    // 2. Search by canonical tokenIdentifier, then legacy bare sub
-    const existingByToken =
+    const existing =
+      (await ctx.db
+        .query("users")
+        .withIndex("email", (q) => q.eq("email", args.email))
+        .first()) ??
       (await ctx.db
         .query("users")
         .withIndex("by_token", (q) => q.eq("tokenIdentifier", canonicalTokenId))
@@ -233,30 +151,27 @@ export const getOrCreateUserForAuth = internalMutation({
         .withIndex("by_token", (q) => q.eq("tokenIdentifier", args.sub))
         .first());
 
-    if (existingByToken) {
+    if (existing) {
       const patchData: Record<string, unknown> = {};
-      if (existingByToken.email !== args.email) {
-        patchData.email = args.email;
-      }
-      if (existingByToken.tokenIdentifier !== canonicalTokenId) {
-        patchData.tokenIdentifier = canonicalTokenId;
-      }
-      if (!existingByToken.emailVerificationTime) {
-        patchData.emailVerificationTime = Date.now();
-      }
-      if (safeAvatar && existingByToken.avatarUrl !== safeAvatar) {
+      if (existing.email !== args.email) patchData.email = args.email;
+      if (!existing.emailVerificationTime) patchData.emailVerificationTime = Date.now();
+      if (!existing.displayName && args.name) patchData.displayName = args.name;
+      if (!existing.name && args.name) patchData.name = args.name;
+      if (safeAvatar && existing.avatarUrl !== safeAvatar) {
         patchData.avatarUrl = safeAvatar;
         patchData.image = safeAvatar;
       }
-      if (Object.keys(patchData).length > 0) {
-        await ctx.db.patch(existingByToken._id, patchData);
+      if (!existing.tokenIdentifier || existing.tokenIdentifier !== canonicalTokenId) {
+        patchData.tokenIdentifier = canonicalTokenId;
       }
-      return existingByToken._id;
+      if (Object.keys(patchData).length > 0) {
+        await ctx.db.patch(existing._id, patchData);
+      }
+      return existing._id;
     }
 
-    // 3. Create new user if not found
     const now = new Date().toISOString();
-    const newUserId = await ctx.db.insert("users", {
+    return await ctx.db.insert("users", {
       email: args.email,
       name: args.name,
       displayName: args.name,
@@ -267,12 +182,8 @@ export const getOrCreateUserForAuth = internalMutation({
       createdAt: now,
       emailVerificationTime: Date.now(),
       tokenIdentifier: canonicalTokenId,
-      settings: {
-        ...DEFAULT_SETTINGS,
-        updatedAt: now,
-      },
+      settings: { ...DEFAULT_SETTINGS, updatedAt: now },
       tags: DEFAULT_TAGS,
     });
-    return newUserId;
   },
 });

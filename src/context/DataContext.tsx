@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useMemo, useRef } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { BackupData } from '../types/user';
@@ -19,8 +19,7 @@ export interface DataContextValue {
   tags: Tag[];
   activeTags: Tag[];
   activeTagId: string | null;
-  setActiveTagId: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
-  consumeSkipTagTelemetry: () => boolean;
+  setActiveTagId: (id: string | null) => void;
   createTag: (input: CreateTagInput) => Promise<Tag>;
   updateTag: (id: string, updates: UpdateTagInput) => Promise<Tag | null>;
   archiveTag: (id: string) => Promise<Tag | null>;
@@ -38,7 +37,6 @@ export interface DataContextValue {
   ) => Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }>;
   resetAllData: (scope: 'sessions-only' | 'factory-reset') => Promise<void>;
   pendingGuestReconciliation: PendingGuestReconciliation | null;
-  pendingSyncCount: number;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -47,7 +45,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const {
     isEffectiveAuthenticated,
     isConvexAuthReady,
-    registerFullSyncHandler,
     profile,
     settings,
     updateProfile,
@@ -57,26 +54,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     convexSync,
   } = useAuthProfile();
 
-  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
-  const setActiveTagIdRef = useRef<
-    ((id: string | null, options?: { skipTelemetry?: boolean }) => void) | null
-  >(null);
+  const setActiveTagIdRef = useRef<((id: string | null) => void) | null>(null);
 
   const {
     syncBackupToConvexChunked,
     isSyncGateActive,
     pendingGuestReconciliation,
-    pendingSyncCount,
   } = useCloudMigration({
     isEffectiveAuthenticated,
     isConvexAuthReady,
     convexSync,
-    registerFullSyncHandler,
-    setActiveTagId: (id, options) => setActiveTagIdRef.current?.(id, options),
+    setActiveTagId: (id) => setActiveTagIdRef.current?.(id),
   });
-
-  const isAdoptionPaused = isSyncGateActive || isBulkSyncing;
-  const currentUserId = convexSync.convexUser?.id ?? null;
 
   const {
     sessions,
@@ -87,8 +76,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   } = useSessionsData({
     isEffectiveAuthenticated,
     isConvexAuthReady,
-    isAdoptionPaused,
-    currentUserId,
+    isAdoptionPaused: isSyncGateActive,
     convexSync,
   });
 
@@ -100,8 +88,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   } = useCoffeeData({
     isEffectiveAuthenticated,
     isConvexAuthReady,
-    isAdoptionPaused,
-    currentUserId,
+    isAdoptionPaused: isSyncGateActive,
     convexSync,
   });
 
@@ -111,7 +98,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     activeTags,
     activeTagId,
     setActiveTagId,
-    consumeSkipTagTelemetry,
     createTag,
     updateTag,
     archiveTag,
@@ -120,8 +106,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   } = useTagsData({
     isEffectiveAuthenticated,
     isConvexAuthReady,
-    isAdoptionPaused,
-    currentUserId,
+    isAdoptionPaused: isSyncGateActive,
     convexSync,
     setSessions,
     setCoffeeCups,
@@ -132,7 +117,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const { exportBackup, importBackup, resetAllData } = useBackupAndMigration({
     isEffectiveAuthenticated,
     isConvexAuthReady,
-    currentUserId,
     profile,
     settings,
     updateProfile,
@@ -141,7 +125,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     resetSettingsToDefaults,
     convexSync,
     syncBackupToConvexChunked,
-    setIsBulkSyncing,
     tags,
     setTags,
     activeTagId,
@@ -160,7 +143,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       activeTags,
       activeTagId,
       setActiveTagId,
-      consumeSkipTagTelemetry,
       createTag,
       updateTag,
       archiveTag,
@@ -175,7 +157,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       importBackup,
       resetAllData,
       pendingGuestReconciliation,
-      pendingSyncCount,
     }),
     [
       isDemoEnvironment,
@@ -184,7 +165,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       activeTags,
       activeTagId,
       setActiveTagId,
-      consumeSkipTagTelemetry,
       createTag,
       updateTag,
       archiveTag,
@@ -199,7 +179,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       importBackup,
       resetAllData,
       pendingGuestReconciliation,
-      pendingSyncCount,
     ]
   );
 

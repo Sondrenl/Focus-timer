@@ -1,4 +1,5 @@
 import { MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "./authHelper";
 import { TAG_ID_REGEX } from "./telemetryValidators";
@@ -23,31 +24,30 @@ export async function cancelScheduledJob(
   }
 }
 
-export function assertValidDurationSeconds(value: number, fieldName = "durationSeconds"): void {
-  if (!Number.isFinite(value) || value < 1 || value > 86400) {
-    throw new Error(`${fieldName} must be between 1 and 86400.`);
+function assertIntegerInRange(
+  value: number,
+  min: number,
+  max: number,
+  fieldName: string
+): void {
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${fieldName} must be between ${min} and ${max}.`);
   }
   if (!Number.isInteger(value)) {
     throw new Error(`${fieldName} must be an integer.`);
   }
+}
+
+export function assertValidDurationSeconds(value: number, fieldName = "durationSeconds"): void {
+  assertIntegerInRange(value, 1, 86400, fieldName);
 }
 
 export function assertValidRemainingSeconds(value: number, fieldName = "remainingSeconds"): void {
-  if (!Number.isFinite(value) || value < 0 || value > 86400) {
-    throw new Error(`${fieldName} must be between 0 and 86400.`);
-  }
-  if (!Number.isInteger(value)) {
-    throw new Error(`${fieldName} must be an integer.`);
-  }
+  assertIntegerInRange(value, 0, 86400, fieldName);
 }
 
 export function assertValidCycle(value: number, fieldName = "currentCycle"): void {
-  if (!Number.isFinite(value) || value < 1 || value > 100) {
-    throw new Error(`${fieldName} must be between 1 and 100.`);
-  }
-  if (!Number.isInteger(value)) {
-    throw new Error(`${fieldName} must be an integer.`);
-  }
+  assertIntegerInRange(value, 1, 100, fieldName);
 }
 
 export function assertValidTimerRunId(
@@ -56,9 +56,7 @@ export function assertValidTimerRunId(
   required = false
 ): void {
   if (!value) {
-    if (required) {
-      throw new Error(`Invalid ${fieldName} format.`);
-    }
+    if (required) throw new Error(`Invalid ${fieldName} format.`);
     return;
   }
   if (value.length > 128 || !IDENTIFIER_REGEX.test(value)) {
@@ -71,10 +69,8 @@ export function assertValidTagId(
   errorMessage = "Invalid tagId format.",
   required = false
 ): void {
-  if (value === undefined || value === null || value === "") {
-    if (required) {
-      throw new Error(errorMessage);
-    }
+  if (!value) {
+    if (required) throw new Error(errorMessage);
     return;
   }
   if (!TAG_ID_REGEX.test(value)) {
@@ -82,11 +78,6 @@ export function assertValidTagId(
   }
 }
 
-/**
- * Validates tagId format and ensures the tag actually exists in the user's tag list.
- * Coerces deleted/nonexistent tagIds to undefined so concurrent multi-device writes
- * after a tag deletion never leave permanent orphaned tag references.
- */
 export function resolveExistingUserTagId(
   user: { tags?: Array<{ id: string }> } | null | undefined,
   rawTagId: string | null | undefined
@@ -101,6 +92,83 @@ export function generateScheduleNonce(nowMs: number): string {
   return `sched-${nowMs}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+export async function scheduleCompletionJob(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  timerRunId: string,
+  delaySeconds: number,
+  nowMs: number
+): Promise<{
+  targetEndTime: number;
+  scheduleNonce: string;
+  scheduledCompletionId: Id<"_scheduled_functions">;
+}> {
+  const targetEndTime = nowMs + delaySeconds * 1000;
+  const scheduleNonce = generateScheduleNonce(nowMs);
+  const scheduledCompletionId = await ctx.scheduler.runAfter(
+    delaySeconds * 1000,
+    internal.timer.onTimerCompleted,
+    { userId, timerRunId, scheduleNonce }
+  );
+  return { targetEndTime, scheduleNonce, scheduledCompletionId };
+}
+
+export function buildIdleTimerPayload(params: {
+  sessionType: TimerSessionType;
+  durationSeconds: number;
+  currentCycle: number;
+  tagId?: string;
+  lastCompletedTimerRunId?: string;
+  updatedAtMs: number;
+}) {
+  return {
+    sessionType: params.sessionType,
+    status: "IDLE" as const,
+    remainingSeconds: params.durationSeconds,
+    totalSeconds: params.durationSeconds,
+    targetEndTime: undefined,
+    currentCycle: params.currentCycle,
+    ...(params.tagId !== undefined ? { tagId: params.tagId } : {}),
+    timerRunId: undefined,
+    lastCompletedTimerRunId: params.lastCompletedTimerRunId,
+    scheduleNonce: undefined,
+    serverAutoStartStreak: 0,
+    scheduledCompletionId: undefined,
+    updatedAtMs: params.updatedAtMs,
+  };
+}
+
+export async function dispatchCompletionPushIfSubscribed(
+  ctx: MutationCtx,
+  params: {
+    userId: Id<"users">;
+    sessionType: TimerSessionType;
+    timerRunId: string;
+    completedAtMs: number;
+    targetEndTime: number | undefined;
+    nowMs: number;
+    maxWindowMs: number;
+  }
+): Promise<void> {
+  if (params.targetEndTime && params.nowMs - params.targetEndTime > params.maxWindowMs) {
+    return;
+  }
+  const hasPushSub = Boolean(
+    await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_user_device", (q) => q.eq("userId", params.userId))
+      .first()
+  );
+  if (hasPushSub) {
+    await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
+      userId: params.userId,
+      sessionType: params.sessionType,
+      timerRunId: params.timerRunId,
+      completedAtMs: Math.round(params.completedAtMs),
+    });
+  }
+}
+
 export async function recordCompletedSessionIfNotDuplicate(
   ctx: MutationCtx,
   params: {
@@ -111,19 +179,29 @@ export async function recordCompletedSessionIfNotDuplicate(
     completedAtMs: number;
     timerRunId?: string | null;
   }
-): Promise<{
-  id: Id<"sessions">;
-  tagId: string | null;
-  sessionType: TimerSessionType;
-  durationSeconds: number;
-  completedAt: string;
-  timerRunId: string | null;
-  wasDuplicate: boolean;
-}> {
+) {
   const cleanTimerRunId = params.timerRunId || undefined;
   const completedAtIso = new Date(params.completedAtMs).toISOString();
+  const formatSessionResult = (
+    id: Id<"sessions">,
+    row: {
+      tagId?: string | null;
+      sessionType: TimerSessionType;
+      durationSeconds: number;
+      completedAt: string;
+      timerRunId?: string | null;
+    },
+    wasDuplicate: boolean
+  ) => ({
+    id,
+    tagId: row.tagId ?? null,
+    sessionType: row.sessionType,
+    durationSeconds: row.durationSeconds,
+    completedAt: row.completedAt,
+    timerRunId: row.timerRunId ?? null,
+    wasDuplicate,
+  });
 
-  // 1. Primary exact deduplication by (userId, timerRunId) — immune to clock skew and safe for rapid short sessions
   if (cleanTimerRunId) {
     const exactMatch = await ctx.db
       .query("sessions")
@@ -133,20 +211,10 @@ export async function recordCompletedSessionIfNotDuplicate(
       .first();
 
     if (exactMatch) {
-      return {
-        id: exactMatch._id,
-        tagId: exactMatch.tagId ?? null,
-        sessionType: exactMatch.sessionType,
-        durationSeconds: exactMatch.durationSeconds,
-        completedAt: exactMatch.completedAt,
-        timerRunId: exactMatch.timerRunId ?? null,
-        wasDuplicate: true,
-      };
+      return formatSessionResult(exactMatch._id, exactMatch, true);
     }
   }
 
-  // 2. Fallback window deduplication ONLY when matching against legacy run-less records
-  //    (or when caller didn't supply a timerRunId). Two distinct timerRunIds never collide.
   const recent = await ctx.db
     .query("sessions")
     .withIndex("by_user_completed", (q) =>
@@ -159,26 +227,19 @@ export async function recordCompletedSessionIfNotDuplicate(
 
   const duplicate = recent.find((s) => {
     if (s.sessionType !== params.sessionType) return false;
-    if (cleanTimerRunId && s.timerRunId && s.timerRunId !== cleanTimerRunId) {
-      return false;
-    }
+    if (cleanTimerRunId && s.timerRunId && s.timerRunId !== cleanTimerRunId) return false;
     return Math.abs(Date.parse(s.completedAt) - params.completedAtMs) <= 45000;
   });
 
   if (duplicate) {
-    // Backfill timerRunId onto an existing run-less duplicate so subsequent retries hit the exact index
     if (cleanTimerRunId && !duplicate.timerRunId) {
       await ctx.db.patch(duplicate._id, { timerRunId: cleanTimerRunId });
     }
-    return {
-      id: duplicate._id,
-      tagId: duplicate.tagId ?? null,
-      sessionType: duplicate.sessionType,
-      durationSeconds: duplicate.durationSeconds,
-      completedAt: duplicate.completedAt,
-      timerRunId: cleanTimerRunId ?? duplicate.timerRunId ?? null,
-      wasDuplicate: true,
-    };
+    return formatSessionResult(
+      duplicate._id,
+      { ...duplicate, timerRunId: cleanTimerRunId ?? duplicate.timerRunId },
+      true
+    );
   }
 
   const sessionId = await ctx.db.insert("sessions", {
@@ -190,89 +251,40 @@ export async function recordCompletedSessionIfNotDuplicate(
     timerRunId: cleanTimerRunId,
   });
 
-  return {
-    id: sessionId,
-    tagId: params.tagId ?? null,
-    sessionType: params.sessionType,
-    durationSeconds: params.durationSeconds,
-    completedAt: completedAtIso,
-    timerRunId: cleanTimerRunId ?? null,
-    wasDuplicate: false,
-  };
-}
-
-export async function reconcileCompletedSessionAttempt(
-  ctx: MutationCtx,
-  params: {
-    userId: Id<"users">;
-    attemptId: string | null | undefined;
-    totalSeconds: number;
-    targetEndTime: number | undefined;
-    completedAtIso: string;
-    nowMs: number;
-    source: "client" | "server_scheduled";
-  }
-): Promise<void> {
-  if (!params.attemptId) return;
-  const attemptId = params.attemptId;
-  const existingAttempt = await ctx.db
-    .query("session_attempts")
-    .withIndex("by_user_attempt", (q) =>
-      q.eq("userId", params.userId).eq("attemptId", attemptId)
-    )
-    .first();
-
-  if (existingAttempt && existingAttempt.status === "in_progress") {
-    const completionLatencySeconds = params.targetEndTime
-      ? Math.max(0, Math.round((params.nowMs - params.targetEndTime) / 1000))
-      : 0;
-    const actualActiveSeconds =
-      existingAttempt.plannedDurationSeconds || params.totalSeconds;
-
-    await ctx.db.patch(existingAttempt._id, {
-      status: "completed",
-      endedAt: params.completedAtIso,
-      actualActiveSeconds,
-      remainingSecondsAtEnd: 0,
-      completionRatio: 1,
-      completionLatencySeconds,
-      source: params.source,
-      updatedAtMs: params.nowMs,
-    });
-  }
+  return formatSessionResult(
+    sessionId,
+    {
+      tagId: params.tagId,
+      sessionType: params.sessionType,
+      durationSeconds: params.durationSeconds,
+      completedAt: completedAtIso,
+      timerRunId: cleanTimerRunId,
+    },
+    false
+  );
 }
 
 export function computeServerNextInterval(
   completedType: TimerSessionType,
   currentCycle: number,
   userSettings?: typeof DEFAULT_SETTINGS | null
-): {
-  nextType: TimerSessionType;
-  nextCycle: number;
-  nextDurationSec: number;
-  shouldAutoStart: boolean;
-} {
+) {
   const settings = userSettings ?? DEFAULT_SETTINGS;
   const interval = Math.max(1, settings.longBreakInterval || 4);
   const curCycle = Math.max(1, currentCycle || 1);
 
-  let nextType: TimerSessionType;
-  let nextCycle: number;
-  if (completedType === "WORK") {
-    if (curCycle >= interval) {
-      nextType = "LONG_BREAK";
-      nextCycle = curCycle;
-    } else {
-      nextType = "SHORT_BREAK";
-      nextCycle = curCycle;
-    }
-  } else if (completedType === "LONG_BREAK") {
-    nextType = "WORK";
-    nextCycle = 1;
-  } else {
-    nextType = "WORK";
-    nextCycle = curCycle + 1;
-  }
+  const nextType: TimerSessionType =
+    completedType === "WORK"
+      ? curCycle >= interval
+        ? "LONG_BREAK"
+        : "SHORT_BREAK"
+      : "WORK";
+  const nextCycle =
+    completedType === "WORK"
+      ? curCycle
+      : completedType === "LONG_BREAK"
+      ? 1
+      : curCycle + 1;
 
   const nextMinutes =
     nextType === "WORK"

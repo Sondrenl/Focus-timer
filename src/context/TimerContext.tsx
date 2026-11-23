@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import { SessionType, TimerStatus } from '../types/timer';
 import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { DEFAULT_TAGS } from '../types/tag';
@@ -19,7 +27,11 @@ import {
   saveTimerState,
 } from './timer/timerPersistence';
 import { useTimerAlerts } from './timer/useTimerAlerts';
-import { useTimerCloudSync } from './timer/useTimerCloudSync';
+import {
+  TimerSharedRefs,
+  TimerSnapshot,
+  useTimerCloudSync,
+} from './timer/useTimerCloudSync';
 import { useTimerWorker } from './timer/useTimerWorker';
 import { useTimerNewDayReset } from './timer/useTimerNewDayReset';
 import { useTimerActions } from './timer/useTimerActions';
@@ -52,19 +64,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     convexSync,
   } = useAuthProfile();
 
-  const {
-    coffeeCups,
-    activeTagId,
-    setActiveTagId,
-    consumeSkipTagTelemetry,
-    recordSession,
-    sessions,
-  } = useData();
+  const { activeTagId, setActiveTagId, recordSession, sessions } = useData();
 
   const getDurationForType = useCallback(
-    (type: SessionType): number => {
-      return getBaseDurationForType(type, settings);
-    },
+    (type: SessionType): number => getBaseDurationForType(type, settings),
     [settings]
   );
 
@@ -81,7 +84,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const targetEndTimeRef = useRef<number | null>(initialState.targetEndTime);
   targetEndTimeRef.current = targetEndTime;
-
   const localUpdatedAtRef = useRef<number>(
     typeof initialState.updatedAtMs === 'number' ? initialState.updatedAtMs : 0
   );
@@ -89,43 +91,28 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const timerRunIdRef = useRef<string | null>(initialState.timerRunId || null);
   const prevActiveTagIdRef = useRef<string | null>(activeTagId);
   const lastTickWallMsRef = useRef<number>(Date.now());
-
   const sessionTypeRef = useRef<SessionType>(sessionType);
   sessionTypeRef.current = sessionType;
-
   const statusRef = useRef<TimerStatus>(status);
   statusRef.current = status;
-
   const currentCycleRef = useRef<number>(currentCycle);
   currentCycleRef.current = currentCycle;
-
   const totalSecondsRef = useRef<number>(totalSeconds);
   totalSecondsRef.current = totalSeconds;
-
   const remainingSecondsRef = useRef<number>(remainingSeconds);
   remainingSecondsRef.current = remainingSeconds;
-
   const settingsRef = useRef<UserSettings>(settings);
   settingsRef.current = settings;
-
   const profileRef = useRef(profile);
   profileRef.current = profile;
-
-  const coffeeCupsRef = useRef(coffeeCups);
-  coffeeCupsRef.current = coffeeCups;
-
   const activeTagIdRef = useRef<string | null>(activeTagId);
   activeTagIdRef.current = activeTagId;
-
   const isAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
   isAuthenticatedRef.current = isEffectiveAuthenticated;
-
   const isConvexAuthReadyRef = useRef<boolean>(isConvexAuthReady);
   isConvexAuthReadyRef.current = isConvexAuthReady;
-
   const isConvexConnectedRef = useRef<boolean>(convexSync.isConvexConnected);
   isConvexConnectedRef.current = convexSync.isConvexConnected;
-
   const isDevicePushRegisteredRef = useRef<boolean | undefined>(
     convexSync.devicePushStatus?.registered
   );
@@ -134,17 +121,72 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const mountedAtMsRef = useRef<number>(Date.now());
   const wakeDeferredAtMsRef = useRef<number>(0);
   const serverClockOffsetMsRef = useRef<number>(0);
+  const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
+
+  const refs = useMemo<TimerSharedRefs>(
+    () => ({
+      isAuthenticatedRef,
+      isConvexConnectedRef,
+      sessionTypeRef,
+      statusRef,
+      currentCycleRef,
+      totalSecondsRef,
+      remainingSecondsRef,
+      targetEndTimeRef,
+      timerRunIdRef,
+      localUpdatedAtRef,
+      lastLocalActionWallMsRef,
+      lastTickWallMsRef,
+      activeTagIdRef,
+      prevActiveTagIdRef,
+      serverClockOffsetMsRef,
+      settingsRef,
+      profileRef,
+      handleCompleteRef,
+    }),
+    []
+  );
+
   const getServerAlignedNowMs = useCallback(
     () => Date.now() + serverClockOffsetMsRef.current,
     []
   );
+
   const wasExpiredAtMountRef = useRef<boolean>(
     initialState.status === 'RUNNING' &&
       initialState.targetEndTime !== null &&
       initialState.targetEndTime <= mountedAtMsRef.current
   );
 
-  const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
+  const commitTimerSnapshot = useCallback(
+    (snapshot: TimerSnapshot) => {
+      if (snapshot.sessionType !== undefined) {
+        sessionTypeRef.current = snapshot.sessionType;
+        setSessionType(snapshot.sessionType);
+      }
+      if (snapshot.currentCycle !== undefined) {
+        currentCycleRef.current = snapshot.currentCycle;
+        setCurrentCycle(snapshot.currentCycle);
+      }
+      if (snapshot.totalSeconds !== undefined) {
+        totalSecondsRef.current = snapshot.totalSeconds;
+        setTotalSeconds(snapshot.totalSeconds);
+      }
+      statusRef.current = snapshot.status;
+      remainingSecondsRef.current = snapshot.remainingSeconds;
+      targetEndTimeRef.current = snapshot.targetEndTime;
+      timerRunIdRef.current = snapshot.timerRunId;
+      if (snapshot.activeTagId !== undefined) {
+        activeTagIdRef.current = snapshot.activeTagId;
+        prevActiveTagIdRef.current = snapshot.activeTagId;
+        setActiveTagId(snapshot.activeTagId);
+      }
+      setStatus(snapshot.status);
+      setRemainingSeconds(snapshot.remainingSeconds);
+      setTargetEndTime(snapshot.targetEndTime);
+    },
+    [setActiveTagId]
+  );
 
   const {
     dispatchCompletionAlert,
@@ -174,32 +216,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isAuthenticated: isEffectiveAuthenticated,
     isConvexAuthReady,
     isConvexConnected: convexSync.isConvexConnected,
-    isConvexConnectedRef,
-    isAuthenticatedRef,
-    sessionTypeRef,
-    statusRef,
-    currentCycleRef,
-    totalSecondsRef,
-    remainingSecondsRef,
-    targetEndTimeRef,
-    timerRunIdRef,
-    localUpdatedAtRef,
-    lastLocalActionWallMsRef,
-    lastTickWallMsRef,
-    activeTagIdRef,
-    prevActiveTagIdRef,
-    serverClockOffsetMsRef,
+    refs,
     getServerAlignedNowMs,
-    settingsRef,
-    profileRef,
-    coffeeCupsRef,
-    handleCompleteRef,
-    setSessionType,
-    setStatus,
-    setCurrentCycle,
-    setTotalSeconds,
-    setRemainingSeconds,
-    setTargetEndTime,
+    commitTimerSnapshot,
     setActiveTagId,
     getDurationForType,
     dispatchCompletionAlert,
@@ -216,27 +235,11 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     previousInterval,
     toggleStartPause,
   } = useTimerActions({
-    sessionTypeRef,
-    statusRef,
-    currentCycleRef,
-    totalSecondsRef,
-    remainingSecondsRef,
-    targetEndTimeRef,
-    timerRunIdRef,
-    localUpdatedAtRef,
-    activeTagIdRef,
-    settingsRef,
-    profileRef,
-    coffeeCupsRef,
+    refs,
     getServerAlignedNowMs,
-    setSessionType,
-    setStatus,
-    setCurrentCycle,
-    setTotalSeconds,
+    commitTimerSnapshot,
     setRemainingSeconds,
-    setTargetEndTime,
     getDurationForType,
-    recordSession,
     sound,
     dispatchCompletionAlert,
     triggerCompletionConfetti,
@@ -246,43 +249,40 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   handleCompleteRef.current = handleComplete;
 
+  // Update IDLE duration when settings change
   useEffect(() => {
-    if (status === 'IDLE') {
-      const newDuration = getDurationForType(sessionType);
-      const changed =
-        totalSecondsRef.current !== newDuration ||
-        remainingSecondsRef.current !== newDuration;
-      if (changed) {
-        totalSecondsRef.current = newDuration;
-        remainingSecondsRef.current = newDuration;
-        setTotalSeconds(newDuration);
-        setRemainingSeconds(newDuration);
+    if (status !== 'IDLE') return;
+    const newDuration = getDurationForType(sessionType);
+    if (totalSecondsRef.current === newDuration && remainingSecondsRef.current === newDuration) {
+      return;
+    }
+    totalSecondsRef.current = newDuration;
+    remainingSecondsRef.current = newDuration;
+    setTotalSeconds(newDuration);
+    setRemainingSeconds(newDuration);
 
-        const canPublishRemote =
-          isInitialMountDoneRef.current &&
-          (!isConvexConfigured || !isAuthenticatedRef.current || hasResolvedRemoteTimerRef.current) &&
-          remoteTimerRef.current?.status !== 'RUNNING' &&
-          remoteTimerRef.current?.status !== 'PAUSED';
+    const canPublishRemote =
+      isInitialMountDoneRef.current &&
+      (!isConvexConfigured || !isAuthenticatedRef.current || hasResolvedRemoteTimerRef.current) &&
+      remoteTimerRef.current?.status !== 'RUNNING' &&
+      remoteTimerRef.current?.status !== 'PAUSED';
 
-        if (canPublishRemote) {
-          const now = getServerAlignedNowMs();
-          publishLocalTimerState(
-            {
-              sessionType: sessionTypeRef.current,
-              status: 'IDLE',
-              remainingSeconds: newDuration,
-              totalSeconds: newDuration,
-              targetEndTime: null,
-              currentCycle: currentCycleRef.current,
-              activeTagId: activeTagIdRef.current,
-              timerRunId: null,
-              updatedAtMs: now,
-            },
-            false,
-            { onlyIfIdle: true }
-          );
-        }
-      }
+    if (canPublishRemote) {
+      publishLocalTimerState(
+        {
+          sessionType: sessionTypeRef.current,
+          status: 'IDLE',
+          remainingSeconds: newDuration,
+          totalSeconds: newDuration,
+          targetEndTime: null,
+          currentCycle: currentCycleRef.current,
+          activeTagId: activeTagIdRef.current,
+          timerRunId: null,
+          updatedAtMs: getServerAlignedNowMs(),
+        },
+        false,
+        { onlyIfIdle: true }
+      );
     }
   }, [
     sessionType,
@@ -299,43 +299,30 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isConvexConfigured,
   ]);
 
+  // Publish activeTagId changes after initial hydration
   useEffect(() => {
-    const shouldSkipTelemetry = consumeSkipTagTelemetry();
     if (prevActiveTagIdRef.current === activeTagId) return;
-    const previousTagId = prevActiveTagIdRef.current;
     prevActiveTagIdRef.current = activeTagId;
-
     if (
       !isInitialMountDoneRef.current ||
       (isConvexConfigured && isAuthenticatedRef.current && !hasResolvedRemoteTimerRef.current)
     ) {
       return;
     }
-
-    if (!shouldSkipTelemetry) {
-      void telemetryTracker.onTagChanged({
-        previousTagId,
-        nextTagId: activeTagId,
-        timerStatus: statusRef.current,
-        sessionType: sessionTypeRef.current,
-        attemptId: timerRunIdRef.current,
-      });
-    }
-
     publishTagUpdate(activeTagId);
   }, [
     activeTagId,
-    consumeSkipTagTelemetry,
     publishTagUpdate,
     isInitialMountDoneRef,
     hasResolvedRemoteTimerRef,
     isConvexConfigured,
   ]);
 
+  // Persist timer state to localStorage strictly in guest mode (Convex is source of truth when signed in)
   const persistedRemainingSeconds = status === 'RUNNING' ? null : remainingSeconds;
-
   useEffect(() => {
-    const stateToSave: SavedTimerState = {
+    if (isConvexConfigured && isEffectiveAuthenticated) return;
+    saveTimerState({
       sessionType,
       status,
       currentCycle,
@@ -349,9 +336,10 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       tabId: TAB_ID,
       lastActiveAtMs: Date.now(),
       wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
-    };
-    saveTimerState(stateToSave);
+    });
   }, [
+    isConvexConfigured,
+    isEffectiveAuthenticated,
     sessionType,
     status,
     currentCycle,
@@ -361,28 +349,16 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     activeTagId,
   ]);
 
-  useEffect(() => {
-    if (initialState.status === 'IDLE') {
-      void telemetryTracker.finalizeOrphanedDraftIfStale();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Keep Web Audio unlocked for reloaded, remote-started, multi-tab, or auto-started running timers,
-  // and mark AudioContext for zombie-hardware health checks when returning from background/sleep.
+  // Re-arm audio context on visibility return while running
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
-
     let gestureArmed = false;
     const handleUnlockGesture = () => {
       gestureArmed = false;
       window.removeEventListener('pointerdown', handleUnlockGesture);
       window.removeEventListener('keydown', handleUnlockGesture);
-      if (settingsRef.current.soundEnabled) {
-        sound.prepareForPlayback();
-      }
+      if (settingsRef.current.soundEnabled) sound.prepareForPlayback();
     };
-
     const armUnlockGesture = () => {
       if (gestureArmed || statusRef.current !== 'RUNNING' || !settingsRef.current.soundEnabled) {
         return;
@@ -391,7 +367,6 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.addEventListener('pointerdown', handleUnlockGesture, { passive: true });
       window.addEventListener('keydown', handleUnlockGesture, { passive: true });
     };
-
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         sound.markStaleForRecovery();
@@ -399,10 +374,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
 
-    if (status === 'RUNNING' && settings.soundEnabled) {
-      armUnlockGesture();
-    }
-
+    if (status === 'RUNNING' && settings.soundEnabled) armUnlockGesture();
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -421,28 +393,24 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return false;
     }
 
-    // 1. Cold-mount deferral while remote timer hydrates (up to 2.5s)
     if (wasExpiredAtMountRef.current) {
-      if (hasResolvedRemoteTimerRef.current && isConvexConnectedRef.current) {
-        wasExpiredAtMountRef.current = false;
-        return false;
-      }
-      if (nowWall - mountedAtMsRef.current >= 2500) {
+      if (
+        (hasResolvedRemoteTimerRef.current && isConvexConnectedRef.current) ||
+        nowWall - mountedAtMsRef.current >= 2500
+      ) {
         wasExpiredAtMountRef.current = false;
         return false;
       }
       return true;
     }
 
-    // 2. Wake/sleep deferral when signed-in WebSocket is reconnecting or auth is refreshing (up to 2.5s)
-    if (!isConvexConnectedRef.current || !isConvexAuthReadyRef.current || !hasResolvedRemoteTimerRef.current) {
-      if (wakeDeferredAtMsRef.current === 0) {
-        wakeDeferredAtMsRef.current = nowWall;
-      }
-      if (nowWall - wakeDeferredAtMsRef.current < 2500) {
-        return true;
-      }
-      return false;
+    if (
+      !isConvexConnectedRef.current ||
+      !isConvexAuthReadyRef.current ||
+      !hasResolvedRemoteTimerRef.current
+    ) {
+      if (wakeDeferredAtMsRef.current === 0) wakeDeferredAtMsRef.current = nowWall;
+      return nowWall - wakeDeferredAtMsRef.current < 2500;
     }
 
     wakeDeferredAtMsRef.current = 0;
@@ -471,12 +439,14 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setRemainingSeconds,
   });
 
+  // Cross-tab BroadcastChannel sync (timer state in guest mode; logout/reset in all modes)
   useEffect(() => {
     const unsubscribeState = subscribeTimerState((incoming) => {
-      const now = Date.now();
-      const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
+      if (isConvexConfigured && isAuthenticatedRef.current && isConvexConnectedRef.current) {
+        return;
+      }
+      const hasRecentLocalAction = Date.now() - lastLocalActionWallMsRef.current < 1500;
       const isStrictlyNewer = incoming.updatedAtMs > localUpdatedAtRef.current;
-      // Deterministic tie-breaker when two local tabs auto-start in the exact same millisecond
       const isDeterministicTieWinner =
         incoming.updatedAtMs === localUpdatedAtRef.current &&
         Boolean(incoming.timerRunId) &&
@@ -493,24 +463,18 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (payload.action === 'logout') {
         const defaultDuration = Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60));
         serverClockOffsetMsRef.current = 0;
-        sessionTypeRef.current = 'WORK';
-        statusRef.current = 'IDLE';
-        currentCycleRef.current = 1;
-        totalSecondsRef.current = defaultDuration;
-        remainingSecondsRef.current = defaultDuration;
-        targetEndTimeRef.current = null;
-        timerRunIdRef.current = null;
         localUpdatedAtRef.current = 0;
         lastLocalActionWallMsRef.current = 0;
         prevActiveTagIdRef.current = DEFAULT_TAGS[0]?.id ?? null;
-
-        setSessionType('WORK');
-        setStatus('IDLE');
-        setCurrentCycle(1);
-        setTotalSeconds(defaultDuration);
-        setRemainingSeconds(defaultDuration);
-        setTargetEndTime(null);
-
+        commitTimerSnapshot({
+          sessionType: 'WORK',
+          status: 'IDLE',
+          currentCycle: 1,
+          totalSeconds: defaultDuration,
+          remainingSeconds: defaultDuration,
+          targetEndTime: null,
+          timerRunId: null,
+        });
         wakeLockService.release();
         telemetryTracker.invalidateDraftCache();
       }
@@ -525,24 +489,17 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const resetTagId =
         scope === 'factory-reset' ? (DEFAULT_TAGS[0]?.id ?? null) : activeTagIdRef.current;
 
-      sessionTypeRef.current = 'WORK';
-      statusRef.current = 'IDLE';
-      currentCycleRef.current = 1;
-      totalSecondsRef.current = defaultDuration;
-      remainingSecondsRef.current = defaultDuration;
-      targetEndTimeRef.current = null;
-      timerRunIdRef.current = null;
       localUpdatedAtRef.current = nowMs;
-
-      setSessionType('WORK');
-      setStatus('IDLE');
-      setCurrentCycle(1);
-      setTotalSeconds(defaultDuration);
-      setRemainingSeconds(defaultDuration);
-      setTargetEndTime(null);
-
+      commitTimerSnapshot({
+        sessionType: 'WORK',
+        status: 'IDLE',
+        currentCycle: 1,
+        totalSeconds: defaultDuration,
+        remainingSeconds: defaultDuration,
+        targetEndTime: null,
+        timerRunId: null,
+      });
       wakeLockService.release();
-
       telemetryTracker.invalidateDraftCache();
 
       if (scope === 'factory-reset') {
@@ -572,35 +529,25 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       unsubscribeAuth();
       unsubscribeReset();
     };
-  }, [getDurationForType, getServerAlignedNowMs, applyRemoteState, publishLocalTimerState]);
+  }, [
+    isConvexConfigured,
+    getDurationForType,
+    getServerAlignedNowMs,
+    commitTimerSnapshot,
+    applyRemoteState,
+    publishLocalTimerState,
+  ]);
 
   useTimerNewDayReset({
     sessions,
     convexSessions: convexSync.convexSessions,
     isConvexConfigured,
     hasResolvedRemoteTimer,
-    isAuthenticatedRef,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,
-    statusRef,
-    sessionTypeRef,
-    currentCycleRef,
-    totalSecondsRef,
-    remainingSecondsRef,
-    targetEndTimeRef,
-    timerRunIdRef,
-    localUpdatedAtRef,
-    activeTagIdRef,
-    settingsRef,
-    profileRef,
-    coffeeCupsRef,
+    refs,
     getServerAlignedNowMs,
-    setSessionType,
-    setStatus,
-    setCurrentCycle,
-    setTotalSeconds,
-    setRemainingSeconds,
-    setTargetEndTime,
+    commitTimerSnapshot,
     getDurationForType,
     publishLocalTimerState,
   });

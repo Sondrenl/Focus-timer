@@ -4,63 +4,12 @@ import { SessionType } from '../types/timer';
 import { BackupData, UserProfile, ExportedProfile } from '../types/user';
 import { CoffeeCup } from '../types/coffee';
 import { UserSettings } from '../types/settings';
-import { MlEvent, MlTelemetryExport, SessionAttempt } from '../types/telemetry';
-import { isSampleSessionId } from '../services/repository/SessionRepository';
+import { isSampleSessionId } from '../services/storage/guestRepositories';
 import { isProduction } from './environment';
 import { sanitizeHexColor } from './colors';
 
 export const TAG_ID_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
-const ML_HYDRATED_DATE_PREFIX = 'ml_hydrated_date_v1_';
 
-export function shiftDateDays(yyyyMmDd: string, deltaDays: number): string {
-  const [y, m, d] = yyyyMmDd.split('-').map(Number);
-  if (!y || !m || !d) return yyyyMmDd;
-  const dt = new Date(Date.UTC(y, m - 1, d + deltaDays));
-  return dt.toISOString().slice(0, 10);
-}
-
-export function readHydrationWatermark(userId: string): string | null {
-  if (!userId || typeof localStorage === 'undefined') return null;
-  try {
-    const val = localStorage.getItem(`${ML_HYDRATED_DATE_PREFIX}${userId}`);
-    return val && /^\d{4}-\d{2}-\d{2}$/.test(val) ? val : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeHydrationWatermark(userId: string, yyyyMmDd: string): void {
-  if (!userId || !/^\d{4}-\d{2}-\d{2}$/.test(yyyyMmDd) || typeof localStorage === 'undefined') {
-    return;
-  }
-  try {
-    localStorage.setItem(`${ML_HYDRATED_DATE_PREFIX}${userId}`, yyyyMmDd);
-  } catch {
-    // Ignore storage quota or disabled storage errors
-  }
-}
-
-export function clearAllHydrationWatermarks(): void {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    const keysToRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith(ML_HYDRATED_DATE_PREFIX)) {
-        keysToRemove.push(k);
-      }
-    }
-    keysToRemove.forEach((k) => localStorage.removeItem(k));
-  } catch {
-    // Ignore storage access errors
-  }
-}
-
-/**
- * Sanitizes user profile for backup export, removing private identifiers and PII
- * (cloud user id, email, and non-custom account photo avatarUrl).
- * Only portable customization settings (displayName, avatarEmoji, dailyGoalMinutes) are exported.
- */
 export function sanitizeProfileForExport(
   profile?: UserProfile | null
 ): ExportedProfile | undefined {
@@ -69,81 +18,6 @@ export function sanitizeProfileForExport(
     displayName: profile.displayName,
     avatarEmoji: profile.avatarEmoji,
     dailyGoalMinutes: profile.dailyGoalMinutes,
-  };
-}
-
-export function sanitizeMlTelemetryForImport(
-  raw: unknown,
-  resolveTagId: (rawTagId?: string | null) => string | null
-): MlTelemetryExport | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const obj = raw as Record<string, unknown>;
-  const rawAttempts = Array.isArray(obj.sessionAttempts) ? obj.sessionAttempts : [];
-  const rawEvents = Array.isArray(obj.events) ? obj.events : [];
-
-  const validSessionTypes = new Set(['WORK', 'SHORT_BREAK', 'LONG_BREAK']);
-  const validStatuses = new Set([
-    'in_progress',
-    'completed',
-    'skipped',
-    'reset',
-    'switched',
-    'abandoned_stale',
-  ]);
-
-  const sessionAttempts: SessionAttempt[] = rawAttempts
-    .filter((a: any) => {
-      if (!a || typeof a !== 'object') return false;
-      if (isSampleSessionId(a.attemptId)) return false;
-      return (
-        typeof a.attemptId === 'string' &&
-        a.attemptId.length > 0 &&
-        validSessionTypes.has(a.sessionType) &&
-        validStatuses.has(a.status) &&
-        typeof a.plannedDurationSeconds === 'number' &&
-        Number.isFinite(a.plannedDurationSeconds) &&
-        typeof a.localDate === 'string' &&
-        /^\d{4}-\d{2}-\d{2}$/.test(a.localDate) &&
-        a.settingsSnapshot &&
-        typeof a.settingsSnapshot === 'object'
-      );
-    })
-    .map((a: any) => ({
-      ...a,
-      initialTagId: resolveTagId(a.initialTagId),
-      tagId: resolveTagId(a.tagId),
-      pauseIntervals: Array.isArray(a.pauseIntervals) ? a.pauseIntervals.slice(0, 50) : [],
-    }));
-
-  const events: MlEvent[] = rawEvents
-    .filter((e: any) => {
-      if (!e || typeof e !== 'object') return false;
-      if (isSampleSessionId(e.eventId)) return false;
-      return (
-        typeof e.eventId === 'string' &&
-        e.eventId.length > 0 &&
-        typeof e.eventType === 'string' &&
-        typeof e.timestamp === 'string' &&
-        typeof e.timestampMs === 'number' &&
-        Number.isFinite(e.timestampMs) &&
-        typeof e.localDate === 'string' &&
-        /^\d{4}-\d{2}-\d{2}$/.test(e.localDate)
-      );
-    })
-    .map((e: any) => ({
-      ...e,
-      tagId: e.tagId !== undefined ? resolveTagId(e.tagId) : null,
-      fromTagId: e.fromTagId !== undefined ? resolveTagId(e.fromTagId) : null,
-      toTagId: e.toTagId !== undefined ? resolveTagId(e.toTagId) : null,
-    }));
-
-  return {
-    schemaVersion:
-      typeof obj.schemaVersion === 'number' && Number.isFinite(obj.schemaVersion)
-        ? obj.schemaVersion
-        : 1,
-    sessionAttempts,
-    events,
   };
 }
 
@@ -177,21 +51,13 @@ export function parseAndValidateBackupEntities(
         }
       }
       const fallbackNowIso = new Date().toISOString();
-      const createdAt = isValidIsoTimestamp(t.createdAt)
-        ? t.createdAt
-        : isValidIsoTimestamp(t.created_at)
-        ? t.created_at
-        : fallbackNowIso;
-      const updatedAt = isValidIsoTimestamp(t.updatedAt)
-        ? t.updatedAt
-        : isValidIsoTimestamp(t.updated_at)
-        ? t.updated_at
-        : createdAt;
+      const createdAt = isValidIsoTimestamp(t.createdAt) ? t.createdAt : fallbackNowIso;
+      const updatedAt = isValidIsoTimestamp(t.updatedAt) ? t.updatedAt : createdAt;
       return {
         id: safeId,
         name: t.name.trim().slice(0, 50),
         color: sanitizeHexColor(t.color, '#3B82F6'),
-        isArchived: typeof t.isArchived === 'boolean' ? t.isArchived : Boolean(t.is_archived),
+        isArchived: Boolean(t.isArchived),
         createdAt,
         updatedAt,
       };
@@ -209,74 +75,55 @@ export function parseAndValidateBackupEntities(
       if ((isProduction() || isEffectiveAuthenticated) && isSampleSessionId(s.id)) {
         return false;
       }
-      const type = s.sessionType || s.session_type;
-      const duration = Number(s.durationSeconds ?? s.duration_seconds);
-      const completed = s.completedAt || s.completed_at;
+      const duration = Number(s.durationSeconds);
       return (
-        ['WORK', 'SHORT_BREAK', 'LONG_BREAK'].includes(type) &&
+        ['WORK', 'SHORT_BREAK', 'LONG_BREAK'].includes(s.sessionType) &&
         !isNaN(duration) &&
         duration > 0 &&
-        typeof completed === 'string' &&
-        !isNaN(new Date(completed).getTime())
+        typeof s.completedAt === 'string' &&
+        !isNaN(new Date(s.completedAt).getTime())
       );
     })
     .map((s: any) => {
-      const type = (s.sessionType || s.session_type) as SessionType;
-      const duration = Number(s.durationSeconds ?? s.duration_seconds);
-      const completed = s.completedAt || s.completed_at;
-      const tag = s.tagId !== undefined ? s.tagId : s.tag_id !== undefined ? s.tag_id : null;
-      const rawRunId = s.timerRunId ?? s.timer_run_id;
       const timerRunId =
-        typeof rawRunId === 'string' && rawRunId.trim().length > 0
-          ? rawRunId.trim().slice(0, 128)
+        typeof s.timerRunId === 'string' && s.timerRunId.trim().length > 0
+          ? s.timerRunId.trim().slice(0, 128)
           : undefined;
       return {
         id:
           typeof s.id === 'string' && s.id.trim().length > 0
             ? s.id
             : `session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        tagId: normalizeRawTagRef(tag),
-        sessionType: type,
-        durationSeconds: duration,
-        completedAt: completed,
+        tagId: normalizeRawTagRef(s.tagId),
+        sessionType: s.sessionType as SessionType,
+        durationSeconds: Number(s.durationSeconds),
+        completedAt: s.completedAt,
         ...(timerRunId ? { timerRunId } : {}),
       };
     });
 
-  const rawCoffee = Array.isArray(data.coffeeCups)
-    ? data.coffeeCups
-    : Array.isArray((data as any).coffee_cups)
-    ? (data as any).coffee_cups
-    : [];
+  const rawCoffee = Array.isArray(data.coffeeCups) ? data.coffeeCups : [];
   const validCoffee: CoffeeCup[] = rawCoffee
     .filter((c: any) => {
       if (!c) return false;
       if ((isProduction() || isEffectiveAuthenticated) && isSampleSessionId(c.id)) {
         return false;
       }
-      const date = c.date;
-      return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+      return typeof c.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.date);
     })
     .map((c: any, idx: number) => {
-      const date = c.date;
-      const tag = c.tagId !== undefined ? c.tagId : c.tag_id !== undefined ? c.tag_id : null;
-      const fallbackBaseMs = Date.parse(`${date}T12:00:00.000Z`);
+      const fallbackBaseMs = Date.parse(`${c.date}T12:00:00.000Z`);
       const fallbackIso = !Number.isNaN(fallbackBaseMs)
         ? new Date(fallbackBaseMs + idx).toISOString()
-        : `${date}T12:00:00.000Z`;
-      const createdAt = isValidIsoTimestamp(c.createdAt)
-        ? c.createdAt
-        : isValidIsoTimestamp(c.created_at)
-        ? c.created_at
-        : fallbackIso;
+        : `${c.date}T12:00:00.000Z`;
       return {
         id:
           typeof c.id === 'string' && c.id.trim().length > 0
             ? c.id
             : `cup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        date,
-        tagId: normalizeRawTagRef(tag),
-        createdAt,
+        date: c.date,
+        tagId: normalizeRawTagRef(c.tagId),
+        createdAt: isValidIsoTimestamp(c.createdAt) ? c.createdAt : fallbackIso,
       };
     });
 
@@ -358,15 +205,9 @@ export function sanitizeBackupProfile(
       : undefined;
 
   const safeProfileUpdate: Partial<UserProfile> = {};
-  if (safeDisplayName !== undefined) {
-    safeProfileUpdate.displayName = safeDisplayName;
-  }
-  if (safeAvatarEmoji !== undefined) {
-    safeProfileUpdate.avatarEmoji = safeAvatarEmoji;
-  }
-  if (safeDailyGoal !== undefined) {
-    safeProfileUpdate.dailyGoalMinutes = safeDailyGoal;
-  }
+  if (safeDisplayName !== undefined) safeProfileUpdate.displayName = safeDisplayName;
+  if (safeAvatarEmoji !== undefined) safeProfileUpdate.avatarEmoji = safeAvatarEmoji;
+  if (safeDailyGoal !== undefined) safeProfileUpdate.dailyGoalMinutes = safeDailyGoal;
   if (
     !isEffectiveAuthenticated &&
     'avatarUrl' in rawProfile &&

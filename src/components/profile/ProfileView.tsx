@@ -26,7 +26,6 @@ export const ProfileView: React.FC = () => {
     resetAllData,
     reloadSampleData,
     isDemoEnvironment,
-    pendingSyncCount,
   } = useData();
 
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -50,7 +49,6 @@ export const ProfileView: React.FC = () => {
       <CloudSyncCard
         auth={{ ...auth, isAuthenticated: isEffectiveAuthenticated }}
         isLoggingOut={isLoggingOut}
-        pendingSyncCount={pendingSyncCount}
         loginWithGoogle={loginWithGoogle}
         logout={logout}
         syncWithCloud={syncWithCloud}

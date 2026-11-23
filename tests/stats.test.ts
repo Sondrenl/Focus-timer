@@ -5,7 +5,10 @@ import {
   computeTagDistribution,
   computeActivityBars,
   computeProductiveMetric,
+  getEffectiveSessionDate,
 } from '../src/utils/stats/focusStats';
+import { computeDayTimeRangeBreakdown } from '../src/utils/stats/dayTimeRanges';
+import { buildInsightContext } from '../src/utils/insights/mathHelpers';
 import {
   filterPeriodCoffee,
   computeCoffeeStats,
@@ -277,5 +280,34 @@ describe('coffeeStats', () => {
     expect(stats.coffeeDailyAverage).toBe(1);
     expect(stats.coffeePeakMetric.value).toBe('Wednesday');
     expect(stats.coffeePeakMetric.subtext).toBe('2 cups logged');
+  });
+
+  it('attributes cross-midnight, exact-midnight (00:00:00.000), and DST coffee peak weekday consistently', () => {
+    const crossMidnight: StatSession[] = [
+      { id: 'cm-1', tagId: 'tag-dev', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 15, 0, 10) },
+    ];
+    const nov14Start = new Date(2026, 10, 14, 0, 0, 0, 0);
+    const nov14Bars = computeActivityBars([], 'day', new Date(2026, 10, 14, 12, 0, 0), nov14Start, { start: '2026-11-14', end: '2026-11-14' }, crossMidnight);
+    expect(nov14Bars.find((b) => b.key === 'hour-23')?.totalSeconds).toBe(900);
+    expect(computeProductiveMetric([], nov14Bars, 'day', new Date(2026, 10, 14, 12, 0, 0), false).subtext).toBe('15m focused');
+
+    const exactMidnight: StatSession = {
+      id: 'em-1', tagId: null, sessionType: 'WORK', durationSeconds: 1500,
+      completedAt: new Date(2026, 10, 15, 0, 0, 0, 0).toISOString(),
+    };
+    expect(toDateKey(getEffectiveSessionDate(exactMidnight.completedAt, 1500)!)).toBe('2026-11-14');
+    expect(getEffectiveSessionDate(new Date(2026, 10, 15, 0, 0, 0, 1).toISOString(), 1500)?.getDate()).toBe(15);
+    expect(buildInsightContext({ sessions: [exactMidnight], coffeeCups: [], tags: [], periodType: 'week', totalFocusSeconds: 1500, allSessions: [exactMidnight] }).activeFocusDates).toEqual(['2026-11-14']);
+
+    const byRange = Object.fromEntries(computeDayTimeRangeBreakdown([exactMidnight as any]).map((r) => [r.id, r.totalSeconds]));
+    expect(byRange.night).toBe(1500);
+
+    const coffee = computeCoffeeStats({
+      coffeeCups: [{ id: 'c1', date: '2026-03-08', tagId: null }, { id: 'c2', date: '2026-03-08', tagId: null }, { id: 'c3', date: '2026-03-09', tagId: null }],
+      periodType: 'all', referenceDate: new Date(2026, 2, 10, 12, 0, 0),
+      startDate: new Date(2026, 0, 1, 0, 0, 0), endDate: new Date(2026, 2, 10, 23, 59, 59),
+      sanitizedCustomRange: { start: '2026-03-08', end: '2026-03-10' }, todayKey: '2026-03-10', tags: [], shouldExcludeSample: true,
+    });
+    expect(coffee.coffeePeakMetric.value).toBe('Sundays');
   });
 });

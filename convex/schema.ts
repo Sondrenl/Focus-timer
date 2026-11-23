@@ -1,14 +1,13 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { authTables } from "@convex-dev/auth/server";
-import { sessionAttemptDbFields, mlEventDbFields } from "./telemetryValidators";
+import { sessionAttemptDbFields } from "./telemetryValidators";
 
 export default defineSchema({
   ...authTables,
 
   // 1. User: Profile + Preferences + Embedded Tags (All core state in 1 query)
   users: defineTable({
-    // Convex Auth schema fields
     name: v.optional(v.string()),
     image: v.optional(v.string()),
     email: v.optional(v.string()),
@@ -17,7 +16,6 @@ export default defineSchema({
     phoneVerificationTime: v.optional(v.number()),
     isAnonymous: v.optional(v.boolean()),
 
-    // Focus Timer application fields
     tokenIdentifier: v.optional(v.string()),
     displayName: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
@@ -56,7 +54,7 @@ export default defineSchema({
     .index("email", ["email"])
     .index("by_token", ["tokenIdentifier"]),
 
-  // 2. Active Timer: Dedicated for sub-50ms sync & peer presence
+  // 2. Active Timer: Dedicated for sub-50ms sync
   active_timers: defineTable({
     userId: v.id("users"),
     sessionType: v.union(
@@ -72,7 +70,7 @@ export default defineSchema({
     ),
     remainingSeconds: v.number(),
     totalSeconds: v.number(),
-    targetEndTime: v.optional(v.number()), // Server anchor timestamp in ms
+    targetEndTime: v.optional(v.number()),
     currentCycle: v.number(),
     tagId: v.optional(v.string()),
     timerRunId: v.optional(v.string()),
@@ -81,23 +79,11 @@ export default defineSchema({
     serverAutoStartStreak: v.optional(v.number()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
-    peerPresence: v.optional(
-      v.object({
-        desktopActive: v.boolean(),
-        desktopVisible: v.boolean(),
-        mobileActive: v.boolean(),
-        mobileVisible: v.boolean(),
-        lastSeenMs: v.number(),
-        desktopLastSeenMs: v.optional(v.number()),
-        mobileLastSeenMs: v.optional(v.number()),
-      })
-    ),
   })
     .index("by_user", ["userId"])
     .index("by_status_updated", ["status", "updatedAtMs"]),
 
   // 3. Completed Sessions: Historical log
-  // Compound index on ["userId", "completedAt"] covers both userId-only queries and date-range queries
   sessions: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
@@ -107,7 +93,7 @@ export default defineSchema({
       v.literal("LONG_BREAK")
     ),
     durationSeconds: v.number(),
-    completedAt: v.string(), // Lexicographically sortable ISO-8601 string
+    completedAt: v.string(),
     timerRunId: v.optional(v.string()),
   })
     .index("by_user_completed", ["userId", "completedAt"])
@@ -115,18 +101,16 @@ export default defineSchema({
     .index("by_user_run", ["userId", "timerRunId"]),
 
   // 4. Coffee Log: Individual timestamped cups
-  // Compound index on ["userId", "date"] covers both userId-only queries and date queries
   coffee_cups: defineTable({
     userId: v.id("users"),
     tagId: v.optional(v.string()),
-    date: v.string(), // "YYYY-MM-DD"
-    createdAt: v.string(), // ISO-8601
+    date: v.string(),
+    createdAt: v.string(),
   })
     .index("by_user_date", ["userId", "date"])
     .index("by_user_tag", ["userId", "tagId"]),
 
-  // 5. Multi-Device Push Subscriptions (For background lock-screen notifications)
-  // Compound index on ["userId", "deviceId"] covers both userId-only queries and specific device lookups
+  // 5. Multi-Device Push Subscriptions
   push_subscriptions: defineTable({
     userId: v.id("users"),
     deviceId: v.string(),
@@ -151,14 +135,4 @@ export default defineSchema({
     .index("by_user_local_date", ["userId", "localDate"])
     .index("by_user_tag", ["userId", "tagId"])
     .index("by_user_initial_tag", ["userId", "initialTagId"]),
-
-  // 7. Passive ML Telemetry: Granular timestamped behavioral events
-  ml_events: defineTable({
-    userId: v.id("users"),
-    ...mlEventDbFields,
-  })
-    .index("by_user_event", ["userId", "eventId"])
-    .index("by_user_timestamp", ["userId", "timestampMs"])
-    .index("by_user_local_date", ["userId", "localDate"]),
 });
-

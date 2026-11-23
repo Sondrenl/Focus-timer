@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+} from 'react';
 import { useConvexAuth, useAuthActions } from '@convex-dev/auth/react';
 import { UserSettings } from '../types/settings';
 import { UserProfile, DEFAULT_PROFILE, AuthState } from '../types/user';
@@ -26,20 +34,14 @@ import {
 import { useConvexSync } from '../services/convex/useConvexSync';
 import { usePushSubscriptionSync } from '../hooks/usePushSubscriptionSync';
 import { DEVICE_ID, TIMER_STORAGE_KEY } from './timer/timerPersistence';
-import { sanitizeProfile } from '../services/repository/ProfileRepository';
+import { sanitizeProfile } from '../services/storage/guestRepositories';
 import { LAST_DAY_RESET_STORAGE_KEY } from '../utils/newDayCheck';
-import { clearAllHydrationWatermarks } from '../utils/backupSanitizers';
 import {
   clearGuestDataModifiedFlag,
-  clearOfflineOutbox,
-  enqueueOutboxOperation,
   getLocalDataOwner,
   getLocalDataOwnerUserId,
-  getPendingProfilePatch,
-  getPendingSettingsPatch,
   hasGuestDataBeenModified,
   markGuestDataModified,
-  removeOutboxOperation,
   setLocalDataOwner,
   subscribeLocalDataOwnerChange,
 } from '../services/sync/offlineOutbox';
@@ -60,18 +62,17 @@ const MAX_GIS_INIT_ATTEMPTS = 20;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('Operation timed out'));
-    }, timeoutMs);
-    promise
-      .then((val) => {
+    const timer = setTimeout(() => reject(new Error('Operation timed out')), timeoutMs);
+    promise.then(
+      (val) => {
         clearTimeout(timer);
         resolve(val);
-      })
-      .catch((err) => {
+      },
+      (err) => {
         clearTimeout(timer);
         reject(err);
-      });
+      }
+    );
   });
 }
 
@@ -110,8 +111,6 @@ export async function clearAccountLocalCaches(): Promise<{
     settingsRepository.resetToDefaults(),
     profileRepository.resetToDefaults(),
   ]);
-  clearAllHydrationWatermarks();
-  clearOfflineOutbox();
   clearGuestDataModifiedFlag();
   setLocalDataOwner('guest');
 
@@ -128,10 +127,6 @@ export async function clearAccountLocalCaches(): Promise<{
   return { cleanProfile, cleanSettings };
 }
 
-export interface TelemetryControlOptions {
-  skipTelemetry?: boolean;
-}
-
 export interface AuthProfileContextValue {
   auth: AuthState;
   isEffectiveAuthenticated: boolean;
@@ -142,19 +137,12 @@ export interface AuthProfileContextValue {
   loginWithGoogle: (idToken: string) => Promise<void>;
   logout: () => Promise<void>;
   syncWithCloud: () => Promise<void>;
-  registerFullSyncHandler: (handler: (() => Promise<void>) | null) => void;
   profile: UserProfile;
-  updateProfile: (
-    newProfile: Partial<UserProfile>,
-    options?: TelemetryControlOptions
-  ) => Promise<void>;
-  resetProfileToDefaults: (options?: TelemetryControlOptions) => Promise<UserProfile>;
+  updateProfile: (newProfile: Partial<UserProfile>) => Promise<void>;
+  resetProfileToDefaults: () => Promise<UserProfile>;
   settings: UserSettings;
-  updateSettings: (
-    newSettings: Partial<UserSettings>,
-    options?: TelemetryControlOptions
-  ) => Promise<void>;
-  resetSettingsToDefaults: (options?: TelemetryControlOptions) => Promise<UserSettings>;
+  updateSettings: (newSettings: Partial<UserSettings>) => Promise<void>;
+  resetSettingsToDefaults: () => Promise<UserSettings>;
   sound: SoundService;
   notifications: NotificationService;
   convexSync: ReturnType<typeof useConvexSync>;
@@ -165,42 +153,32 @@ export interface AuthProfileContextValue {
 const AuthProfileContext = createContext<AuthProfileContextValue | null>(null);
 
 export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
-  const [settings, setSettings] = useState<UserSettings>(() => settingsRepository.getSync());
-  const [auth, setAuth] = useState<AuthState>(() => authService.getInitialAuthState(convexUrl));
+  const [localProfile, setLocalProfile] = useState<UserProfile>(DEFAULT_PROFILE);
+  const [localSettings, setLocalSettings] = useState<UserSettings>(() =>
+    settingsRepository.getSync()
+  );
+  const [auth, setAuth] = useState<AuthState>(() =>
+    authService.getInitialAuthState(convexUrl)
+  );
   const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
-
-  const settingsRef = useRef<UserSettings>(settings);
-  settingsRef.current = settings;
-
-  const profileRef = useRef<UserProfile>(profile);
-  profileRef.current = profile;
+  const [, setOwnerVersion] = useState<number>(0);
 
   const authEpochRef = useRef<number>(0);
   const isLoggingOutRef = useRef<boolean>(false);
-  const hasAttemptedLegacyUpgradeRef = useRef<boolean>(false);
   const wasConvexAuthenticatedRef = useRef<boolean>(false);
-  const fullSyncHandlerRef = useRef<(() => Promise<void>) | null>(null);
 
-  const lastLocalSettingsEditMsRef = useRef<number>(0);
-  const lastLocalProfileEditMsRef = useRef<number>(0);
-  const pendingSettingsMutationsRef = useRef<number>(0);
-  const pendingProfileMutationsRef = useRef<number>(0);
-  const lastPersistedAuthUserJsonRef = useRef<string | null>(null);
-
-  const { isAuthenticated: isConvexAuthAuthenticated, isLoading: isConvexAuthLoading } = useConvexAuth();
+  const {
+    isAuthenticated: isConvexAuthAuthenticated,
+    isLoading: isConvexAuthLoading,
+  } = useConvexAuth();
   const { signIn: convexSignIn, signOut: convexSignOut } = useAuthActions();
 
-  // ConvexAuthProvider is the single source of truth for WebSocket authentication (Decision 2A).
-  // Queries & mutations wait strictly for isConvexAuthReady so no unauthenticated null bursts fire.
   const isConvexAuthReady =
-    !isLoggingOut &&
-    isConvexAuthAuthenticated &&
-    !isConvexAuthLoading;
+    !isLoggingOut && isConvexAuthAuthenticated && !isConvexAuthLoading;
 
-  const isEffectiveAuthenticated = !isLoggingOut && (
-    isConvexAuthLoading ? auth.isAuthenticated : isConvexAuthAuthenticated
-  );
+  const isEffectiveAuthenticated =
+    !isLoggingOut &&
+    (isConvexAuthLoading ? auth.isAuthenticated : isConvexAuthAuthenticated);
 
   const convexSync = useConvexSync(isEffectiveAuthenticated, isConvexAuthReady);
   const {
@@ -212,33 +190,83 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     mutations: convexMutations,
   } = convexSync;
 
-  const convexUserRef = useRef(convexUser);
-  convexUserRef.current = convexUser;
-
   const isConvexConnectedRef = useRef(isConvexConnected);
   isConvexConnectedRef.current = isConvexConnected;
 
-  const getActiveOwnerUserId = useCallback((): string | null => {
-    return (
-      convexUserRef.current?.id ??
-      getLocalDataOwnerUserId() ??
-      auth.user?.id ??
-      null
-    );
-  }, [auth.user?.id]);
-
-  const registerFullSyncHandler = useCallback((handler: (() => Promise<void>) | null) => {
-    fullSyncHandlerRef.current = handler;
+  useEffect(() => {
+    return subscribeLocalDataOwnerChange(() => {
+      setOwnerVersion((v) => v + 1);
+    });
   }, []);
+
+  const isWaitingOnGuestReconciliation = Boolean(
+    convexUser &&
+      getLocalDataOwner() !== `user:${convexUser.id}` &&
+      (getLocalDataOwner() === 'guest' || getLocalDataOwner() === null) &&
+      hasGuestDataBeenModified()
+  );
+
+  const shouldUseCloudState =
+    isConvexConfigured &&
+    isConvexAuthReady &&
+    Boolean(convexUser) &&
+    !isLoggingOut &&
+    !isWaitingOnGuestReconciliation;
+
+  const settings = useMemo<UserSettings>(() => {
+    if (shouldUseCloudState && convexUser?.settings) {
+      return {
+        ...convexUser.settings,
+        notificationsEnabled: localSettings.notificationsEnabled,
+      };
+    }
+    return localSettings;
+  }, [shouldUseCloudState, convexUser?.settings, localSettings]);
+
+  const profile = useMemo<UserProfile>(() => {
+    if (shouldUseCloudState && convexUser) {
+      return sanitizeProfile({
+        id: convexUser.id,
+        email: convexUser.email,
+        displayName: convexUser.displayName,
+        avatarUrl: convexUser.avatarUrl,
+        avatarEmoji: convexUser.avatarEmoji,
+        dailyGoalMinutes: convexUser.dailyGoalMinutes,
+      });
+    }
+    return localProfile;
+  }, [shouldUseCloudState, convexUser, localProfile]);
+
+  const settingsRef = useRef<UserSettings>(settings);
+  settingsRef.current = settings;
+
+  const profileRef = useRef<UserProfile>(profile);
+  profileRef.current = profile;
+
+  useEffect(() => {
+    if (!shouldUseCloudState || !convexUser) return;
+    authService.saveAuthUser(profile);
+    setAuth((prev) => {
+      if (
+        prev.isAuthenticated &&
+        !prev.isTokenExpired &&
+        prev.user?.id === profile.id &&
+        prev.user?.email === profile.email &&
+        prev.user?.displayName === profile.displayName
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        isAuthenticated: true,
+        isTokenExpired: false,
+        user: profile,
+      };
+    });
+  }, [shouldUseCloudState, convexUser, profile]);
 
   const resetLocalAuthUi = useCallback(
     async (options: { isTokenExpired?: boolean; wipeCaches?: boolean } = {}) => {
-      lastPersistedAuthUserJsonRef.current = null;
-      lastLocalSettingsEditMsRef.current = 0;
-      lastLocalProfileEditMsRef.current = 0;
-      pendingSettingsMutationsRef.current = 0;
-      pendingProfileMutationsRef.current = 0;
-
       setAuth({
         isAuthenticated: false,
         user: null,
@@ -251,14 +279,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       if (options.wipeCaches) {
         const { cleanProfile, cleanSettings } = await clearAccountLocalCaches();
-        profileRef.current = cleanProfile;
-        settingsRef.current = cleanSettings;
-        setProfile(cleanProfile);
-        setSettings(cleanSettings);
+        setLocalProfile(cleanProfile);
+        setLocalSettings(cleanSettings);
       } else {
         const cleanProfile = await profileRepository.resetToDefaults();
-        profileRef.current = cleanProfile;
-        setProfile(cleanProfile);
+        setLocalProfile(cleanProfile);
       }
     },
     []
@@ -270,8 +295,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setIsLoggingOut(true);
     authEpochRef.current += 1;
 
-    // Immediately notify local contexts & peer tabs so push self-heal never resurrects
-    // the device subscription while remote unregister/signOut is in flight.
     broadcastAuthEvent({ action: 'logout' });
 
     try {
@@ -296,7 +319,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           if (isConvexConnectedRef.current) {
             await withTimeout(convexSignOut(), LOGOUT_REMOTE_TIMEOUT_MS);
           } else {
-            // Avoid hanging offline: clear client auth immediately without waiting on socket
             convexClient.clearAuth();
           }
         } catch (err) {
@@ -335,8 +357,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           throw new Error('Invalid Google identity token');
         }
 
-        // If switching directly from an already-signed-in account (without calling logout first),
-        // unsubscribe push and wipe the prior account's cached data before signing into the new account.
         const priorOwner = getLocalDataOwnerUserId();
         const priorEmail = auth.user?.email;
         if (priorOwner && priorEmail && payload.email && priorEmail !== payload.email) {
@@ -350,10 +370,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
               : undefined
           );
           const { cleanProfile, cleanSettings } = await clearAccountLocalCaches();
-          profileRef.current = cleanProfile;
-          settingsRef.current = cleanSettings;
-          setProfile(cleanProfile);
-          setSettings(cleanSettings);
+          setLocalProfile(cleanProfile);
+          setLocalSettings(cleanSettings);
         }
 
         if (isConvexConfigured) {
@@ -364,9 +382,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
             throw new Error('Could not establish cloud session. Please try again.');
           }
         }
-
-        // Never retain the 1-hour raw Google ID token once a 30-day @convex-dev/auth session exists.
-        authService.clearLegacyToken();
 
         const user = buildProfileFromJwt(payload, profileRef.current);
         authService.saveAuthUser(user);
@@ -389,9 +404,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           avatarEmoji: profileRef.current.avatarEmoji || '',
           displayName: user.displayName || profileRef.current.displayName,
         };
-        profileRef.current = updatedProfile;
         await profileRepository.save(updatedProfile);
-        setProfile(updatedProfile);
+        setLocalProfile(updatedProfile);
         broadcastAuthEvent({ action: 'login' });
       } catch (err) {
         const message = (err as Error).message || 'Google sign-in failed';
@@ -412,7 +426,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ]
   );
 
-  // Initial local load with cancellation + authEpoch guard so init() never clobbers login/logout
+  // Initial local load with cancellation + authEpoch guard
   useEffect(() => {
     let cancelled = false;
     const startEpoch = authEpochRef.current;
@@ -425,26 +439,21 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       if (cancelled || authEpochRef.current !== startEpoch) return;
 
-      profileRef.current = loadedProfile;
-      settingsRef.current = loadedSettings;
-      setProfile(loadedProfile);
-      setSettings(loadedSettings);
+      setLocalProfile(loadedProfile);
+      setLocalSettings(loadedSettings);
 
       const storedUser = authService.getStoredUser();
       const hasConvexSession = authService.hasConvexAuthSession(convexUrl);
 
       if (hasConvexSession && isConvexConfigured) {
-        // Clear any leftover legacy Google JWT from before 30-day session migration
-        authService.clearLegacyToken();
-        const resolvedUser = storedUser || loadedProfile;
         setAuth((prev) => ({
           ...prev,
           isAuthenticated: true,
-          user: resolvedUser,
+          user: storedUser || loadedProfile,
           token: null,
           isTokenExpired: false,
         }));
-      } else if (!storedUser && !authService.getStoredToken()) {
+      } else if (!storedUser) {
         setAuth({
           isAuthenticated: false,
           user: null,
@@ -463,54 +472,27 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     };
   }, [isConvexConfigured]);
 
-  // Track when Convex Auth confirms authenticated state
   useEffect(() => {
     if (isConvexAuthAuthenticated && !isConvexAuthLoading) {
       wasConvexAuthenticatedRef.current = true;
     }
   }, [isConvexAuthAuthenticated, isConvexAuthLoading]);
 
-  // One-time silent upgrade of a valid legacy Google JWT (auth_token_v2) into a 30-day @convex-dev/auth session,
-  // and authoritative stale/expired session cleanup once Convex Auth finishes loading.
+  // Session expiry / unauthenticated cleanup
   useEffect(() => {
-    if (!isConvexConfigured || isConvexAuthLoading || isLoggingOutRef.current) {
-      return;
-    }
-
-    if (isConvexAuthAuthenticated) {
-      authService.clearLegacyToken();
-      return;
-    }
-
-    // Convex Auth resolved as unauthenticated.
-    const storedToken = authService.getStoredToken();
     if (
-      storedToken &&
-      !authService.isTokenExpired(storedToken) &&
-      !hasAttemptedLegacyUpgradeRef.current &&
-      isConvexConnectedRef.current
+      !isConvexConfigured ||
+      isConvexAuthLoading ||
+      isLoggingOutRef.current ||
+      isConvexAuthAuthenticated
     ) {
-      hasAttemptedLegacyUpgradeRef.current = true;
-      void loginWithGoogle(storedToken).catch(() => {
-        authService.clearLegacyToken();
-      });
       return;
     }
 
-    // Clean up any expired legacy token and clear stale local auth state (never stay ghost-authenticated)
-    const hadSessionEvidence = Boolean(
-      wasConvexAuthenticatedRef.current || auth.isAuthenticated || storedToken
-    );
-    if (storedToken) {
-      authService.clearLegacyToken();
-    }
-
-    if (hadSessionEvidence) {
+    if (wasConvexAuthenticatedRef.current || auth.isAuthenticated) {
       wasConvexAuthenticatedRef.current = false;
       void notificationService.unsubscribePush();
-      const shouldMarkExpired = Boolean(
-        auth.isAuthenticated || storedToken || authService.getStoredUser()
-      );
+      const shouldMarkExpired = Boolean(auth.isAuthenticated || authService.getStoredUser());
       void resetLocalAuthUi({
         isTokenExpired: shouldMarkExpired,
         wipeCaches: false,
@@ -521,11 +503,10 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     isConvexAuthLoading,
     isConvexAuthAuthenticated,
     auth.isAuthenticated,
-    loginWithGoogle,
     resetLocalAuthUi,
   ]);
 
-  // Multi-tab sync: logout, settings (incl. per-device notificationsEnabled), profile, and factory reset
+  // Multi-tab sync for logout, per-device notificationsEnabled, and guest settings/profile
   useEffect(() => {
     const unsubAuth = subscribeAuthEvent((payload, { isRemoteTab }) => {
       if (payload.action === 'logout' && isRemoteTab) {
@@ -539,41 +520,27 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           // Ignore
         }
         void resetLocalAuthUi({ isTokenExpired: false, wipeCaches: false }).finally(() => {
-          settingsRepository.get().then((s) => {
-            settingsRef.current = s;
-            setSettings(s);
-          });
+          settingsRepository.get().then((s) => setLocalSettings(s));
           isLoggingOutRef.current = false;
         });
       }
     });
 
     const unsubSettings = subscribeSettings((incoming) => {
-      const merged: UserSettings = { ...settingsRef.current, ...incoming };
-      settingsRef.current = merged;
-      setSettings(merged);
+      setLocalSettings((prev) => ({ ...prev, ...incoming }));
     });
 
     const unsubProfile = subscribeProfile((incoming) => {
-      const merged = sanitizeProfile({ ...profileRef.current, ...incoming });
-      profileRef.current = merged;
-      setProfile(merged);
+      setLocalProfile((prev) => sanitizeProfile({ ...prev, ...incoming }));
     });
 
     const unsubReset = subscribeReset((scope) => {
       if (scope === 'factory-reset') {
-        settingsRepository.get().then((loadedSettings) => {
-          settingsRef.current = loadedSettings;
-          setSettings(loadedSettings);
-        });
-        profileRepository.get().then((loadedProfile) => {
-          profileRef.current = loadedProfile;
-          setProfile(loadedProfile);
-        });
+        settingsRepository.get().then((s) => setLocalSettings(s));
+        profileRepository.get().then((p) => setLocalProfile(p));
       }
     });
 
-    // Cross-tab fallback via storage events (e.g. if BroadcastChannel is unavailable)
     const handleStorage = (e: StorageEvent) => {
       if (e.key === AUTH_USER_KEY && e.newValue === null && !isLoggingOutRef.current) {
         if (!authService.hasConvexAuthSession(convexUrl)) {
@@ -581,14 +548,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           void resetLocalAuthUi({ isTokenExpired: false, wipeCaches: false });
         }
       } else if (e.key === 'pomodor:settings_v1' && e.newValue) {
-        const fresh = settingsRepository.getSync();
-        settingsRef.current = fresh;
-        setSettings(fresh);
+        setLocalSettings(settingsRepository.getSync());
       } else if (e.key === 'pomodor:profile_v1' && e.newValue) {
-        void profileRepository.get().then((fresh) => {
-          profileRef.current = fresh;
-          setProfile(fresh);
-        });
+        void profileRepository.get().then((p) => setLocalProfile(p));
       }
     };
 
@@ -607,180 +569,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     };
   }, [resetLocalAuthUi]);
 
-  // Reactive adoption of Convex user profile & settings
-  useEffect(() => {
-    if (!isConvexAuthReady || !convexUser || isLoggingOutRef.current) return;
-
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-
-    const applyRemoteUser = () => {
-      if (cancelled || isLoggingOutRef.current) return;
-
-      // While guest data modified locally is awaiting migration/reconciliation into this account,
-      // avoid overwriting local guest settings/profile before useCloudMigration reads them.
-      const owner = getLocalDataOwner();
-      const waitingOnGuestReconciliation =
-        owner !== `user:${convexUser.id}` &&
-        (owner === 'guest' || owner === null) &&
-        hasGuestDataBeenModified();
-      if (waitingOnGuestReconciliation) {
-        return;
-      }
-
-      const now = Date.now();
-      const pendingOutboxSettings = getPendingSettingsPatch(convexUser.id);
-      const pendingOutboxProfile = getPendingProfilePatch(convexUser.id);
-
-      if (
-        convexUser.settings &&
-        pendingSettingsMutationsRef.current === 0 &&
-        now - lastLocalSettingsEditMsRef.current >= 2000
-      ) {
-        const cur = settingsRef.current;
-        // Preserve any field that still has an un-flushed offline outbox patch,
-        // and always preserve per-device notificationsEnabled.
-        const s: UserSettings = {
-          ...convexUser.settings,
-          ...(pendingOutboxSettings ?? {}),
-          notificationsEnabled: cur.notificationsEnabled,
-        };
-        const settingsChanged =
-          cur.workDurationMinutes !== s.workDurationMinutes ||
-          cur.shortBreakDurationMinutes !== s.shortBreakDurationMinutes ||
-          cur.longBreakDurationMinutes !== s.longBreakDurationMinutes ||
-          cur.longBreakInterval !== s.longBreakInterval ||
-          cur.autoStartBreaks !== s.autoStartBreaks ||
-          cur.autoStartPomodoros !== s.autoStartPomodoros ||
-          cur.soundVolume !== s.soundVolume ||
-          cur.soundEnabled !== s.soundEnabled ||
-          Boolean(cur.keepAwake) !== Boolean(s.keepAwake);
-
-        if (settingsChanged) {
-          settingsRef.current = s;
-          setSettings(s);
-          void settingsRepository.save(s);
-        }
-      }
-
-      if (
-        pendingProfileMutationsRef.current === 0 &&
-        now - lastLocalProfileEditMsRef.current >= 2000
-      ) {
-        const curProf = profileRef.current;
-        const updatedProfile = sanitizeProfile({
-          ...curProf,
-          id: convexUser.id,
-          email: convexUser.email,
-          displayName: pendingOutboxProfile?.displayName ?? convexUser.displayName,
-          avatarUrl: convexUser.avatarUrl,
-          avatarEmoji: pendingOutboxProfile?.avatarEmoji ?? convexUser.avatarEmoji,
-          dailyGoalMinutes:
-            pendingOutboxProfile?.dailyGoalMinutes ?? convexUser.dailyGoalMinutes,
-        });
-        const profileChanged =
-          curProf.id !== updatedProfile.id ||
-          curProf.email !== updatedProfile.email ||
-          curProf.displayName !== updatedProfile.displayName ||
-          curProf.avatarUrl !== updatedProfile.avatarUrl ||
-          curProf.avatarEmoji !== updatedProfile.avatarEmoji ||
-          curProf.dailyGoalMinutes !== updatedProfile.dailyGoalMinutes;
-
-        if (profileChanged) {
-          profileRef.current = updatedProfile;
-          setProfile(updatedProfile);
-          void profileRepository.save(updatedProfile);
-        }
-
-        const serializedAuthUser = JSON.stringify(updatedProfile);
-        if (profileChanged || lastPersistedAuthUserJsonRef.current !== serializedAuthUser) {
-          lastPersistedAuthUserJsonRef.current = serializedAuthUser;
-          try {
-            localStorage.setItem(AUTH_USER_KEY, serializedAuthUser);
-          } catch {
-            // Ignore storage access errors
-          }
-        }
-
-        setAuth((prev) => {
-          if (
-            prev.isAuthenticated &&
-            !prev.isTokenExpired &&
-            prev.user?.id === updatedProfile.id &&
-            prev.user?.email === updatedProfile.email &&
-            prev.user?.displayName === updatedProfile.displayName &&
-            prev.user?.avatarUrl === updatedProfile.avatarUrl &&
-            prev.user?.avatarEmoji === updatedProfile.avatarEmoji &&
-            prev.user?.dailyGoalMinutes === updatedProfile.dailyGoalMinutes
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            isAuthenticated: true,
-            isTokenExpired: false,
-            user: updatedProfile,
-          };
-        });
-      }
-    };
-
-    const scheduleNextCheck = () => {
-      if (cancelled) return;
-      const now = Date.now();
-      const settingsBlocked =
-        Boolean(convexUser.settings) &&
-        (pendingSettingsMutationsRef.current > 0 ||
-          now - lastLocalSettingsEditMsRef.current < 2000);
-      const profileBlocked =
-        pendingProfileMutationsRef.current > 0 ||
-        now - lastLocalProfileEditMsRef.current < 2000;
-
-      if (!settingsBlocked && !profileBlocked) {
-        return;
-      }
-
-      const settingsRemaining =
-        pendingSettingsMutationsRef.current > 0
-          ? 500
-          : Math.max(0, 2000 - (now - lastLocalSettingsEditMsRef.current));
-      const profileRemaining =
-        pendingProfileMutationsRef.current > 0
-          ? 500
-          : Math.max(0, 2000 - (now - lastLocalProfileEditMsRef.current));
-
-      const nextDelay = Math.min(
-        settingsBlocked ? settingsRemaining : Infinity,
-        profileBlocked ? profileRemaining : Infinity
-      );
-      if (!Number.isFinite(nextDelay)) return;
-
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        applyRemoteUser();
-        scheduleNextCheck();
-      }, Math.max(50, nextDelay + 50));
-    };
-
-    applyRemoteUser();
-    scheduleNextCheck();
-
-    const unsubOwner = subscribeLocalDataOwnerChange(() => {
-      applyRemoteUser();
-      scheduleNextCheck();
-    });
-
-    return () => {
-      cancelled = true;
-      unsubOwner();
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-        retryTimer = null;
-      }
-    };
-  }, [convexUser, isConvexAuthReady]);
-
-  // Single Google Identity Services initialization with bounded retries & safe error handling
+  // Google Identity Services initialization
   useEffect(() => {
     let initialized = false;
     let attempts = 0;
@@ -828,9 +617,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     startPolling();
     const handleOnline = () => {
-      if (!initialized) {
-        startPolling();
-      }
+      if (!initialized) startPolling();
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('online', handleOnline);
@@ -850,368 +637,128 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setAuth((prev) => ({
         ...prev,
         isSyncing: false,
-        syncError: 'You are currently offline. Changes are queued and will sync automatically when reconnected.',
+        syncError: 'You are currently offline.',
       }));
       return;
     }
-    if (isConvexConfigured && (!isConvexAuthReady || !convexUserRef.current)) {
-      setAuth((prev) => ({
-        ...prev,
-        isSyncing: false,
-        syncError: 'Cloud connection is still initializing. Please try again in a moment.',
-      }));
-      return;
-    }
-
-    setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
-    try {
-      // Flush all pending offline outbox operations (sessions, coffee, tags, telemetry, settings, profile)
-      if (fullSyncHandlerRef.current) {
-        await fullSyncHandlerRef.current();
-      }
-
-      if (isConvexConfigured && convexUserRef.current) {
-        const ownerId = convexUserRef.current.id;
-        const pendingProf = getPendingProfilePatch(ownerId);
-        const pendingSet = getPendingSettingsPatch(ownerId);
-
-        // Only push dirty/queued profile & settings patches instead of clobbering other devices
-        if (pendingProf || pendingSet) {
-          if (pendingProf) pendingProfileMutationsRef.current += 1;
-          if (pendingSet) pendingSettingsMutationsRef.current += 1;
-          try {
-            const tasks: Promise<unknown>[] = [];
-            if (pendingProf) {
-              tasks.push(convexMutations.updateProfile(pendingProf));
-            }
-            if (pendingSet) {
-              tasks.push(convexMutations.updateSettings(pendingSet));
-            }
-            await Promise.all(tasks);
-          } finally {
-            if (pendingProf) {
-              pendingProfileMutationsRef.current = Math.max(
-                0,
-                pendingProfileMutationsRef.current - 1
-              );
-              lastLocalProfileEditMsRef.current = Date.now();
-            }
-            if (pendingSet) {
-              pendingSettingsMutationsRef.current = Math.max(
-                0,
-                pendingSettingsMutationsRef.current - 1
-              );
-              lastLocalSettingsEditMsRef.current = Date.now();
-            }
-          }
-        }
-      }
-
-      setAuth((prev) => ({
-        ...prev,
-        isSyncing: false,
-        lastSyncedAt: new Date().toISOString(),
-        syncError: null,
-      }));
-    } catch (err) {
-      setAuth((prev) => ({
-        ...prev,
-        isSyncing: false,
-        syncError: err instanceof Error ? err.message : 'Cloud sync failed',
-      }));
-    }
-  }, [isConvexConfigured, isEffectiveAuthenticated, isConvexAuthReady, convexMutations]);
+    setAuth((prev) => ({
+      ...prev,
+      isSyncing: false,
+      lastSyncedAt: new Date().toISOString(),
+      syncError: null,
+    }));
+  }, [isConvexConfigured, isEffectiveAuthenticated]);
 
   const updateProfile = useCallback(
-    async (
-      newProfile: Partial<UserProfile>,
-      options?: TelemetryControlOptions
-    ): Promise<void> => {
-      lastLocalProfileEditMsRef.current = Date.now();
-      const latestStored = await profileRepository.get();
-      const base = { ...latestStored, ...profileRef.current };
-      const previousGoalMinutes = base.dailyGoalMinutes;
-      const merged = sanitizeProfile({ ...base, ...newProfile });
-      profileRef.current = merged;
-      setProfile(merged);
-      await profileRepository.save(merged);
-      broadcastProfile({
-        ...(newProfile.displayName !== undefined ? { displayName: merged.displayName } : {}),
-        ...(newProfile.avatarEmoji !== undefined ? { avatarEmoji: merged.avatarEmoji } : {}),
-        ...(newProfile.dailyGoalMinutes !== undefined
-          ? { dailyGoalMinutes: merged.dailyGoalMinutes }
-          : {}),
-      });
-
-      if (!options?.skipTelemetry && merged.dailyGoalMinutes !== previousGoalMinutes) {
-        void telemetryTracker.onDailyGoalChanged({
-          previousGoalMinutes,
-          newGoalMinutes: merged.dailyGoalMinutes,
-        });
-      }
-
-      if (!isEffectiveAuthenticated) {
-        markGuestDataModified();
-        return;
-      }
-
+    async (newProfile: Partial<UserProfile>): Promise<void> => {
       const patchPayload = {
-        ...(newProfile.displayName !== undefined ? { displayName: merged.displayName } : {}),
-        ...(newProfile.avatarEmoji !== undefined ? { avatarEmoji: merged.avatarEmoji } : {}),
+        ...(newProfile.displayName !== undefined ? { displayName: newProfile.displayName } : {}),
+        ...(newProfile.avatarEmoji !== undefined ? { avatarEmoji: newProfile.avatarEmoji } : {}),
         ...(newProfile.dailyGoalMinutes !== undefined
-          ? { dailyGoalMinutes: merged.dailyGoalMinutes }
+          ? { dailyGoalMinutes: newProfile.dailyGoalMinutes }
           : {}),
       };
-      if (Object.keys(patchPayload).length === 0) return;
-
-      if (isConvexConfigured) {
-        const ownerId = getActiveOwnerUserId();
-        const queuedOp = ownerId
-          ? enqueueOutboxOperation(ownerId, { kind: 'update_profile', payload: patchPayload })
-          : null;
-
-        if (!isConvexAuthReady || !isConvexConnectedRef.current) {
-          return;
-        }
-
-        pendingProfileMutationsRef.current += 1;
-        convexMutations
-          .updateProfile(patchPayload)
-          .then(() => {
-            if (queuedOp) {
-              removeOutboxOperation(queuedOp.id);
-            }
-          })
-          .catch((err) => {
-            console.warn('Convex updateProfile failed (kept in offline outbox):', err);
-          })
-          .finally(() => {
-            pendingProfileMutationsRef.current = Math.max(
-              0,
-              pendingProfileMutationsRef.current - 1
-            );
-            lastLocalProfileEditMsRef.current = Date.now();
-          });
-      }
-    },
-    [
-      isConvexConfigured,
-      isEffectiveAuthenticated,
-      isConvexAuthReady,
-      convexMutations,
-      getActiveOwnerUserId,
-    ]
-  );
-
-  const resetProfileToDefaults = useCallback(
-    async (options?: TelemetryControlOptions): Promise<UserProfile> => {
-      lastLocalProfileEditMsRef.current = Date.now();
-      const previousGoalMinutes = profileRef.current.dailyGoalMinutes;
-      const defaultProfile = await profileRepository.resetToDefaults();
-      // Preserve authenticated identity fields (id/email/avatarUrl) when resetting customizable profile fields while signed in
-      const resolvedProfile: UserProfile = isEffectiveAuthenticated
-        ? {
-            ...defaultProfile,
-            id: profileRef.current.id || auth.user?.id || defaultProfile.id,
-            email: profileRef.current.email || auth.user?.email,
-            avatarUrl: profileRef.current.avatarUrl || auth.user?.avatarUrl,
-          }
-        : defaultProfile;
-      if (isEffectiveAuthenticated) {
-        await profileRepository.save(resolvedProfile);
-      }
-      profileRef.current = resolvedProfile;
-      setProfile(resolvedProfile);
-      broadcastProfile({
-        displayName: resolvedProfile.displayName,
-        avatarEmoji: resolvedProfile.avatarEmoji,
-        dailyGoalMinutes: resolvedProfile.dailyGoalMinutes,
-      });
-
-      if (!options?.skipTelemetry && resolvedProfile.dailyGoalMinutes !== previousGoalMinutes) {
-        void telemetryTracker.onDailyGoalChanged({
-          previousGoalMinutes,
-          newGoalMinutes: resolvedProfile.dailyGoalMinutes,
-        });
-      }
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
-        const patchPayload = {
-          displayName: resolvedProfile.displayName,
-          avatarEmoji: resolvedProfile.avatarEmoji,
-          dailyGoalMinutes: resolvedProfile.dailyGoalMinutes,
-        };
-        const ownerId = getActiveOwnerUserId();
-        const queuedOp = ownerId
-          ? enqueueOutboxOperation(ownerId, { kind: 'update_profile', payload: patchPayload })
-          : null;
-
-        if (isConvexAuthReady && isConvexConnectedRef.current) {
-          pendingProfileMutationsRef.current += 1;
-          convexMutations
-            .updateProfile(patchPayload)
-            .then(() => {
-              if (queuedOp) removeOutboxOperation(queuedOp.id);
-            })
-            .catch(console.warn)
-            .finally(() => {
-              pendingProfileMutationsRef.current = Math.max(
-                0,
-                pendingProfileMutationsRef.current - 1
-              );
-              lastLocalProfileEditMsRef.current = Date.now();
-            });
+        if (Object.keys(patchPayload).length > 0 && isConvexAuthReady) {
+          await convexMutations.updateProfile(patchPayload);
         }
-      }
-      return resolvedProfile;
-    },
-    [
-      isConvexConfigured,
-      isEffectiveAuthenticated,
-      isConvexAuthReady,
-      auth.user?.id,
-      auth.user?.email,
-      auth.user?.avatarUrl,
-      convexMutations,
-      getActiveOwnerUserId,
-    ]
-  );
-
-  const updateSettings = useCallback(
-    async (
-      newValues: Partial<UserSettings>,
-      options?: TelemetryControlOptions
-    ): Promise<void> => {
-      lastLocalSettingsEditMsRef.current = Date.now();
-      const latestStored = settingsRepository.getSync();
-      const previousSettings = { ...latestStored, ...settingsRef.current };
-      const localValues = pickLocalSettings(newValues);
-      const definedLocalValues = Object.fromEntries(
-        Object.entries(localValues).filter(([, v]) => v !== undefined)
-      ) as Partial<UserSettings>;
-      const merged = { ...previousSettings, ...definedLocalValues };
-      settingsRef.current = merged;
-      setSettings(merged);
-      await settingsRepository.save(merged);
-      broadcastSettings(definedLocalValues);
-
-      if (!options?.skipTelemetry) {
-        void telemetryTracker.onSettingsChanged({
-          previousSettings,
-          newSettings: merged,
-        });
-      }
-
-      if (!isEffectiveAuthenticated) {
-        markGuestDataModified();
         return;
       }
 
-      const convexValues = pickConvexSettings(newValues);
-      const cleanConvexPatch = Object.fromEntries(
-        Object.entries(convexValues).filter(([, v]) => v !== undefined)
-      );
-      if (isConvexConfigured && Object.keys(cleanConvexPatch).length > 0) {
-        const ownerId = getActiveOwnerUserId();
-        const queuedOp = ownerId
-          ? enqueueOutboxOperation(ownerId, {
-              kind: 'update_settings',
-              payload: cleanConvexPatch,
-            })
-          : null;
-
-        if (!isConvexAuthReady || !isConvexConnectedRef.current) {
-          return;
-        }
-
-        pendingSettingsMutationsRef.current += 1;
-        convexMutations
-          .updateSettings(cleanConvexPatch)
-          .then(() => {
-            if (queuedOp) {
-              removeOutboxOperation(queuedOp.id);
-            }
-          })
-          .catch((err) => {
-            console.warn('Convex updateSettings failed (kept in offline outbox):', err);
-          })
-          .finally(() => {
-            pendingSettingsMutationsRef.current = Math.max(
-              0,
-              pendingSettingsMutationsRef.current - 1
-            );
-            lastLocalSettingsEditMsRef.current = Date.now();
-          });
-      }
+      const latestStored = await profileRepository.get();
+      const merged = sanitizeProfile({ ...latestStored, ...profileRef.current, ...newProfile });
+      setLocalProfile(merged);
+      await profileRepository.save(merged);
+      broadcastProfile(patchPayload);
+      markGuestDataModified();
     },
-    [
-      isConvexConfigured,
-      isEffectiveAuthenticated,
-      isConvexAuthReady,
-      convexMutations,
-      getActiveOwnerUserId,
-    ]
+    [isConvexConfigured, isEffectiveAuthenticated, isConvexAuthReady, convexMutations]
   );
 
-  const resetSettingsToDefaults = useCallback(
-    async (options?: TelemetryControlOptions): Promise<UserSettings> => {
-      lastLocalSettingsEditMsRef.current = Date.now();
-      const previousSettings = settingsRef.current;
-      const defaultSettings = await settingsRepository.resetToDefaults();
-      settingsRef.current = defaultSettings;
-      setSettings(defaultSettings);
-      broadcastSettings(defaultSettings);
+  const resetProfileToDefaults = useCallback(async (): Promise<UserProfile> => {
+    const defaultProfile = await profileRepository.resetToDefaults();
+    setLocalProfile(defaultProfile);
+    const patch = {
+      displayName: defaultProfile.displayName,
+      avatarEmoji: defaultProfile.avatarEmoji,
+      dailyGoalMinutes: defaultProfile.dailyGoalMinutes,
+    };
+    broadcastProfile(patch);
 
-      if (!options?.skipTelemetry) {
-        void telemetryTracker.onSettingsChanged({
-          previousSettings,
-          newSettings: defaultSettings,
-        });
-      }
+    if (isConvexConfigured && isEffectiveAuthenticated && isConvexAuthReady) {
+      await convexMutations.updateProfile(patch);
+    }
+    return defaultProfile;
+  }, [isConvexConfigured, isEffectiveAuthenticated, isConvexAuthReady, convexMutations]);
 
-      if (isConvexConfigured && isConvexAuthReady && isConvexConnectedRef.current && !auth.isTokenExpired) {
-        void notificationService.unsubscribePush(() =>
-          convexMutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
-        );
-      } else {
-        void notificationService.unsubscribePush();
-      }
+  const updateSettings = useCallback(
+    async (newValues: Partial<UserSettings>): Promise<void> => {
+      const definedLocalValues = Object.fromEntries(
+        Object.entries(pickLocalSettings(newValues)).filter(([, v]) => v !== undefined)
+      ) as Partial<UserSettings>;
 
       if (isConvexConfigured && isEffectiveAuthenticated) {
-        const patchPayload = pickConvexSettings(defaultSettings);
-        const ownerId = getActiveOwnerUserId();
-        const queuedOp = ownerId
-          ? enqueueOutboxOperation(ownerId, { kind: 'update_settings', payload: patchPayload })
-          : null;
-
-        if (isConvexAuthReady && isConvexConnectedRef.current) {
-          pendingSettingsMutationsRef.current += 1;
-          convexMutations
-            .updateSettings(patchPayload)
-            .then(() => {
-              if (queuedOp) removeOutboxOperation(queuedOp.id);
-            })
-            .catch(console.warn)
-            .finally(() => {
-              pendingSettingsMutationsRef.current = Math.max(
-                0,
-                pendingSettingsMutationsRef.current - 1
-              );
-              lastLocalSettingsEditMsRef.current = Date.now();
-            });
+        if (newValues.notificationsEnabled !== undefined) {
+          const updatedLocal = {
+            ...settingsRepository.getSync(),
+            notificationsEnabled: newValues.notificationsEnabled,
+          };
+          setLocalSettings(updatedLocal);
+          await settingsRepository.save(updatedLocal);
+          broadcastSettings({ notificationsEnabled: newValues.notificationsEnabled });
         }
+
+        const cleanConvexPatch = Object.fromEntries(
+          Object.entries(pickConvexSettings(newValues)).filter(([, v]) => v !== undefined)
+        );
+        if (Object.keys(cleanConvexPatch).length > 0 && isConvexAuthReady) {
+          await convexMutations.updateSettings(cleanConvexPatch);
+        }
+        return;
       }
-      return defaultSettings;
+
+      const merged = {
+        ...settingsRepository.getSync(),
+        ...settingsRef.current,
+        ...definedLocalValues,
+      };
+      setLocalSettings(merged);
+      await settingsRepository.save(merged);
+      broadcastSettings(definedLocalValues);
+      markGuestDataModified();
     },
-    [
-      isConvexConfigured,
-      isEffectiveAuthenticated,
-      isConvexAuthReady,
-      auth.isTokenExpired,
-      convexMutations,
-      getActiveOwnerUserId,
-    ]
+    [isConvexConfigured, isEffectiveAuthenticated, isConvexAuthReady, convexMutations]
   );
+
+  const resetSettingsToDefaults = useCallback(async (): Promise<UserSettings> => {
+    const defaultSettings = await settingsRepository.resetToDefaults();
+    setLocalSettings(defaultSettings);
+    broadcastSettings(defaultSettings);
+
+    const canCallRemote =
+      isConvexConfigured &&
+      isConvexAuthReady &&
+      isConvexConnectedRef.current &&
+      !auth.isTokenExpired;
+
+    void notificationService.unsubscribePush(
+      canCallRemote
+        ? () => convexMutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+        : undefined
+    );
+
+    if (isConvexConfigured && isEffectiveAuthenticated && isConvexAuthReady) {
+      await convexMutations.updateSettings(pickConvexSettings(defaultSettings));
+    }
+    return defaultSettings;
+  }, [
+    isConvexConfigured,
+    isEffectiveAuthenticated,
+    isConvexAuthReady,
+    auth.isTokenExpired,
+    convexMutations,
+  ]);
 
   const { pushStatus, syncPushSubscription } = usePushSubscriptionSync({
     notificationService,
@@ -1240,7 +787,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       loginWithGoogle,
       logout,
       syncWithCloud,
-      registerFullSyncHandler,
       profile,
       updateProfile,
       resetProfileToDefaults,
@@ -1263,7 +809,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       loginWithGoogle,
       logout,
       syncWithCloud,
-      registerFullSyncHandler,
       profile,
       updateProfile,
       resetProfileToDefaults,

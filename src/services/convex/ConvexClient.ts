@@ -1,5 +1,5 @@
 import { ConvexReactClient } from "convex/react";
-import { AUTH_TOKEN_KEY, parseGoogleJwt, hasStoredConvexAuthSession } from "../auth/AuthService";
+import { hasStoredConvexAuthSession } from "../auth/AuthService";
 import { isProduction } from "../../utils/environment";
 
 export { hasStoredConvexAuthSession };
@@ -29,82 +29,3 @@ export const isConvexConfigured = Boolean(
 export const convexClient = new ConvexReactClient(convexUrl, {
   unsavedChangesWarning: false,
 });
-
-const TOKEN_CLOCK_SKEW_BUFFER_MS = 30_000;
-
-/**
- * Validates and retrieves a legacy Google ID token (used only for one-time migration
- * to @convex-dev/auth). Rejects malformed tokens, applies a 30s clock-skew buffer,
- * and treats absent localStorage tokens as signed-out when forceRefreshToken is true.
- */
-export function getValidAuthToken(
-  token?: string | null,
-  options?: { forceRefreshToken?: boolean }
-): string | undefined {
-  try {
-    let candidate = token ?? undefined;
-
-    if ((options?.forceRefreshToken || !candidate) && typeof window !== "undefined") {
-      try {
-        const stored =
-          localStorage.getItem(AUTH_TOKEN_KEY) ||
-          localStorage.getItem("auth_token_v1");
-        if (stored) {
-          candidate = stored;
-        } else if (options?.forceRefreshToken) {
-          // Storage was cleared (e.g. signed out in another tab); never fall back to a stale closed-over token
-          return undefined;
-        }
-      } catch {
-        // Ignore storage access errors
-      }
-    }
-
-    if (!candidate) {
-      return undefined;
-    }
-
-    const payload = parseGoogleJwt(candidate);
-    if (!payload) {
-      return undefined;
-    }
-
-    const isExpired =
-      typeof payload.exp === "number" &&
-      Number.isFinite(payload.exp) &&
-      payload.exp * 1000 <= Date.now() + TOKEN_CLOCK_SKEW_BUFFER_MS;
-
-    if (isExpired) {
-      // Candidate token is expired. Attempt to find a renewed token in localStorage
-      if (typeof window !== "undefined") {
-        try {
-          const freshStored =
-            localStorage.getItem(AUTH_TOKEN_KEY) ||
-            localStorage.getItem("auth_token_v1");
-          if (freshStored && freshStored !== candidate) {
-            const freshPayload = parseGoogleJwt(freshStored);
-            if (
-              freshPayload &&
-              (!freshPayload.exp ||
-                freshPayload.exp * 1000 > Date.now() + TOKEN_CLOCK_SKEW_BUFFER_MS)
-            ) {
-              return freshStored;
-            }
-          }
-        } catch {
-          // Ignore storage access errors
-        }
-      }
-
-      // Token is expired and no valid replacement exists; signal unauthenticated state
-      return undefined;
-    }
-
-    return candidate;
-  } catch (err) {
-    console.warn("Error evaluating Convex auth token validity:", err);
-    return undefined;
-  }
-}
-
-

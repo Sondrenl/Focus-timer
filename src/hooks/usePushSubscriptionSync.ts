@@ -62,7 +62,6 @@ export function usePushSubscriptionSync({
     }
   }, [settingsRef]);
 
-  // Track push status updates emitted by NotificationService
   useEffect(() => {
     setPushStatus(notificationService.getPushStatus());
     return notificationService.subscribePushStatus((status) => {
@@ -73,9 +72,35 @@ export function usePushSubscriptionSync({
     });
   }, [notificationService]);
 
+  const handleMissingPermission = useCallback(
+    (requireServerRegistered = true) => {
+      lastSyncedAtRef.current = 0;
+      const perm = notificationService.getPermissionState();
+      notificationService.resetPushStatus(
+        perm === 'unsupported'
+          ? 'unsupported'
+          : perm === 'denied'
+            ? 'permission_denied'
+            : 'unsubscribed'
+      );
+      if (
+        perm === 'denied' &&
+        (!requireServerRegistered || isServerRegisteredRef.current === true) &&
+        unregisterPushSubscription
+      ) {
+        void unregisterPushSubscription({ deviceId: DEVICE_ID }).catch(() => {});
+      }
+    },
+    [notificationService, unregisterPushSubscription]
+  );
+
   const performSync = useCallback(async () => {
     if (isLoggingOutRef?.current || !isNotificationsEnabledLive()) {
-      return { ok: false, status: 'unsubscribed' as PushSubscriptionStatus, reason: 'Notifications disabled or logging out' };
+      return {
+        ok: false,
+        status: 'unsubscribed' as PushSubscriptionStatus,
+        reason: 'Notifications disabled or logging out',
+      };
     }
     const result = await notificationService.syncPushSubscription({
       vapidPublicKey,
@@ -92,6 +117,22 @@ export function usePushSubscriptionSync({
     registerPushSubscription,
     isLoggingOutRef,
     isNotificationsEnabledLive,
+  ]);
+
+  const canAutoSync = useCallback((): boolean => {
+    return Boolean(
+      isAuthOperational &&
+        !isLoggingOutRef?.current &&
+        isNotificationsEnabledLive() &&
+        vapidPublicKey &&
+        notificationService.hasPermission()
+    );
+  }, [
+    isAuthOperational,
+    isLoggingOutRef,
+    isNotificationsEnabledLive,
+    vapidPublicKey,
+    notificationService,
   ]);
 
   const syncPushSubscription = useCallback(async () => {
@@ -116,8 +157,7 @@ export function usePushSubscriptionSync({
     performSync,
   ]);
 
-  // Automatically register/refresh Web Push subscription when authenticated + auth-ready + notifications enabled,
-  // and cleanly reset cached pushStatus whenever auth, user, settings, VAPID config, or permission change.
+  // Register/refresh Web Push subscription when authenticated + notifications enabled
   useEffect(() => {
     if (!isAuthOperational || !notificationsEnabled || isLoggingOutRef?.current) {
       lastSyncedAtRef.current = 0;
@@ -131,18 +171,7 @@ export function usePushSubscriptionSync({
     }
     if (!vapidPublicKey) return;
     if (!notificationService.hasPermission()) {
-      lastSyncedAtRef.current = 0;
-      const perm = notificationService.getPermissionState();
-      notificationService.resetPushStatus(
-        perm === 'unsupported'
-          ? 'unsupported'
-          : perm === 'denied'
-            ? 'permission_denied'
-            : 'unsubscribed'
-      );
-      if (perm === 'denied' && isServerRegisteredRef.current === true && unregisterPushSubscription) {
-        void unregisterPushSubscription({ deviceId: DEVICE_ID }).catch(() => {});
-      }
+      handleMissingPermission(true);
       return;
     }
 
@@ -154,106 +183,59 @@ export function usePushSubscriptionSync({
     notificationsEnabled,
     vapidPublicKey,
     isLoggingOutRef,
-    unregisterPushSubscription,
+    handleMissingPermission,
     performSync,
   ]);
 
-  // Retry push sync when Convex WebSocket reconnects after a drop if push is not active
+  // Retry push sync when Convex WebSocket reconnects or if server pruned this device's push subscription
   useEffect(() => {
     const wasConnected = prevConnectedRef.current;
     prevConnectedRef.current = isConvexConnected;
+    const justReconnected = !wasConnected && isConvexConnected;
+
+    if (!canAutoSync()) return;
+
     if (
-      !wasConnected &&
-      isConvexConnected &&
-      isAuthOperational &&
-      !isLoggingOutRef?.current &&
-      isNotificationsEnabledLive() &&
-      vapidPublicKey &&
-      notificationService.hasPermission() &&
+      justReconnected &&
       (notificationService.getPushStatus() !== 'active' || isServerRegisteredRef.current === false)
     ) {
       lastSyncedAtRef.current = 0;
       void performSync();
+      return;
+    }
+
+    if (isServerSubscriptionRegistered === false && notificationsEnabled) {
+      const now = Date.now();
+      if (now - lastPruneRecoveryAtRef.current >= SERVER_PRUNE_RECOVERY_COOLDOWN_MS) {
+        lastPruneRecoveryAtRef.current = now;
+        lastSyncedAtRef.current = 0;
+        void performSync();
+      }
     }
   }, [
     isConvexConnected,
-    isAuthOperational,
-    isLoggingOutRef,
-    isNotificationsEnabledLive,
-    vapidPublicKey,
-    notificationService,
-    performSync,
-  ]);
-
-  // Self-heal if the server pruned this device's push subscription (404/410/403/quota eviction),
-  // strictly verifying live per-device localStorage setting and logout guard so another tab turning
-  // notifications off or signing out never gets resurrected.
-  useEffect(() => {
-    if (isServerSubscriptionRegistered !== false) return;
-    if (
-      !isAuthOperational ||
-      isLoggingOutRef?.current ||
-      !notificationsEnabled ||
-      !isNotificationsEnabledLive() ||
-      !vapidPublicKey ||
-      !notificationService.hasPermission()
-    ) {
-      return;
-    }
-
-    const now = Date.now();
-    if (now - lastPruneRecoveryAtRef.current < SERVER_PRUNE_RECOVERY_COOLDOWN_MS) {
-      return;
-    }
-    lastPruneRecoveryAtRef.current = now;
-    lastSyncedAtRef.current = 0;
-    void performSync();
-  }, [
     isServerSubscriptionRegistered,
-    isAuthOperational,
-    isLoggingOutRef,
     notificationsEnabled,
-    isNotificationsEnabledLive,
-    vapidPublicKey,
+    canAutoSync,
     notificationService,
     performSync,
   ]);
 
-  // Immediately re-sync if the Service Worker reports a pushsubscriptionchange key rotation or controllerchange
+  // Re-sync on Service Worker pushsubscriptionchange / controllerchange
   useEffect(() => {
     return notificationService.subscribePushResyncRequested(() => {
-      if (
-        !isAuthOperational ||
-        isLoggingOutRef?.current ||
-        !isNotificationsEnabledLive() ||
-        !vapidPublicKey ||
-        !notificationService.hasPermission()
-      ) {
-        return;
-      }
+      if (!canAutoSync()) return;
       lastSyncedAtRef.current = 0;
       void performSync();
     });
-  }, [
-    notificationService,
-    isAuthOperational,
-    isLoggingOutRef,
-    isNotificationsEnabledLive,
-    vapidPublicKey,
-    performSync,
-  ]);
+  }, [notificationService, canAutoSync, performSync]);
 
-  // Listen to browser Permissions API onchange (catches URL-bar grant/revoke without focus/visibility change)
+  // Listen to browser Permissions API onchange and focus/online/visibility return
   useEffect(() => {
-    if (
-      typeof navigator === 'undefined' ||
-      !navigator.permissions ||
-      typeof navigator.permissions.query !== 'function'
-    ) {
-      return;
-    }
+    if (typeof window === 'undefined') return;
     let cancelled = false;
     let statusObj: PermissionStatus | null = null;
+
     const handlePermChange = () => {
       if (cancelled || !isAuthOperational || isLoggingOutRef?.current) return;
       if (notificationService.hasPermission()) {
@@ -262,41 +244,21 @@ export function usePushSubscriptionSync({
           void performSync();
         }
       } else {
-        const perm = notificationService.getPermissionState();
-        notificationService.resetPushStatus(
-          perm === 'denied' ? 'permission_denied' : 'unsubscribed'
-        );
-        if (perm === 'denied' && unregisterPushSubscription) {
-          void unregisterPushSubscription({ deviceId: DEVICE_ID }).catch(() => {});
-        }
+        handleMissingPermission(false);
       }
     };
-    navigator.permissions
-      .query({ name: 'notifications' as PermissionName })
-      .then((permStatus) => {
-        if (cancelled) return;
-        statusObj = permStatus;
-        permStatus.addEventListener?.('change', handlePermChange);
-      })
-      .catch(() => {});
 
-    return () => {
-      cancelled = true;
-      statusObj?.removeEventListener?.('change', handlePermChange);
-    };
-  }, [
-    isAuthOperational,
-    isLoggingOutRef,
-    isNotificationsEnabledLive,
-    vapidPublicKey,
-    notificationService,
-    unregisterPushSubscription,
-    performSync,
-  ]);
+    if (navigator?.permissions && typeof navigator.permissions.query === 'function') {
+      navigator.permissions
+        .query({ name: 'notifications' as PermissionName })
+        .then((permStatus) => {
+          if (cancelled) return;
+          statusObj = permStatus;
+          permStatus.addEventListener?.('change', handlePermChange);
+        })
+        .catch(() => {});
+    }
 
-  // Re-sync push subscription on focus/visibility return (e.g. after granting OS permission or endpoint rotation) or network recovery
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
     const handleReturn = async () => {
       if (document.visibilityState === 'hidden') return;
       if (
@@ -308,17 +270,7 @@ export function usePushSubscriptionSync({
         return;
       }
       if (!notificationService.hasPermission()) {
-        const perm = notificationService.getPermissionState();
-        notificationService.resetPushStatus(
-          perm === 'unsupported'
-            ? 'unsupported'
-            : perm === 'denied'
-              ? 'permission_denied'
-              : 'unsubscribed'
-        );
-        if (perm === 'denied' && isServerRegisteredRef.current === true && unregisterPushSubscription) {
-          void unregisterPushSubscription({ deviceId: DEVICE_ID }).catch(() => {});
-        }
+        handleMissingPermission(true);
         return;
       }
       const serverMissing = isServerRegisteredRef.current === false;
@@ -333,13 +285,17 @@ export function usePushSubscriptionSync({
       }
       void performSync();
     };
+
     const onEvent = () => {
       void handleReturn();
     };
     window.addEventListener('focus', onEvent);
     window.addEventListener('online', onEvent);
     document.addEventListener('visibilitychange', onEvent);
+
     return () => {
+      cancelled = true;
+      statusObj?.removeEventListener?.('change', handlePermChange);
       window.removeEventListener('focus', onEvent);
       window.removeEventListener('online', onEvent);
       document.removeEventListener('visibilitychange', onEvent);
@@ -350,7 +306,7 @@ export function usePushSubscriptionSync({
     isLoggingOutRef,
     isNotificationsEnabledLive,
     vapidPublicKey,
-    unregisterPushSubscription,
+    handleMissingPermission,
     performSync,
   ]);
 

@@ -337,7 +337,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     expect(filtered).toHaveLength(2);
   });
 
-  it("clears stale peerPresence in the same cleanupStaleTimers pass as an abandoned RUNNING timer and rejects non-integer durations", async () => {
+  it("resets an abandoned RUNNING timer in cleanupStaleTimers and rejects non-integer durations", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
@@ -351,12 +351,11 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
       })
     ).rejects.toThrow("durationSeconds must be an integer.");
 
-    // Seed an expired RUNNING timer (>1h overdue) WITH stale peerPresence (>24h old)
     await asUser.mutation(api.timer.start, {
       sessionType: "WORK",
       durationSeconds: 1500,
       currentCycle: 1,
-      timerRunId: "stale-running-with-presence",
+      timerRunId: "stale-running-1",
     });
     const oldMs = Date.now() - 25 * 60 * 60 * 1000;
     await t.run(async (ctx) => {
@@ -368,14 +367,6 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
         await ctx.db.patch(existing._id, {
           targetEndTime: oldMs,
           updatedAtMs: oldMs,
-          peerPresence: {
-            desktopActive: true,
-            desktopVisible: true,
-            mobileActive: false,
-            mobileVisible: false,
-            lastSeenMs: oldMs,
-            desktopLastSeenMs: oldMs,
-          },
         });
       }
     });
@@ -389,6 +380,5 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
         .first()
     );
     expect(cleaned?.status).toBe("IDLE");
-    expect(cleaned?.peerPresence).toBeUndefined();
   });
 });

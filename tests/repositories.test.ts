@@ -2,15 +2,25 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SessionRepository, isSampleSessionId } from "../src/services/repository/SessionRepository";
-import { CoffeeRepository } from "../src/services/repository/CoffeeRepository";
-import { TagRepository } from "../src/services/repository/TagRepository";
-import { ProfileRepository, sanitizeProfile } from "../src/services/repository/ProfileRepository";
+import {
+  SessionRepository,
+  isSampleSessionId,
+  CoffeeRepository,
+  TagRepository,
+  ProfileRepository,
+  sanitizeProfile,
+  MAX_AVATAR_EMOJI_LENGTH,
+  TelemetryRepository,
+} from "../src/services/storage/guestRepositories";
 import { sanitizeHexColor, getAlphaColor } from "../src/utils/colors";
 import { LocalStorageService } from "../src/services/storage/LocalStorageService";
 import * as envModule from "../src/utils/environment";
 import { useBackupAndMigration, sanitizeProfileForExport } from "../src/hooks/data/useBackupAndMigration";
-import { BackupData, UserProfile } from "../src/types/user";
+import { parseAndValidateBackupEntities, sanitizeBackupProfile } from "../src/utils/backupSanitizers";
+import { BackupData, DEFAULT_PROFILE, UserProfile } from "../src/types/user";
+import { DEFAULT_SETTINGS } from "../src/types/settings";
+import { buildSettingsSnapshot } from "../src/utils/telemetryContext";
+import { SessionAttempt } from "../src/types/telemetry";
 
 describe("Repository Serialization & Sample Data Isolation", () => {
   const store = new Map<string, string>();
@@ -451,14 +461,11 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       };
 
       await importBackupFn(sanitizedBackup, "merge");
-      expect(mockUpdateProfile).toHaveBeenCalledWith(
-        {
-          displayName: "Imported Practitioner",
-          avatarEmoji: "🚀",
-          dailyGoalMinutes: 150,
-        },
-        { skipTelemetry: true }
-      );
+      expect(mockUpdateProfile).toHaveBeenCalledWith({
+        displayName: "Imported Practitioner",
+        avatarEmoji: "🚀",
+        dailyGoalMinutes: 150,
+      });
 
       // 2. Test importing a legacy backup containing legacy id, email, and avatarUrl
       mockUpdateProfile.mockClear();
@@ -480,17 +487,146 @@ describe("Repository Serialization & Sample Data Isolation", () => {
 
       await importBackupFn(legacyBackup, "merge");
       // Must NOT include id or email in the profile update
-      expect(mockUpdateProfile).toHaveBeenCalledWith(
-        {
-          displayName: "Legacy Practitioner",
-          avatarEmoji: "⚡",
-          dailyGoalMinutes: 60,
-        },
-        { skipTelemetry: true }
-      );
+      expect(mockUpdateProfile).toHaveBeenCalledWith({
+        displayName: "Legacy Practitioner",
+        avatarEmoji: "⚡",
+        dailyGoalMinutes: 60,
+      });
       const updatePayload = mockUpdateProfile.mock.calls[0][0];
       expect(updatePayload.id).toBeUndefined();
       expect(updatePayload.email).toBeUndefined();
+    });
+  });
+
+  describe("Storage Quota, Deduplication, ZWJ Emoji & Backup Sanitizers", () => {
+    it("deduplicates SessionRepository.add by timerRunId and supports 32-char ZWJ avatarEmoji", async () => {
+      vi.spyOn(envModule, "isProduction").mockReturnValue(true);
+      const sessRepo = new SessionRepository(storageService);
+      const first = await sessRepo.add({
+        tagId: null,
+        sessionType: "WORK",
+        durationSeconds: 1500,
+        completedAt: "2026-04-01T10:00:00.000Z",
+        timerRunId: "run-dup",
+      });
+      const second = await sessRepo.add({
+        tagId: null,
+        sessionType: "WORK",
+        durationSeconds: 1500,
+        completedAt: "2026-04-01T10:05:00.000Z",
+        timerRunId: "run-dup",
+      });
+      expect(second.id).toBe(first.id);
+      expect(await sessRepo.getAll()).toHaveLength(1);
+
+      const zwjEmoji = "👩‍❤️‍💋‍👨👨‍💻";
+      expect(MAX_AVATAR_EMOJI_LENGTH).toBe(32);
+      expect(sanitizeBackupProfile({ displayName: undefined, avatarEmoji: zwjEmoji, dailyGoalMinutes: 90 } as any, true)).toEqual({
+        avatarEmoji: zwjEmoji,
+        dailyGoalMinutes: 90,
+      });
+      expect(sanitizeProfile({ avatarEmoji: "a".repeat(50) }).avatarEmoji).toHaveLength(32);
+
+      const profileRepo = new ProfileRepository(storageService);
+      await profileRepo.save({ ...DEFAULT_PROFILE, displayName: "   ", avatarEmoji: ` ${zwjEmoji} ` });
+      const loaded = await profileRepo.get();
+      expect(loaded.avatarEmoji).toBe(zwjEmoji);
+      expect(loaded.displayName).toBe(DEFAULT_PROFILE.displayName);
+
+      const { validSessions, validCoffee } = parseAndValidateBackupEntities(
+        {
+          version: "3.0.3",
+          exportedAt: "2026-04-01T00:00:00.000Z",
+          tags: [],
+          sessions: [{ id: "s-1", tagId: null, sessionType: "WORK", durationSeconds: 1500, completedAt: "2026-04-01T10:00:00.000Z", timerRunId: "run-keep" }],
+          coffeeCups: [{ id: "c-1", date: "2026-04-01", tagId: null } as any, { id: "c-2", date: "2026-04-01", tagId: null } as any],
+        },
+        false
+      );
+      expect(validSessions[0].timerRunId).toBe("run-keep");
+      expect(validCoffee[0].createdAt).not.toBe(validCoffee[1].createdAt);
+    });
+
+    it("handles LocalStorageService QuotaExceededError, trims TelemetryRepository oldest 25%, and invalidates memoryCache on storage event", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      let maxBytes = 5;
+      const listeners: Array<(e: any) => void> = [];
+      const quotaStorage = {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => {
+          if (v.length > maxBytes) {
+            const err = new Error("QuotaExceededError");
+            err.name = "QuotaExceededError";
+            throw err;
+          }
+          store.set(k, v);
+        },
+        removeItem: (k: string) => store.delete(k),
+        clear: () => store.clear(),
+      };
+      Object.defineProperty(globalThis, "localStorage", { value: quotaStorage, configurable: true, writable: true });
+      Object.defineProperty(globalThis, "window", {
+        value: {
+          localStorage: quotaStorage,
+          location: { hostname: "localhost" },
+          addEventListener: (ev: string, fn: any) => { if (ev === "storage") listeners.push(fn); },
+          removeEventListener: () => {},
+        },
+        configurable: true,
+        writable: true,
+      });
+
+      const ls = new LocalStorageService("quota:");
+      expect(() => ls.setItem("k1", { v: "mem-only" })).not.toThrow();
+      expect(ls.getItem("k1", null)).toEqual({ v: "mem-only" });
+      expect(() => ls.setItem("k2", { big: "payload" }, { throwOnQuotaError: true })).toThrow(/QuotaExceededError/);
+
+      // Peer-tab storage event invalidates memoryCache
+      maxBytes = Infinity;
+      store.set("quota:k1", JSON.stringify({ v: "peer-fresh" }));
+      listeners.forEach((fn) => fn({ key: "quota:k1", newValue: JSON.stringify({ v: "peer-fresh" }) }));
+      expect(ls.getItem("k1", null)).toEqual({ v: "peer-fresh" });
+
+      // TelemetryRepository trims oldest 25% on QuotaExceededError
+      const teleRepo = new TelemetryRepository(new LocalStorageService("tele:"));
+      const attempts: SessionAttempt[] = Array.from({ length: 20 }, (_, idx) => ({
+        attemptId: `att-${idx}`,
+        sessionType: "WORK",
+        status: "completed",
+        wasStarted: true,
+        plannedDurationSeconds: 1500,
+        actualActiveSeconds: 1500,
+        remainingSecondsAtEnd: 0,
+        completionRatio: 1,
+        startedAt: new Date(Date.parse("2026-04-01T00:00:00.000Z") + idx * 1000).toISOString(),
+        endedAt: new Date(Date.parse("2026-04-01T00:25:00.000Z") + idx * 1000).toISOString(),
+        utcOffsetMinutes: 0,
+        localDate: "2026-04-01",
+        localHour: 9,
+        localMinuteOfDay: 540,
+        localDayOfWeek: 3,
+        cycleIndex: 1,
+        longBreakInterval: 4,
+        autoStarted: false,
+        initialTagId: null,
+        tagId: null,
+        tagChangedMidRun: false,
+        pauseCount: 0,
+        totalPausedSeconds: 0,
+        pauseIntervals: [],
+        dailyGoalMinutes: 120,
+        settingsSnapshot: buildSettingsSnapshot(DEFAULT_SETTINGS),
+        deviceClass: "desktop",
+        tabBackgroundedCount: 0,
+        completionLatencySeconds: 0,
+        source: "client",
+        updatedAtMs: Date.parse("2026-04-01T00:25:00.000Z") + idx * 1000,
+      }));
+      maxBytes = Math.floor((JSON.stringify(attempts).length + JSON.stringify(attempts.slice(5)).length) / 2);
+      await teleRepo.saveAttempts(attempts);
+      const persisted = JSON.parse(store.get("tele:ml_attempts_v1")!) as SessionAttempt[];
+      expect(persisted).toHaveLength(15);
+      expect(persisted[0].attemptId).toBe("att-5");
     });
   });
 });

@@ -364,7 +364,7 @@ describe("Security Hardening & Input Validation", () => {
     ).rejects.toThrow("Cannot import more than 100 tags.");
   });
 
-  it("cleans up abandoned RUNNING timers and stale presence via cleanupStaleTimers", async () => {
+  it("cleans up abandoned RUNNING timers via cleanupStaleTimers", async () => {
     const t = convexTest(schema, modules);
     const { userId } = await createAuthenticatedTestUser(t);
 
@@ -380,13 +380,6 @@ describe("Security Hardening & Input Validation", () => {
         targetEndTime: now - 2 * 3600 * 1000,
         currentCycle: 1,
         updatedAtMs: now - 2 * 3600 * 1000,
-        peerPresence: {
-          desktopActive: true,
-          desktopVisible: true,
-          mobileActive: false,
-          mobileVisible: false,
-          lastSeenMs: now - 48 * 3600 * 1000, // 48 hours ago
-        },
       });
     });
 

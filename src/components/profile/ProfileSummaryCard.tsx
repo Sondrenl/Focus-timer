@@ -10,7 +10,7 @@ import { Tag } from '../../types/tag';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { toDateKey } from '../../utils/dates';
 import { isProduction } from '../../utils/environment';
-import { isSampleSessionId } from '../../services/repository/SessionRepository';
+import { isSampleSessionId } from '../../services/storage/guestRepositories';
 import { useTodayKey } from '../../hooks/useTodayKey';
 import { getEffectiveSessionDate } from '../../utils/stats/focusStats';
 

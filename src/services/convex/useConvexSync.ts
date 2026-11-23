@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useConvexConnectionState } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
-import { isConvexConfigured, convexClient } from './ConvexClient';
+import { isConvexConfigured } from './ConvexClient';
 import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
 export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = isAuthenticated) {
@@ -50,56 +50,10 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
   const clearForReplaceBatchMutation = useMutation(api.migrations.clearForReplaceBatch);
   const importBackupMutation = useMutation(api.migrations.importBackup);
   const upsertAttemptMutation = useMutation(api.telemetry.upsertAttempt);
-  const recordTelemetryEventsMutation = useMutation(api.telemetry.recordEvents);
-  const discardTelemetryAttemptMutation = useMutation(api.telemetry.discardAttempt);
   const clearTelemetryMutation = useMutation(api.telemetry.clear);
   const registerPushSubscriptionMutation = useMutation(api.push.register);
   const unregisterPushSubscriptionMutation = useMutation(api.push.unregister);
   const scheduleTestPushMutation = useMutation(api.push.scheduleTestPush);
-
-  const fetchTelemetryAttempts = useCallback(
-    async (
-      options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
-    ) => {
-      if (!isConvexConfigured || !isAuthenticated || !isAuthReady) return null;
-      const resolved =
-        typeof options === 'number' ? { limit: options } : options;
-      const limit = resolved.limit ?? 5000;
-      try {
-        return await convexClient.query(api.telemetry.listAttempts, {
-          limit,
-          ...(resolved.startDate ? { startDate: resolved.startDate } : {}),
-          ...(resolved.endDate ? { endDate: resolved.endDate } : {}),
-        });
-      } catch (err) {
-        console.warn('Convex listAttempts query error:', err);
-        return null;
-      }
-    },
-    [isAuthenticated, isAuthReady]
-  );
-
-  const fetchTelemetryEvents = useCallback(
-    async (
-      options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
-    ) => {
-      if (!isConvexConfigured || !isAuthenticated || !isAuthReady) return null;
-      const resolved =
-        typeof options === 'number' ? { limit: options } : options;
-      const limit = resolved.limit ?? 5000;
-      try {
-        return await convexClient.query(api.telemetry.listEvents, {
-          limit,
-          ...(resolved.startDate ? { startDate: resolved.startDate } : {}),
-          ...(resolved.endDate ? { endDate: resolved.endDate } : {}),
-        });
-      } catch (err) {
-        console.warn('Convex listEvents query error:', err);
-        return null;
-      }
-    },
-    [isAuthenticated, isAuthReady]
-  );
 
   const wrapMutation = useCallback(
     <TArgs extends any[], TReturn>(
@@ -134,8 +88,6 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
       clearForReplaceBatch: wrapMutation(clearForReplaceBatchMutation, 'clearForReplaceBatch'),
       importBackup: wrapMutation(importBackupMutation, 'importBackup'),
       upsertAttempt: wrapMutation(upsertAttemptMutation, 'upsertAttempt'),
-      recordTelemetryEvents: wrapMutation(recordTelemetryEventsMutation, 'recordTelemetryEvents'),
-      discardTelemetryAttempt: wrapMutation(discardTelemetryAttemptMutation, 'discardTelemetryAttempt'),
       clearTelemetry: wrapMutation(clearTelemetryMutation, 'clearTelemetry'),
       registerPushSubscription: wrapMutation(registerPushSubscriptionMutation, 'registerPushSubscription'),
       unregisterPushSubscription: wrapMutation(unregisterPushSubscriptionMutation, 'unregisterPushSubscription'),
@@ -156,8 +108,6 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
       clearForReplaceBatchMutation,
       importBackupMutation,
       upsertAttemptMutation,
-      recordTelemetryEventsMutation,
-      discardTelemetryAttemptMutation,
       clearTelemetryMutation,
       registerPushSubscriptionMutation,
       unregisterPushSubscriptionMutation,
@@ -175,8 +125,6 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
       convexSessions,
       vapidPublicKey,
       devicePushStatus,
-      fetchTelemetryAttempts,
-      fetchTelemetryEvents,
       mutations,
     }),
     [
@@ -186,10 +134,7 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
       convexSessions,
       vapidPublicKey,
       devicePushStatus,
-      fetchTelemetryAttempts,
-      fetchTelemetryEvents,
       mutations,
     ]
   );
 }
-

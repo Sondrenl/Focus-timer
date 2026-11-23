@@ -444,5 +444,70 @@ describe('New Day Check Utilities', () => {
       expect(resetAfterSleep.status).toBe('IDLE');
       expect(resetAfterSleep.remainingSeconds).toBe(25 * 60);
     });
+
+    it('resets multi-day stale before 04:00 AM, clamps backward clock jump, and resets previous-day stale RUNNING', async () => {
+      expect(
+        shouldResetForNewDay({
+          now: new Date(2026, 10, 7, 1, 30, 0),
+          lastSessionTimeMs: new Date(2026, 10, 4, 17, 0, 0).getTime(),
+          lastResetDayKey: '2026-11-04',
+          isTimerRunning: false,
+        })
+      ).toBe(true);
+      expect(
+        shouldResetForNewDay({
+          now: new Date(2026, 10, 7, 1, 30, 0),
+          lastSessionTimeMs: new Date(2026, 10, 6, 22, 0, 0).getTime(),
+          lastResetDayKey: '2026-11-06',
+          isTimerRunning: false,
+        })
+      ).toBe(false);
+
+      const { loadInitialTimerState } = await import('../src/context/timer/timerPersistence');
+      const now = new Date(2026, 10, 7, 10, 0, 0).getTime();
+      vi.setSystemTime(now);
+      store.set('focus_timer_last_day_reset_v1', '2026-11-07');
+      store.set(
+        'timer_state_v1',
+        JSON.stringify({
+          sessionType: 'WORK',
+          status: 'RUNNING',
+          currentCycle: 1,
+          remainingSeconds: 1500,
+          totalSeconds: 1500,
+          targetEndTime: now + 3 * 3600_000,
+          timerRunId: 'clock-jump',
+          updatedAtMs: now - 1000,
+          activeTagId: null,
+          deviceId: 'd1',
+          tabId: 't1',
+          lastActiveAtMs: now,
+        })
+      );
+      expect(loadInitialTimerState(25).remainingSeconds).toBe(1500);
+
+      const yesterday = new Date(2026, 10, 6, 22, 0, 0).getTime();
+      store.set(
+        'timer_state_v1',
+        JSON.stringify({
+          sessionType: 'SHORT_BREAK',
+          status: 'RUNNING',
+          currentCycle: 3,
+          remainingSeconds: 120,
+          totalSeconds: 300,
+          targetEndTime: yesterday,
+          timerRunId: 'stale-run',
+          updatedAtMs: yesterday - 300_000,
+          activeTagId: null,
+          deviceId: 'd1',
+          tabId: 't1',
+          lastActiveAtMs: yesterday,
+        })
+      );
+      const loaded = loadInitialTimerState(25);
+      expect(loaded.status).toBe('IDLE');
+      expect(loaded.sessionType).toBe('WORK');
+      expect(loaded.currentCycle).toBe(1);
+    });
   });
 });

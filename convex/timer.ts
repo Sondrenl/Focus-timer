@@ -1,6 +1,5 @@
 import { v } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireUser, getAuthenticatedUser, DEFAULT_SETTINGS } from "./authHelper";
 import {
@@ -8,16 +7,29 @@ import {
   assertValidDurationSeconds,
   assertValidRemainingSeconds,
   assertValidTimerRunId,
+  buildIdleTimerPayload,
   cancelScheduledJob,
   computeServerNextInterval,
-  generateScheduleNonce,
-  reconcileCompletedSessionAttempt,
+  dispatchCompletionPushIfSubscribed,
   recordCompletedSessionIfNotDuplicate,
   resolveExistingUserTagId,
+  scheduleCompletionJob,
 } from "./timerHelpers";
 
 const MAX_UNATTENDED_SERVER_AUTO_STARTS = 1;
 const STALE_CLIENT_ACTION_TOLERANCE_MS = 5_000;
+const sessionTypeValidator = v.union(
+  v.literal("WORK"),
+  v.literal("SHORT_BREAK"),
+  v.literal("LONG_BREAK")
+);
+
+async function getUserActiveTimer(ctx: QueryCtx | MutationCtx, userId: Id<"users">) {
+  return ctx.db
+    .query("active_timers")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .first();
+}
 
 export const getActive = query({
   args: {},
@@ -25,14 +37,8 @@ export const getActive = query({
     const user = await getAuthenticatedUser(ctx);
     if (!user) return null;
 
-    const timer = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
-    if (!timer) {
-      return null;
-    }
+    const timer = await getUserActiveTimer(ctx, user._id);
+    if (!timer) return null;
 
     return {
       sessionType: timer.sessionType,
@@ -51,38 +57,25 @@ export const getActive = query({
 });
 
 export const acknowledgeActive = mutation({
-  args: {
-    timerRunId: v.string(),
-  },
+  args: { timerRunId: v.string() },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     assertValidTimerRunId(args.timerRunId, "timerRunId", true);
     const now = Date.now();
+    const existing = await getUserActiveTimer(ctx, user._id);
+    if (!existing) return { acknowledged: false, serverNowMs: now };
 
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
-    if (!existing) {
-      return { acknowledged: false, serverNowMs: now };
-    }
-
-    if (
+    const shouldResetStreak =
       existing.status === "RUNNING" &&
       existing.timerRunId === args.timerRunId &&
-      (existing.serverAutoStartStreak ?? 0) > 0
-    ) {
+      (existing.serverAutoStartStreak ?? 0) > 0;
+
+    if (shouldResetStreak) {
       await ctx.db.patch(existing._id, { serverAutoStartStreak: 0 });
-      return {
-        acknowledged: true,
-        updatedAtMs: existing.updatedAtMs,
-        serverNowMs: now,
-      };
     }
 
     return {
-      acknowledged: false,
+      acknowledged: shouldResetStreak,
       updatedAtMs: existing.updatedAtMs,
       serverNowMs: now,
     };
@@ -91,11 +84,7 @@ export const acknowledgeActive = mutation({
 
 export const start = mutation({
   args: {
-    sessionType: v.union(
-      v.literal("WORK"),
-      v.literal("SHORT_BREAK"),
-      v.literal("LONG_BREAK")
-    ),
+    sessionType: sessionTypeValidator,
     durationSeconds: v.number(),
     remainingSeconds: v.optional(v.number()),
     totalSeconds: v.optional(v.number()),
@@ -123,61 +112,37 @@ export const start = mutation({
       throw new Error("Invalid clientTargetEndTimeMs.");
     }
     const sanitizedTagId = resolveExistingUserTagId(user, args.tagId);
-
     const now = Date.now();
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
+    const existing = await getUserActiveTimer(ctx, user._id);
 
-    // Prevent stale offline starts from overwriting a newer active session on another device
     if (
       args.clientActionAtMs !== undefined &&
       existing &&
       existing.updatedAtMs > args.clientActionAtMs + STALE_CLIENT_ACTION_TOLERANCE_MS
     ) {
-      return {
-        ...existing,
-        applied: false,
-        serverNowMs: now,
-      };
+      return { ...existing, applied: false, serverNowMs: now };
     }
 
-    // Refuse to resurrect an already-elapsed offline start as a brand-new full timer
     if (
       args.clientTargetEndTimeMs !== undefined &&
       args.clientTargetEndTimeMs <= now - STALE_CLIENT_ACTION_TOLERANCE_MS
     ) {
       return existing
-        ? {
-            ...existing,
-            applied: false,
-            rejectedReason: "already_elapsed" as const,
-            serverNowMs: now,
-          }
+        ? { ...existing, applied: false, rejectedReason: "already_elapsed" as const, serverNowMs: now }
         : null;
     }
 
     const baseTotal = args.totalSeconds ?? args.durationSeconds;
-    const remaining = Math.max(
-      1,
-      Math.min(baseTotal, args.remainingSeconds ?? args.durationSeconds)
-    );
+    const remaining = Math.max(1, Math.min(baseTotal, args.remainingSeconds ?? args.durationSeconds));
     const total = Math.max(remaining, baseTotal);
-    const targetEndTime = now + remaining * 1000;
-    const scheduleNonce = generateScheduleNonce(now);
 
     await cancelScheduledJob(ctx, existing?.scheduledCompletionId);
-
-    // Schedule authoritative server-side completion trigger with per-schedule nonce
-    const scheduledCompletionId = await ctx.scheduler.runAfter(
-      remaining * 1000,
-      internal.timer.onTimerCompleted,
-      {
-        userId: user._id,
-        timerRunId: args.timerRunId,
-        scheduleNonce,
-      }
+    const { targetEndTime, scheduleNonce, scheduledCompletionId } = await scheduleCompletionJob(
+      ctx,
+      user._id,
+      args.timerRunId,
+      remaining,
+      now
     );
 
     const timerPayload = {
@@ -203,11 +168,7 @@ export const start = mutation({
       await ctx.db.insert("active_timers", timerPayload);
     }
 
-    return {
-      ...timerPayload,
-      applied: true,
-      serverNowMs: now,
-    };
+    return { ...timerPayload, applied: true, serverNowMs: now };
   },
 });
 
@@ -224,30 +185,17 @@ export const pause = mutation({
       args.tagId !== undefined ? resolveExistingUserTagId(user, args.tagId) : undefined;
     assertValidTimerRunId(args.expectedTimerRunId, "expectedTimerRunId");
 
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
+    const existing = await getUserActiveTimer(ctx, user._id);
     if (!existing) return null;
 
     const now = Date.now();
-
-    // Refuse to hijack an IDLE/COMPLETED interval with a delayed pause
-    if (existing.status !== "RUNNING" && existing.status !== "PAUSED") {
-      return { ...existing, applied: false, serverNowMs: now };
-    }
-
-    // Refuse to pause a different run if caller specified expectedTimerRunId
     if (
-      args.expectedTimerRunId &&
-      existing.timerRunId &&
-      existing.timerRunId !== args.expectedTimerRunId
+      (existing.status !== "RUNNING" && existing.status !== "PAUSED") ||
+      (args.expectedTimerRunId && existing.timerRunId && existing.timerRunId !== args.expectedTimerRunId)
     ) {
       return { ...existing, applied: false, serverNowMs: now };
     }
 
-    // Clamp remainingSeconds strictly to [0, existing.totalSeconds] so clock skew cannot inflate duration
     const clampedRemaining = Math.max(
       0,
       Math.min(existing.totalSeconds, Math.round(args.remainingSeconds))
@@ -275,12 +223,7 @@ export const pause = mutation({
     };
 
     await ctx.db.patch(existing._id, updates);
-    return {
-      ...existing,
-      ...updates,
-      applied: true,
-      serverNowMs: now,
-    };
+    return { ...existing, ...updates, applied: true, serverNowMs: now };
   },
 });
 
@@ -297,20 +240,13 @@ export const updateTag = mutation({
     const sanitizedTagId = resolveExistingUserTagId(user, args.tagId);
     assertValidTimerRunId(args.expectedTimerRunId, "expectedTimerRunId");
 
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
+    const existing = await getUserActiveTimer(ctx, user._id);
     if (!existing) return null;
 
     const now = Date.now();
-    if (args.expectedStatus && existing.status !== args.expectedStatus) {
-      return { ...existing, applied: false, serverNowMs: now };
-    }
     if (
-      args.expectedTimerRunId &&
-      existing.timerRunId !== args.expectedTimerRunId
+      (args.expectedStatus && existing.status !== args.expectedStatus) ||
+      (args.expectedTimerRunId && existing.timerRunId !== args.expectedTimerRunId)
     ) {
       return { ...existing, applied: false, serverNowMs: now };
     }
@@ -319,27 +255,15 @@ export const updateTag = mutation({
       return { ...existing, applied: true, serverNowMs: now };
     }
 
-    const updates = {
-      tagId: sanitizedTagId,
-      updatedAtMs: now,
-    };
+    const updates = { tagId: sanitizedTagId, updatedAtMs: now };
     await ctx.db.patch(existing._id, updates);
-    return {
-      ...existing,
-      ...updates,
-      applied: true,
-      serverNowMs: now,
-    };
+    return { ...existing, ...updates, applied: true, serverNowMs: now };
   },
 });
 
 export const reset = mutation({
   args: {
-    sessionType: v.union(
-      v.literal("WORK"),
-      v.literal("SHORT_BREAK"),
-      v.literal("LONG_BREAK")
-    ),
+    sessionType: sessionTypeValidator,
     durationSeconds: v.number(),
     currentCycle: v.number(),
     tagId: v.optional(v.union(v.string(), v.null())),
@@ -362,37 +286,18 @@ export const reset = mutation({
       throw new Error("Invalid clientActionAtMs.");
     }
     const now = Date.now();
+    const existing = await getUserActiveTimer(ctx, user._id);
 
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
-    // Prevent stale/background/offline resets from clobbering an active, paused, or newer timer
-    if (
-      args.onlyIfIdle &&
-      existing &&
-      (existing.status === "RUNNING" || existing.status === "PAUSED")
-    ) {
-      return { ...existing, applied: false, serverNowMs: now };
-    }
-    if (args.onlyIfNotRunning && existing && existing.status === "RUNNING") {
-      return { ...existing, applied: false, serverNowMs: now };
-    }
     if (args.expectedTimerRunId !== undefined && existing?.timerRunId !== args.expectedTimerRunId) {
       return existing ? { ...existing, applied: false, serverNowMs: now } : null;
     }
     if (
-      args.expectedUpdatedAtMs !== undefined &&
       existing &&
-      existing.updatedAtMs > args.expectedUpdatedAtMs
-    ) {
-      return { ...existing, applied: false, serverNowMs: now };
-    }
-    if (
-      args.clientActionAtMs !== undefined &&
-      existing &&
-      existing.updatedAtMs > args.clientActionAtMs + STALE_CLIENT_ACTION_TOLERANCE_MS
+      ((args.onlyIfIdle && (existing.status === "RUNNING" || existing.status === "PAUSED")) ||
+        (args.onlyIfNotRunning && existing.status === "RUNNING") ||
+        (args.expectedUpdatedAtMs !== undefined && existing.updatedAtMs > args.expectedUpdatedAtMs) ||
+        (args.clientActionAtMs !== undefined &&
+          existing.updatedAtMs > args.clientActionAtMs + STALE_CLIENT_ACTION_TOLERANCE_MS))
     ) {
       return { ...existing, applied: false, serverNowMs: now };
     }
@@ -413,46 +318,29 @@ export const reset = mutation({
     await cancelScheduledJob(ctx, existing?.scheduledCompletionId);
 
     const resetPayload = {
-      sessionType: args.sessionType,
-      status: "IDLE" as const,
-      remainingSeconds: args.durationSeconds,
-      totalSeconds: args.durationSeconds,
-      targetEndTime: undefined,
-      currentCycle: args.currentCycle,
+      ...buildIdleTimerPayload({
+        sessionType: args.sessionType,
+        durationSeconds: args.durationSeconds,
+        currentCycle: args.currentCycle,
+        updatedAtMs: now,
+      }),
       tagId: sanitizedTagId,
-      timerRunId: undefined,
-      lastCompletedTimerRunId: undefined,
-      scheduleNonce: undefined,
-      serverAutoStartStreak: 0,
-      scheduledCompletionId: undefined,
-      updatedAtMs: now,
     };
 
     if (existing) {
       await ctx.db.patch(existing._id, resetPayload);
     } else {
-      await ctx.db.insert("active_timers", {
-        userId: user._id,
-        ...resetPayload,
-      });
+      await ctx.db.insert("active_timers", { userId: user._id, ...resetPayload });
     }
 
-    return {
-      ...resetPayload,
-      applied: true,
-      serverNowMs: now,
-    };
+    return { ...resetPayload, applied: true, serverNowMs: now };
   },
 });
 
 export const complete = mutation({
   args: {
     completedTimerRunId: v.optional(v.union(v.string(), v.null())),
-    nextSessionType: v.union(
-      v.literal("WORK"),
-      v.literal("SHORT_BREAK"),
-      v.literal("LONG_BREAK")
-    ),
+    nextSessionType: sessionTypeValidator,
     nextDurationSeconds: v.number(),
     nextCurrentCycle: v.number(),
     autoStartNext: v.optional(v.boolean()),
@@ -468,18 +356,57 @@ export const complete = mutation({
     const resolvedTagId =
       args.tagId !== undefined ? resolveExistingUserTagId(user, args.tagId) : undefined;
 
-    const existing = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .first();
-
-    if (!existing) {
-      return null;
-    }
+    const existing = await getUserActiveTimer(ctx, user._id);
+    if (!existing) return null;
 
     const nowMs = Date.now();
     const sanitizedTagId = args.tagId !== undefined ? resolvedTagId : existing.tagId;
     const shouldAutoStart = Boolean(args.autoStartNext && args.nextTimerRunId);
+
+    const scheduleAndPatchNextInterval = async (
+      runNext: boolean,
+      lastCompletedRunId: string | undefined
+    ) => {
+      if (runNext && args.nextTimerRunId) {
+        const scheduled = await scheduleCompletionJob(
+          ctx,
+          user._id,
+          args.nextTimerRunId,
+          args.nextDurationSeconds,
+          nowMs
+        );
+        const runningPayload = {
+          sessionType: args.nextSessionType,
+          status: "RUNNING" as const,
+          remainingSeconds: args.nextDurationSeconds,
+          totalSeconds: args.nextDurationSeconds,
+          targetEndTime: scheduled.targetEndTime,
+          currentCycle: args.nextCurrentCycle,
+          tagId: sanitizedTagId,
+          timerRunId: args.nextTimerRunId,
+          lastCompletedTimerRunId: lastCompletedRunId,
+          scheduleNonce: scheduled.scheduleNonce,
+          serverAutoStartStreak: 0,
+          scheduledCompletionId: scheduled.scheduledCompletionId,
+          updatedAtMs: nowMs,
+        };
+        await ctx.db.patch(existing._id, runningPayload);
+        return runningPayload;
+      }
+
+      const idlePayload = {
+        ...buildIdleTimerPayload({
+          sessionType: args.nextSessionType,
+          durationSeconds: args.nextDurationSeconds,
+          currentCycle: args.nextCurrentCycle,
+          lastCompletedTimerRunId: lastCompletedRunId,
+          updatedAtMs: nowMs,
+        }),
+        tagId: sanitizedTagId,
+      };
+      await ctx.db.patch(existing._id, idlePayload);
+      return idlePayload;
+    };
 
     // Case 1: Server onTimerCompleted has NOT run yet — client beat it cleanly.
     if (
@@ -488,21 +415,14 @@ export const complete = mutation({
       (!existing.timerRunId || existing.timerRunId === args.completedTimerRunId)
     ) {
       if (existing.targetEndTime && nowMs < existing.targetEndTime - 5000) {
-        return {
-          ...existing,
-          rejectedReason: "too_early" as const,
-          serverNowMs: nowMs,
-        };
+        return { ...existing, rejectedReason: "too_early" as const, serverNowMs: nowMs };
       }
 
       await cancelScheduledJob(ctx, existing.scheduledCompletionId);
 
       const completedRunId = existing.timerRunId || args.completedTimerRunId || undefined;
       const completedAtMs =
-        existing.targetEndTime && existing.targetEndTime < nowMs
-          ? existing.targetEndTime
-          : nowMs;
-      const completedAtIso = new Date(completedAtMs).toISOString();
+        existing.targetEndTime && existing.targetEndTime < nowMs ? existing.targetEndTime : nowMs;
 
       await recordCompletedSessionIfNotDuplicate(ctx, {
         userId: user._id,
@@ -513,81 +433,22 @@ export const complete = mutation({
         timerRunId: completedRunId,
       });
 
-      await reconcileCompletedSessionAttempt(ctx, {
+      const nextPayload = await scheduleAndPatchNextInterval(shouldAutoStart, completedRunId);
+
+      await dispatchCompletionPushIfSubscribed(ctx, {
         userId: user._id,
-        attemptId: completedRunId,
-        totalSeconds: existing.totalSeconds,
+        sessionType: existing.sessionType,
+        timerRunId: completedRunId || `run-${nowMs}`,
+        completedAtMs,
         targetEndTime: existing.targetEndTime,
-        completedAtIso,
         nowMs,
-        source: "client",
+        maxWindowMs: 120_000,
       });
 
-      let nextScheduledCompletionId: Id<"_scheduled_functions"> | undefined;
-      let nextTargetEndTime: number | undefined;
-      let nextTimerRunId: string | undefined;
-      let nextScheduleNonce: string | undefined;
-
-      if (shouldAutoStart && args.nextTimerRunId) {
-        nextTimerRunId = args.nextTimerRunId;
-        nextTargetEndTime = nowMs + args.nextDurationSeconds * 1000;
-        nextScheduleNonce = generateScheduleNonce(nowMs);
-        nextScheduledCompletionId = await ctx.scheduler.runAfter(
-          args.nextDurationSeconds * 1000,
-          internal.timer.onTimerCompleted,
-          {
-            userId: user._id,
-            timerRunId: nextTimerRunId,
-            scheduleNonce: nextScheduleNonce,
-          }
-        );
-      }
-
-      const nextPayload = {
-        sessionType: args.nextSessionType,
-        status: shouldAutoStart ? ("RUNNING" as const) : ("IDLE" as const),
-        remainingSeconds: args.nextDurationSeconds,
-        totalSeconds: args.nextDurationSeconds,
-        targetEndTime: nextTargetEndTime,
-        currentCycle: args.nextCurrentCycle,
-        tagId: sanitizedTagId,
-        timerRunId: nextTimerRunId,
-        lastCompletedTimerRunId: completedRunId,
-        scheduleNonce: nextScheduleNonce,
-        serverAutoStartStreak: 0,
-        scheduledCompletionId: nextScheduledCompletionId,
-        updatedAtMs: nowMs,
-      };
-
-      await ctx.db.patch(existing._id, nextPayload);
-
-      const withinPushFreshnessWindow =
-        !existing.targetEndTime || nowMs - existing.targetEndTime <= 120_000;
-      if (withinPushFreshnessWindow) {
-        const hasPushSub = Boolean(
-          await ctx.db
-            .query("push_subscriptions")
-            .withIndex("by_user_device", (q) => q.eq("userId", user._id))
-            .first()
-        );
-        if (hasPushSub) {
-          await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
-            userId: user._id,
-            sessionType: existing.sessionType,
-            timerRunId: completedRunId || `run-${nowMs}`,
-            completedAtMs: Math.round(completedAtMs),
-          });
-        }
-      }
-
-      return {
-        ...nextPayload,
-        serverNowMs: nowMs,
-      };
+      return { ...nextPayload, serverNowMs: nowMs };
     }
 
-    // Case 2a: Server onTimerCompleted already ran AND auto-started the next interval (Decision 1A).
-    // Reset serverAutoStartStreak since a live client is actively participating, and return authoritative state.
+    // Case 2a: Server onTimerCompleted already ran AND auto-started the next interval.
     if (
       existing.status === "RUNNING" &&
       Boolean(args.completedTimerRunId) &&
@@ -596,16 +457,10 @@ export const complete = mutation({
       if ((existing.serverAutoStartStreak ?? 0) !== 0) {
         await ctx.db.patch(existing._id, { serverAutoStartStreak: 0 });
       }
-      return {
-        ...existing,
-        serverAutoStartStreak: 0,
-        serverNowMs: nowMs,
-      };
+      return { ...existing, serverAutoStartStreak: 0, serverNowMs: nowMs };
     }
 
     // Case 2b: onTimerCompleted ALREADY ran on the server and landed on IDLE (e.g. cap reached).
-    // Strictly require lastCompletedTimerRunId === completedTimerRunId AND verify server settings still
-    // enable auto-start for this interval so a waking stale client cannot force-start after user turned auto-start OFF.
     const serverSettings = user.settings ?? DEFAULT_SETTINGS;
     const serverAllowsAutoStart =
       args.nextSessionType === "WORK"
@@ -623,44 +478,14 @@ export const complete = mutation({
       existing.currentCycle === args.nextCurrentCycle &&
       nowMs - existing.updatedAtMs < 60_000
     ) {
-      const nextTargetEndTime = nowMs + args.nextDurationSeconds * 1000;
-      const nextScheduleNonce = generateScheduleNonce(nowMs);
-      const nextScheduledCompletionId: Id<"_scheduled_functions"> = await ctx.scheduler.runAfter(
-        args.nextDurationSeconds * 1000,
-        internal.timer.onTimerCompleted,
-        {
-          userId: user._id,
-          timerRunId: args.nextTimerRunId,
-          scheduleNonce: nextScheduleNonce,
-        }
+      const runningPayload = await scheduleAndPatchNextInterval(
+        true,
+        args.completedTimerRunId ?? undefined
       );
-
-      const runningPayload = {
-        sessionType: args.nextSessionType,
-        status: "RUNNING" as const,
-        remainingSeconds: args.nextDurationSeconds,
-        totalSeconds: args.nextDurationSeconds,
-        targetEndTime: nextTargetEndTime,
-        currentCycle: args.nextCurrentCycle,
-        tagId: sanitizedTagId,
-        timerRunId: args.nextTimerRunId,
-        lastCompletedTimerRunId: args.completedTimerRunId ?? undefined,
-        scheduleNonce: nextScheduleNonce,
-        serverAutoStartStreak: 0,
-        scheduledCompletionId: nextScheduledCompletionId,
-        updatedAtMs: nowMs,
-      };
-      await ctx.db.patch(existing._id, runningPayload);
-      return {
-        ...runningPayload,
-        serverNowMs: nowMs,
-      };
+      return { ...runningPayload, serverNowMs: nowMs };
     }
 
-    return {
-      ...existing,
-      serverNowMs: nowMs,
-    };
+    return { ...existing, serverNowMs: nowMs };
   },
 });
 
@@ -672,16 +497,11 @@ export const onTimerCompleted = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const timer = await ctx.db
-      .query("active_timers")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .first();
-
+    const timer = await getUserActiveTimer(ctx, args.userId);
     if (!timer || timer.timerRunId !== args.timerRunId || timer.status !== "RUNNING") {
       return null;
     }
 
-    // Reject stale rescheduled jobs from prior Pause/Resume or restarted instances of the same runId
     if (
       args.scheduleNonce !== undefined &&
       timer.scheduleNonce !== undefined &&
@@ -692,10 +512,7 @@ export const onTimerCompleted = internalMutation({
 
     const nowMs = Date.now();
     const completedAtMs =
-      timer.targetEndTime && timer.targetEndTime <= nowMs
-        ? timer.targetEndTime
-        : nowMs;
-    const completedAtIso = new Date(completedAtMs).toISOString();
+      timer.targetEndTime && timer.targetEndTime <= nowMs ? timer.targetEndTime : nowMs;
 
     await recordCompletedSessionIfNotDuplicate(ctx, {
       userId: args.userId,
@@ -706,16 +523,6 @@ export const onTimerCompleted = internalMutation({
       timerRunId: args.timerRunId,
     });
 
-    await reconcileCompletedSessionAttempt(ctx, {
-      userId: args.userId,
-      attemptId: timer.timerRunId,
-      totalSeconds: timer.totalSeconds,
-      targetEndTime: timer.targetEndTime,
-      completedAtIso,
-      nowMs,
-      source: "server_scheduled",
-    });
-
     const user = await ctx.db.get(args.userId);
     const settings = user?.settings ?? DEFAULT_SETTINGS;
     const { nextType, nextCycle, nextDurationSec, shouldAutoStart } = computeServerNextInterval(
@@ -724,24 +531,18 @@ export const onTimerCompleted = internalMutation({
       settings
     );
 
-    // Decision 1A: Honor autoStartBreaks / autoStartPomodoros server-side with a safety cap
-    // so backgrounded/locked devices auto-start reliably without ever looping endlessly overnight.
     const currentStreak = timer.serverAutoStartStreak ?? 0;
     const willAutoStart =
       shouldAutoStart && currentStreak < MAX_UNATTENDED_SERVER_AUTO_STARTS;
 
     if (willAutoStart) {
       const nextTimerRunId = `run-srv-${nowMs}-${Math.random().toString(36).slice(2, 7)}`;
-      const nextScheduleNonce = generateScheduleNonce(nowMs);
-      const nextTargetEndTime = nowMs + nextDurationSec * 1000;
-      const nextScheduledCompletionId = await ctx.scheduler.runAfter(
-        nextDurationSec * 1000,
-        internal.timer.onTimerCompleted,
-        {
-          userId: args.userId,
-          timerRunId: nextTimerRunId,
-          scheduleNonce: nextScheduleNonce,
-        }
+      const scheduled = await scheduleCompletionJob(
+        ctx,
+        args.userId,
+        nextTimerRunId,
+        nextDurationSec,
+        nowMs
       );
 
       await ctx.db.patch(timer._id, {
@@ -750,71 +551,48 @@ export const onTimerCompleted = internalMutation({
         remainingSeconds: nextDurationSec,
         totalSeconds: nextDurationSec,
         currentCycle: nextCycle,
-        targetEndTime: nextTargetEndTime,
+        targetEndTime: scheduled.targetEndTime,
         timerRunId: nextTimerRunId,
         lastCompletedTimerRunId: args.timerRunId,
-        scheduleNonce: nextScheduleNonce,
+        scheduleNonce: scheduled.scheduleNonce,
         serverAutoStartStreak: currentStreak + 1,
-        scheduledCompletionId: nextScheduledCompletionId,
+        scheduledCompletionId: scheduled.scheduledCompletionId,
         updatedAtMs: nowMs,
       });
     } else {
-      await ctx.db.patch(timer._id, {
-        sessionType: nextType,
-        status: "IDLE" as const,
-        remainingSeconds: nextDurationSec,
-        totalSeconds: nextDurationSec,
-        currentCycle: nextCycle,
-        targetEndTime: undefined,
-        timerRunId: undefined,
-        lastCompletedTimerRunId: args.timerRunId,
-        scheduleNonce: undefined,
-        serverAutoStartStreak: 0,
-        scheduledCompletionId: undefined,
-        updatedAtMs: nowMs,
-      });
+      await ctx.db.patch(
+        timer._id,
+        buildIdleTimerPayload({
+          sessionType: nextType,
+          durationSeconds: nextDurationSec,
+          currentCycle: nextCycle,
+          lastCompletedTimerRunId: args.timerRunId,
+          updatedAtMs: nowMs,
+        })
+      );
     }
 
-    const withinPushFreshnessWindow =
-      !timer.targetEndTime || nowMs - timer.targetEndTime <= 180_000;
-    if (withinPushFreshnessWindow) {
-      const hasPushSub = Boolean(
-        await ctx.db
-          .query("push_subscriptions")
-          .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
-          .first()
-      );
-      if (hasPushSub) {
-        await ctx.scheduler.runAfter(0, internal.pushActions.sendTimerCompletionPush, {
-          userId: args.userId,
-          sessionType: timer.sessionType,
-          timerRunId: args.timerRunId,
-          completedAtMs: Math.round(completedAtMs),
-        });
-      }
-    }
+    await dispatchCompletionPushIfSubscribed(ctx, {
+      userId: args.userId,
+      sessionType: timer.sessionType,
+      timerRunId: args.timerRunId,
+      completedAtMs,
+      targetEndTime: timer.targetEndTime,
+      nowMs,
+      maxWindowMs: 180_000,
+    });
 
     return null;
   },
 });
 
-/**
- * Scheduled background maintenance task:
- * 1. Resets abandoned RUNNING timers (targetEndTime passed by > 1 hour) to IDLE.
- * 2. Resets ancient PAUSED timers (> 7 days stale) to IDLE.
- * 3. Clears stale peerPresence records (> 24 hours old).
- * Uses by_status_updated index so large IDLE user bases never starve cleanup.
- */
 export const cleanupStaleTimers = internalMutation({
   args: {},
-  returns: v.object({
-    cleanedCount: v.number(),
-  }),
+  returns: v.object({ cleanedCount: v.number() }),
   handler: async (ctx) => {
     const nowMs = Date.now();
     const ONE_HOUR_MS = 60 * 60 * 1000;
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
     const runningTimers = await ctx.db
       .query("active_timers")
@@ -828,114 +606,34 @@ export const cleanupStaleTimers = internalMutation({
       )
       .take(500);
 
-    const candidateIdlePresenceTimers = await ctx.db
-      .query("active_timers")
-      .withIndex("by_status_updated", (q) =>
-        q.eq("status", "IDLE").lt("updatedAtMs", nowMs - ONE_DAY_MS)
-      )
-      .take(500);
-
-    const candidatePausedPresenceTimers = await ctx.db
-      .query("active_timers")
-      .withIndex("by_status_updated", (q) =>
-        q
-          .eq("status", "PAUSED")
-          .gte("updatedAtMs", nowMs - SEVEN_DAYS_MS)
-          .lt("updatedAtMs", nowMs - ONE_DAY_MS)
-      )
-      .take(500);
-
     let cleanedCount = 0;
 
-    const abandonCandidates = [...runningTimers, ...stalePausedTimers];
-    for (const timer of abandonCandidates) {
+    for (const timer of [...runningTimers, ...stalePausedTimers]) {
       const isAbandonedRunning =
         timer.status === "RUNNING" &&
         timer.targetEndTime !== undefined &&
         nowMs > timer.targetEndTime + ONE_HOUR_MS;
       const isAbandonedPaused =
         timer.status === "PAUSED" && nowMs - timer.updatedAtMs > SEVEN_DAYS_MS;
-      const hasStalePresence = Boolean(
-        timer.peerPresence && nowMs - (timer.peerPresence.lastSeenMs || 0) > ONE_DAY_MS
-      );
 
-      if (isAbandonedRunning || isAbandonedPaused) {
-        await cancelScheduledJob(ctx, timer.scheduledCompletionId);
+      if (!isAbandonedRunning && !isAbandonedPaused) continue;
 
-        if (timer.timerRunId) {
-          const runId = timer.timerRunId;
-          const existingAttempt = await ctx.db
-            .query("session_attempts")
-            .withIndex("by_user_attempt", (q) =>
-              q.eq("userId", timer.userId).eq("attemptId", runId)
-            )
-            .first();
+      await cancelScheduledJob(ctx, timer.scheduledCompletionId);
 
-          if (existingAttempt && existingAttempt.status === "in_progress") {
-            const plannedSec = Math.max(
-              1,
-              existingAttempt.plannedDurationSeconds || timer.totalSeconds || 1
-            );
-            const isExpiredRunning =
-              timer.status === "RUNNING" &&
-              typeof timer.targetEndTime === "number" &&
-              timer.targetEndTime < nowMs;
-            const endedMs = isExpiredRunning ? timer.targetEndTime! : nowMs;
-            const actualActiveSeconds = isExpiredRunning
-              ? plannedSec
-              : Math.max(0, Math.min(plannedSec, existingAttempt.actualActiveSeconds));
-            const remainingSecondsAtEnd = Math.max(0, plannedSec - actualActiveSeconds);
-            const completionRatio = Number(
-              Math.min(1, actualActiveSeconds / plannedSec).toFixed(4)
-            );
+      const user = await ctx.db.get(timer.userId);
+      const settings = user?.settings ?? DEFAULT_SETTINGS;
+      const dur = Math.max(1, Math.round(settings.workDurationMinutes * 60));
 
-            await ctx.db.patch(existingAttempt._id, {
-              status: "abandoned_stale",
-              endedAt: new Date(endedMs).toISOString(),
-              actualActiveSeconds,
-              remainingSecondsAtEnd,
-              completionRatio,
-              source: "server_scheduled",
-              updatedAtMs: nowMs,
-            });
-          }
-        }
-
-        const user = await ctx.db.get(timer.userId);
-        const settings = user?.settings ?? DEFAULT_SETTINGS;
-        const dur = Math.max(1, Math.round(settings.workDurationMinutes * 60));
-
-        await ctx.db.patch(timer._id, {
+      await ctx.db.patch(
+        timer._id,
+        buildIdleTimerPayload({
           sessionType: "WORK",
-          status: "IDLE",
-          remainingSeconds: dur,
-          totalSeconds: dur,
+          durationSeconds: dur,
           currentCycle: 1,
-          targetEndTime: undefined,
-          timerRunId: undefined,
-          lastCompletedTimerRunId: undefined,
-          scheduleNonce: undefined,
-          serverAutoStartStreak: 0,
-          scheduledCompletionId: undefined,
-          ...(hasStalePresence ? { peerPresence: undefined } : {}),
           updatedAtMs: nowMs,
-        });
-        cleanedCount++;
-      } else if (hasStalePresence) {
-        await ctx.db.patch(timer._id, {
-          peerPresence: undefined,
-        });
-        cleanedCount++;
-      }
-    }
-
-    for (const timer of [...candidateIdlePresenceTimers, ...candidatePausedPresenceTimers]) {
-      if (timer.peerPresence && nowMs - (timer.peerPresence.lastSeenMs || 0) > ONE_DAY_MS) {
-        await ctx.db.patch(timer._id, {
-          peerPresence: undefined,
-        });
-        cleanedCount++;
-      }
+        })
+      );
+      cleanedCount++;
     }
 
     return { cleanedCount };

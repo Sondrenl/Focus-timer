@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuthProfile } from '../context/AuthProfileContext';
 import { isProduction } from '../utils/environment';
 import { toDateKey } from '../utils/dates';
-import { isSampleSessionId } from '../services/repository/SessionRepository';
+import { isSampleSessionId } from '../services/storage/guestRepositories';
 import { useTodayKey } from './useTodayKey';
 import {
   generateAllPeriodInsights,

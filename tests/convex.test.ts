@@ -1,8 +1,15 @@
 // @vitest-environment edge-runtime
+import { describe, it, expect, vi } from "vitest";
+vi.hoisted(() => {
+  if (typeof (globalThis as any).window === "undefined") (globalThis as any).window = {};
+  if (!(globalThis as any).window.location) (globalThis as any).window.location = { hostname: "localhost" };
+});
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { convexTest } from "convex-test";
-import { describe, it, expect } from "vitest";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
+import { useCloudMigration } from "../src/hooks/data/useCloudMigration";
 
 const modules = import.meta.glob("../convex/**/*.*s");
 
@@ -477,11 +484,10 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(active?.timerRunId).toBe("auto-work-run-2");
   });
 
-  it("reconciles session_attempts to completed on client timer.complete and increments cycle on SHORT_BREAK server completion", async () => {
+  it("increments cycle on SHORT_BREAK server completion after client timer.complete", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
-    // 1. Start WORK timer (with 1s remaining so it is within the 5s completion window) and insert an in_progress session_attempt
     await asUser.mutation(api.timer.start, {
       sessionType: "WORK",
       durationSeconds: 1500,
@@ -492,55 +498,6 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
       timerRunId: "run-attempt-reconcile",
     });
 
-    await t.run(async (ctx) => {
-      await ctx.db.insert("session_attempts", {
-        userId,
-        attemptId: "run-attempt-reconcile",
-        sessionType: "WORK",
-        status: "in_progress",
-        wasStarted: true,
-        plannedDurationSeconds: 1500,
-        actualActiveSeconds: 300,
-        remainingSecondsAtEnd: 1200,
-        completionRatio: 0.2,
-        startedAt: "2026-11-18T10:00:00.000Z",
-        utcOffsetMinutes: 60,
-        ianaTimezone: "Europe/Oslo",
-        localDate: "2026-11-18",
-        localHour: 11,
-        localMinuteOfDay: 660,
-        localDayOfWeek: 3,
-        cycleIndex: 1,
-        longBreakInterval: 4,
-        autoStarted: false,
-        initialTagId: "tag-study",
-        tagId: "tag-study",
-        tagChangedMidRun: false,
-        pauseCount: 0,
-        totalPausedSeconds: 0,
-        pauseIntervals: [],
-        workSessionsCompletedToday: 0,
-        workActiveSecondsToday: 0,
-        skipsToday: 0,
-        coffeeCupsTodayAtStart: 0,
-        coffeeLoggedDuringRun: 0,
-        dailyGoalMinutes: 120,
-        settingsSnapshot: {
-          workDurationMinutes: 25,
-          shortBreakDurationMinutes: 5,
-          longBreakDurationMinutes: 25,
-          longBreakInterval: 4,
-          autoStartBreaks: false,
-          autoStartPomodoros: false,
-        },
-        deviceClass: "desktop",
-        tabBackgroundedCount: 0,
-        source: "client",
-        updatedAtMs: Date.now() - 1000,
-      });
-    });
-
-    // Client completes timer before scheduled onTimerCompleted runs
     await asUser.mutation(api.timer.complete, {
       completedTimerRunId: "run-attempt-reconcile",
       nextSessionType: "SHORT_BREAK",
@@ -550,19 +507,6 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
       nextTimerRunId: "run-short-break-1",
     });
 
-    const reconciledAttempt = await t.run(async (ctx) =>
-      ctx.db
-        .query("session_attempts")
-        .withIndex("by_user_attempt", (q) =>
-          q.eq("userId", userId).eq("attemptId", "run-attempt-reconcile")
-        )
-        .first()
-    );
-    expect(reconciledAttempt?.status).toBe("completed");
-    expect(reconciledAttempt?.actualActiveSeconds).toBe(1500);
-    expect(reconciledAttempt?.completionRatio).toBe(1);
-
-    // 2. Server onTimerCompleted finishes SHORT_BREAK on cycle 1 -> must advance to WORK cycle 2
     await t.mutation(internal.timer.onTimerCompleted, {
       userId,
       timerRunId: "run-short-break-1",
@@ -574,45 +518,9 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(activeAfterBreak?.status).toBe("IDLE");
   });
 
-  it("cleans up ml_events tag references on tags.remove and regenerates invalid tag IDs during importBackup", async () => {
+  it("regenerates invalid tag IDs during importBackup", async () => {
     const t = convexTest(schema, modules);
-    const { userId, asUser } = await createAuthenticatedTestUser(t);
-
-    // Insert an ml_event referencing tag-study across tagId and fromTagId
-    await t.run(async (ctx) => {
-      await ctx.db.insert("ml_events", {
-        userId,
-        eventId: "evt-tag-cleanup-1",
-        eventType: "tag_changed",
-        timestamp: "2026-11-18T10:05:00.000Z",
-        timestampMs: 1700000005000,
-        utcOffsetMinutes: 60,
-        ianaTimezone: "Europe/Oslo",
-        localDate: "2026-11-18",
-        localHour: 11,
-        localMinuteOfDay: 665,
-        localDayOfWeek: 3,
-        deviceClass: "desktop",
-        tagId: "tag-study",
-        fromTagId: "tag-study",
-        toTagId: "tag-work",
-        source: "client",
-      });
-    });
-
-    await asUser.mutation(api.tags.remove, { id: "tag-study" });
-
-    const cleanedEvent = await t.run(async (ctx) =>
-      ctx.db
-        .query("ml_events")
-        .withIndex("by_user_event", (q) =>
-          q.eq("userId", userId).eq("eventId", "evt-tag-cleanup-1")
-        )
-        .first()
-    );
-    expect(cleanedEvent?.tagId).toBeUndefined();
-    expect(cleanedEvent?.fromTagId).toBeUndefined();
-    expect(cleanedEvent?.toTagId).toBe("tag-work");
+    const { asUser } = await createAuthenticatedTestUser(t);
 
     // Import backup with invalid tag ID containing spaces/special characters
     await asUser.mutation(api.migrations.importBackup, {
@@ -645,5 +553,199 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(updatedUserState?.tags.find((tag) => tag.id === importedTag!.id)?.name).toBe(
       "Deep Research Updated"
     );
+  });
+
+  it("blocks phantom user auto-creation for deleted accounts and upgrades legacy bare sub tokenIdentifier", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    await t.run(async (ctx) => ctx.db.delete(userId));
+    expect(await asUser.query(api.users.current, {})).toBeNull();
+    await expect(
+      asUser.mutation(api.sessions.record, {
+        sessionType: "WORK",
+        durationSeconds: 1500,
+        completedAt: "2026-04-01T10:00:00.000Z",
+      })
+    ).rejects.toThrow("Unauthorized");
+
+    const legacyId = await t.run(async (ctx) =>
+      ctx.db.insert("users", {
+        tokenIdentifier: "legacy-sub-999",
+        email: "legacy@example.com",
+        displayName: "Legacy User",
+        avatarEmoji: "🦉",
+        dailyGoalMinutes: 120,
+        settings: {
+          workDurationMinutes: 25,
+          shortBreakDurationMinutes: 5,
+          longBreakDurationMinutes: 25,
+          longBreakInterval: 4,
+          autoStartBreaks: false,
+          autoStartPomodoros: false,
+          soundVolume: 0.7,
+          soundEnabled: true,
+          notificationsEnabled: false,
+          keepAwake: false,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        tags: [],
+      })
+    );
+    expect(
+      await t.mutation(internal.users.getOrCreateUserForAuth, {
+        email: "legacy@example.com",
+        sub: "legacy-sub-999",
+        name: "Legacy User",
+      })
+    ).toBe(legacyId);
+    const upgraded = await t.run(async (ctx) => ctx.db.get(legacyId));
+    expect(upgraded?.tokenIdentifier).toBe("https://accounts.google.com|legacy-sub-999");
+  });
+
+  it("omits serverNowMs from getActive, resets streak via acknowledgeActive, rejects stale actions, and coerces invalid tagIds", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    const first = await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+      tagId: "tag-does-not-exist",
+      timerRunId: "run-ack-1",
+    });
+    expect(first.applied).toBe(true);
+    expect(first.tagId).toBeUndefined();
+
+    await t.run(async (ctx) => {
+      const active = await ctx.db
+        .query("active_timers")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      if (active) await ctx.db.patch(active._id, { serverAutoStartStreak: 2 });
+    });
+
+    const activeBefore = await asUser.query(api.timer.getActive, {});
+    expect("serverNowMs" in (activeBefore as Record<string, unknown>)).toBe(false);
+    expect((await asUser.mutation(api.timer.acknowledgeActive, { timerRunId: "run-ack-1" })).acknowledged).toBe(true);
+    expect((await asUser.query(api.timer.getActive, {}))?.serverAutoStartStreak).toBe(0);
+
+    const staleStart = await asUser.mutation(api.timer.start, {
+      sessionType: "SHORT_BREAK",
+      durationSeconds: 300,
+      currentCycle: 1,
+      timerRunId: "run-stale-2",
+      clientActionAtMs: first.updatedAtMs - 10_000,
+    });
+    expect(staleStart.applied).toBe(false);
+
+    const elapsedStart = await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 60,
+      currentCycle: 1,
+      timerRunId: "run-stale-3",
+      clientTargetEndTimeMs: Date.now() - 5_000,
+    });
+    expect(elapsedStart.rejectedReason).toBe("already_elapsed");
+
+    const staleReset = await asUser.mutation(api.timer.reset, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+      clientActionAtMs: first.updatedAtMs - 10_000,
+    });
+    expect(staleReset.applied).toBe(false);
+
+    const session = await asUser.mutation(api.sessions.record, {
+      tagId: "tag-does-not-exist",
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      completedAt: "2026-04-02T10:00:00.000Z",
+    });
+    expect(session.tagId).toBeNull();
+  });
+
+  it("prevents duplicate coffee deletion from deleting another cup and propagates tag removal to active_timers", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    const cup1 = await asUser.mutation(api.coffee.addCup, { date: "2026-04-05", tagId: "tag-study", createdAt: "2026-04-05T08:00:00.000Z" });
+    const cup2 = await asUser.mutation(api.coffee.addCup, { date: "2026-04-05", tagId: "tag-study", createdAt: "2026-04-05T09:00:00.000Z" });
+
+    expect(await asUser.mutation(api.coffee.removeCup, { id: cup1.id, date: "2026-04-05", tagId: "tag-study" })).toBe(true);
+    expect(await asUser.mutation(api.coffee.removeCup, { id: cup1.id, date: "2026-04-05", tagId: "tag-study" })).toBe(false);
+    expect((await asUser.query(api.coffee.list, { date: "2026-04-05" }))?.map((c) => c.id)).toEqual([cup2.id]);
+
+    await asUser.mutation(api.tags.create, { id: "tag-custom-timer", name: "Custom Timer", color: "#EF4444" });
+    const started = await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+      tagId: "tag-custom-timer",
+      timerRunId: "run-tag-remove-1",
+    });
+    await asUser.mutation(api.tags.remove, { id: "tag-custom-timer" });
+    const activeAfter = await asUser.query(api.timer.getActive, {});
+    expect(activeAfter?.tagId).toBeUndefined();
+    expect(activeAfter!.updatedAtMs).toBeGreaterThanOrEqual(started.updatedAtMs);
+  });
+
+  it("handles importBackup tag collisions, replace dangling timer tagId cleanup, and chunked clearForReplaceBatch", async () => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.migrations.clearForReplaceBatch, {})).rejects.toThrow(/Unauthorized/i);
+
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    // Colliding tag ID with different name mints a fresh tag ID and remaps sessions
+    await asUser.mutation(api.migrations.importBackup, {
+      mode: "merge",
+      tags: [{ id: "tag-study", name: "Quantum Physics", color: "#8B5CF6", isArchived: false }],
+      sessions: [{ id: "g-1", tagId: "tag-study", sessionType: "WORK", durationSeconds: 1500, completedAt: "2026-04-06T12:00:00.000Z", timerRunId: "run-u-1" }],
+      coffeeCups: [],
+    });
+    const userAfterMerge = await asUser.query(api.users.current, {});
+    const quantumTag = userAfterMerge?.tags.find((tag) => tag.name === "Quantum Physics");
+    expect(quantumTag?.id).not.toBe("tag-study");
+    const mergedSessions = await asUser.query(api.sessions.list, {});
+    expect(mergedSessions?.[0].tagId).toBe(quantumTag?.id);
+    expect(mergedSessions?.[0].timerRunId).toBe("run-u-1");
+
+    // Chunked replace wipes >500 docs via clearForReplaceBatch and clears dangling active_timers.tagId
+    await asUser.mutation(api.timer.start, { sessionType: "WORK", durationSeconds: 1500, currentCycle: 1, tagId: "tag-study", timerRunId: "run-rep-1" });
+    await t.run(async (ctx) => {
+      const baseMs = Date.parse("2026-01-01T00:00:00.000Z");
+      for (let i = 0; i < 520; i++) {
+        await ctx.db.insert("sessions", { userId, tagId: "tag-study", sessionType: "WORK", durationSeconds: 1500, completedAt: new Date(baseMs + i * 60_000).toISOString() });
+      }
+    });
+
+    const clearBatchSpy = vi.fn(async () => asUser.mutation(api.migrations.clearForReplaceBatch, {}));
+    const importBackupSpy = vi.fn(async (args: any) => asUser.mutation(api.migrations.importBackup, args));
+    let syncChunked!: ReturnType<typeof useCloudMigration>["syncBackupToConvexChunked"];
+    function Harness() {
+      syncChunked = useCloudMigration({
+        isEffectiveAuthenticated: true,
+        convexSync: {
+          isConvexConfigured: true,
+          convexUser: undefined,
+          convexCoffee: undefined,
+          convexSessions: undefined,
+          mutations: { clearForReplaceBatch: clearBatchSpy, importBackup: importBackupSpy } as any,
+        } as any,
+      }).syncBackupToConvexChunked;
+      return null;
+    }
+    renderToStaticMarkup(React.createElement(Harness));
+
+    await syncChunked(
+      "replace",
+      [{ id: "tag-fresh", name: "Fresh Focus", color: "#10B981", isArchived: false }],
+      [{ id: "new-s-1", tagId: "tag-fresh", sessionType: "WORK", durationSeconds: 1800, completedAt: "2026-04-01T10:00:00.000Z" }],
+      []
+    );
+    expect(clearBatchSpy).toHaveBeenCalledTimes(2);
+    expect(importBackupSpy.mock.calls[0][0].skipReplaceClear).toBe(true);
+    expect(await asUser.query(api.sessions.list, { limit: 5000 })).toHaveLength(1);
+    expect((await asUser.query(api.timer.getActive, {}))?.tagId).toBeUndefined();
   });
 });
