@@ -131,6 +131,10 @@ export class CoffeeRepository extends QueuedRepository {
   async addCup(date: string, tagId: string | null = null): Promise<CoffeeCup> {
     return this.enqueue(async () => {
       const all = await this.getAll();
+      const cupsTodayCount = all.reduce((acc, c) => (c.date === date ? acc + 1 : acc), 0);
+      if (cupsTodayCount >= 50) {
+        throw new Error('Maximum limit of 50 coffee cups per day reached.');
+      }
       const newCup: CoffeeCup = {
         id: `coffee-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         date,

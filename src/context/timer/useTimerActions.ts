@@ -136,6 +136,8 @@ export function useTimerActions({
         durationSeconds: elapsedSeconds,
         completedAt: new Date(completedTimestampMs).toISOString(),
         timerRunId: currentRunId || undefined,
+      }).catch((err) => {
+        console.warn('Failed to record completed session:', err);
       });
 
       void telemetryTracker.onSessionFinalized({

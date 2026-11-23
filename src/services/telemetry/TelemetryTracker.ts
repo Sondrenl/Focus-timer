@@ -1,6 +1,5 @@
 import {
   AttemptOutcome,
-  MlTelemetryExport,
   SessionAttempt,
 } from '../../types/telemetry';
 import { SessionType } from '../../types/timer';
@@ -25,7 +24,7 @@ export interface TelemetryCloudSink {
 /**
  * Lean write-only-on-finalize ML telemetry tracker.
  * Tracks active run metadata strictly in memory and writes one finalized row
- * to local storage / Convex when a session completes or aborts.
+ * to local storage (guest) or Convex (signed-in) when a session completes or aborts.
  */
 export class TelemetryTracker {
   private repo: TelemetryRepository;
@@ -56,12 +55,6 @@ export class TelemetryTracker {
 
   invalidateDraftCache(): void {
     this.activeDraft = null;
-  }
-
-  async discardInProgressAttempt(attemptId: string): Promise<void> {
-    if (this.activeDraft?.attempt.attemptId === attemptId) {
-      this.activeDraft = null;
-    }
   }
 
   async onSessionStarted(params: {
@@ -186,23 +179,12 @@ export class TelemetryTracker {
         return;
       }
 
-      await this.repo.upsertAttempt(finalizedAttempt);
-      this.pushAttemptToCloud(finalizedAttempt);
+      if (this.cloudSink) {
+        this.pushAttemptToCloud(finalizedAttempt);
+      } else {
+        await this.repo.upsertAttempt(finalizedAttempt);
+      }
     });
-  }
-
-  getExportDataSync(): MlTelemetryExport {
-    return {
-      schemaVersion: 1,
-      sessionAttempts: this.repo.getAttemptsSync(),
-    };
-  }
-
-  async getExportData(): Promise<MlTelemetryExport> {
-    return this.enqueue(async () => ({
-      schemaVersion: 1,
-      sessionAttempts: await this.repo.getAttempts(),
-    }));
   }
 
   async clearAll(): Promise<void> {

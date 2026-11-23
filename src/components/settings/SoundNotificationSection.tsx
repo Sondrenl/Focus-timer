@@ -13,7 +13,7 @@ import { getCompletionNotificationCopy } from '../../services/notification/notif
 
 interface SoundNotificationSectionProps {
   settings: UserSettings;
-  updateSettings: (updates: Partial<UserSettings>) => void;
+  updateSettings: (updates: Partial<UserSettings>) => void | Promise<void>;
   sound: SoundService;
   notifications: NotificationService;
   onSaved: () => void;
@@ -82,7 +82,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
   const handleToggleNotifications = async (enable: boolean) => {
     if (!enable) {
-      updateSettings({ notificationsEnabled: false });
+      await updateSettings({ notificationsEnabled: false });
       setPermissionState(notifications.getPermissionState());
       onSaved();
       if (onUnsubscribePush) {
@@ -94,7 +94,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
     const currentPerm = notifications.getPermissionState();
     if (currentPerm === 'unsupported') {
       if (settings.notificationsEnabled) {
-        updateSettings({ notificationsEnabled: false });
+        await updateSettings({ notificationsEnabled: false });
       }
       showNotifFeedback('Notifications are not supported in this browser.');
       return;
@@ -102,14 +102,14 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
 
     if (currentPerm === 'denied') {
       if (settings.notificationsEnabled) {
-        updateSettings({ notificationsEnabled: false });
+        await updateSettings({ notificationsEnabled: false });
       }
       showNotifFeedback('Notifications are blocked in your browser site settings.');
       return;
     }
 
     if (currentPerm === 'granted') {
-      updateSettings({ notificationsEnabled: true });
+      await updateSettings({ notificationsEnabled: true });
       onSaved();
       if (isPushAuthenticated && onSyncPush) {
         const res = await onSyncPush();
@@ -130,7 +130,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
     setPermissionState(updatedPerm);
 
     if (granted) {
-      updateSettings({ notificationsEnabled: true });
+      await updateSettings({ notificationsEnabled: true });
       onSaved();
       if (isPushAuthenticated && onSyncPush) {
         const res = await onSyncPush();
@@ -144,7 +144,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
       }
     } else {
       if (settings.notificationsEnabled) {
-        updateSettings({ notificationsEnabled: false });
+        await updateSettings({ notificationsEnabled: false });
       }
       if (updatedPerm === 'denied') {
         showNotifFeedback('Notifications are blocked in your browser site settings.');

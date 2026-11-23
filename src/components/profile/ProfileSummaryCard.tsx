@@ -37,6 +37,8 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
   const displayName = profile.displayName || 'Focus Practitioner';
   const dailyGoalMinutes = profile.dailyGoalMinutes || 120;
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [editName, setEditName] = useState(displayName);
   const [editEmoji, setEditEmoji] = useState(profile.avatarEmoji);
   const [editGoalInput, setEditGoalInput] = useState(String(dailyGoalMinutes));
@@ -64,11 +66,13 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
     setEditName(initialName);
     setEditEmoji(initialEmoji);
     setEditGoalInput(String(initialGoal));
+    setSaveError(null);
     setIsEditingProfile(true);
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     const safeDisplayName = editName.trim().slice(0, 50) || 'Focus Practitioner';
     const safeEmoji = editEmoji.trim().slice(0, 32);
     const parsedMinutes = parseInt(editGoalInput, 10);
@@ -87,8 +91,18 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
       patch.dailyGoalMinutes = safeGoal;
     }
 
+    setSaveError(null);
     if (Object.keys(patch).length > 0) {
-      await updateProfile(patch);
+      setIsSaving(true);
+      try {
+        await updateProfile(patch);
+      } catch (err) {
+        console.warn('[ProfileSummaryCard] Failed to save profile:', err);
+        setSaveError('Failed to save profile changes. Please try again.');
+        return;
+      } finally {
+        setIsSaving(false);
+      }
     }
     setIsEditingProfile(false);
   };
@@ -235,10 +249,19 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
       {/* Edit Profile Modal */}
       <Modal
         isOpen={isEditingProfile}
-        onClose={() => setIsEditingProfile(false)}
+        onClose={() => {
+          if (!isSaving) setIsEditingProfile(false);
+        }}
+        dismissible={!isSaving}
         title="Edit Profile & Goals"
       >
         <form onSubmit={handleSaveProfile} className="flex flex-col gap-5">
+          {saveError && (
+            <div className="px-3 py-2 rounded-xl bg-md-error/10 border border-md-error/25 text-xs font-medium text-md-error">
+              {saveError}
+            </div>
+          )}
+
           <div className="flex flex-col gap-2">
             <label className="text-xs font-semibold text-md-on-surface-variant">
               Display Name
@@ -301,11 +324,17 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-md-outline-variant/20">
-            <Button type="button" variant="text" size="sm" onClick={() => setIsEditingProfile(false)}>
+            <Button
+              type="button"
+              variant="text"
+              size="sm"
+              disabled={isSaving}
+              onClick={() => setIsEditingProfile(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" variant="filled" size="sm">
-              Save Profile
+            <Button type="submit" variant="filled" size="sm" disabled={isSaving}>
+              {isSaving ? 'Saving...' : 'Save Profile'}
             </Button>
           </div>
         </form>

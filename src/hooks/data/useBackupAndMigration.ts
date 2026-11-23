@@ -38,6 +38,7 @@ interface UseBackupAndMigrationParams {
   setSessions: React.Dispatch<React.SetStateAction<CompletedSession[]>>;
   coffeeCups: CoffeeCup[];
   setCoffeeCups: React.Dispatch<React.SetStateAction<CoffeeCup[]>>;
+  onDataReset?: (scope: 'sessions-only' | 'factory-reset') => void;
 }
 
 export function useBackupAndMigration({
@@ -55,6 +56,7 @@ export function useBackupAndMigration({
   setSessions,
   coffeeCups,
   setCoffeeCups,
+  onDataReset,
 }: UseBackupAndMigrationParams) {
   const isConvexAuthReady = isConvexAuthReadyParam ?? isEffectiveAuthenticated;
   const { isConvexConfigured, mutations: convexMutations } = convexSync;
@@ -102,6 +104,8 @@ export function useBackupAndMigration({
         setActiveTagId(defaultTags[0]?.id || null);
       }
 
+      onDataReset?.(scope);
+
       if (isCloudMode && isConvexAuthReady) {
         await convexMutations.clearSessions({});
         await convexMutations.clearCoffee({});
@@ -123,6 +127,7 @@ export function useBackupAndMigration({
       setSessions,
       setCoffeeCups,
       setTags,
+      onDataReset,
     ]
   );
 

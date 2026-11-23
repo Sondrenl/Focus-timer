@@ -161,10 +161,6 @@ export class NotificationService {
     };
   }
 
-  onPushStatusChange(listener: (status: PushSubscriptionStatus) => void): () => void {
-    return this.subscribePushStatus(listener);
-  }
-
   subscribePushResyncRequested(listener: () => void): () => void {
     this.pushResyncListeners.add(listener);
     return () => {

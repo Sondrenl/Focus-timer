@@ -115,8 +115,10 @@ export function computePeriodBounds(
   let endDate: Date;
   let periodLabel = '';
 
-  let sCustomKey = customRange.start;
-  let eCustomKey = customRange.end;
+  const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const todayFallback = toDateKey(new Date());
+  let sCustomKey = DATE_KEY_RE.test(customRange.start) ? customRange.start : todayFallback;
+  let eCustomKey = DATE_KEY_RE.test(customRange.end) ? customRange.end : todayFallback;
   if (sCustomKey > eCustomKey) {
     const tmp = sCustomKey;
     sCustomKey = eCustomKey;

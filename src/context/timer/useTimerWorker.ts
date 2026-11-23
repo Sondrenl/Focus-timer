@@ -41,6 +41,7 @@ interface UseTimerWorkerParams {
   getServerAlignedNowMs: () => number;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
   shouldDeferExpiredCompletion?: () => boolean;
+  shouldPersistLocallyRef?: React.MutableRefObject<boolean>;
   onStaleExpiration: () => void;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
 }
@@ -63,6 +64,7 @@ export const useTimerWorker = ({
   getServerAlignedNowMs,
   handleCompleteRef,
   shouldDeferExpiredCompletion,
+  shouldPersistLocallyRef,
   onStaleExpiration,
   setRemainingSeconds,
 }: UseTimerWorkerParams) => {
@@ -210,6 +212,8 @@ export const useTimerWorker = ({
         const diffSec = executeTickRef.current();
         if (diffSec === null) return;
 
+        if (shouldPersistLocallyRef && !shouldPersistLocallyRef.current) return;
+
         const stateToSave: SavedTimerState = {
           sessionType: sessionTypeRef.current,
           status: statusRef.current,
@@ -246,6 +250,7 @@ export const useTimerWorker = ({
     timerRunIdRef,
     localUpdatedAtRef,
     activeTagIdRef,
+    shouldPersistLocallyRef,
   ]);
 
   // Main-thread backup countdown timer

@@ -47,7 +47,8 @@ export const list = query({
     const user = await getAuthenticatedUser(ctx);
     if (!user) return null;
 
-    const safeLimit = Math.min(Math.max(1, args.limit ?? 2000), 5000);
+    const rawLimit = args.limit !== undefined && Number.isFinite(args.limit) ? args.limit : 2000;
+    const safeLimit = Math.min(Math.max(1, Math.floor(rawLimit)), 5000);
     let cups;
     if (args.date) {
       cups = await ctx.db

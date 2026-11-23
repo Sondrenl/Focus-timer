@@ -135,7 +135,6 @@ export function computeCoffeePeakMetric(
   todayKey: string,
   tags: Tag[]
 ): CoffeePeakMetric {
-  const now = new Date(`${todayKey}T12:00:00`);
   const tagMap = new Map<string, Tag>();
   tags.forEach((t) => tagMap.set(t.id, t));
 
@@ -164,23 +163,33 @@ export function computeCoffeePeakMetric(
     }
 
     const sortedDates = Array.from(dayCupCounts.keys()).sort();
-    const earliestDate = new Date(`${sortedDates[0]}T12:00:00`);
-    const latestDate = new Date(`${sortedDates[sortedDates.length - 1]}T12:00:00`);
-    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
-    const effectiveEndDate = latestDate > todayDate ? latestDate : todayDate;
+    const [eY, eM, eD] = sortedDates[0].split('-').map(Number);
+    const [lY, lM, lD] = sortedDates[sortedDates.length - 1].split('-').map(Number);
+    const [tY, tM, tD] = todayKey.split('-').map(Number);
+    const earliestUtc = Date.UTC(eY, eM - 1, eD);
+    const latestUtc = Date.UTC(lY, lM - 1, lD);
+    const todayUtc = Date.UTC(tY, tM - 1, tD);
+    const effectiveEndUtc = Math.max(latestUtc, todayUtc);
 
     const weekdayOccurrences = new Array(7).fill(0);
     const weekdayTotalCups = new Array(7).fill(0);
 
-    const cur = new Date(earliestDate.getTime());
-    while (cur <= effectiveEndDate) {
-      weekdayOccurrences[cur.getDay()] += 1;
-      cur.setDate(cur.getDate() + 1);
+    if (Number.isFinite(earliestUtc) && Number.isFinite(effectiveEndUtc) && effectiveEndUtc >= earliestUtc) {
+      const totalDays = Math.round((effectiveEndUtc - earliestUtc) / 86400000) + 1;
+      const fullWeeks = Math.floor(totalDays / 7);
+      const remainder = totalDays % 7;
+      const startWeekday = new Date(earliestUtc).getUTCDay();
+      for (let i = 0; i < 7; i++) {
+        const offset = (i - startWeekday + 7) % 7;
+        weekdayOccurrences[i] = fullWeeks + (offset < remainder ? 1 : 0);
+      }
     }
 
     dayCupCounts.forEach((count, dKey) => {
       const d = new Date(`${dKey}T12:00:00`);
-      weekdayTotalCups[d.getDay()] += count;
+      if (!Number.isNaN(d.getTime())) {
+        weekdayTotalCups[d.getDay()] += count;
+      }
     });
 
     let bestWeekday = 1;

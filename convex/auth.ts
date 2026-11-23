@@ -28,7 +28,8 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           audience: GOOGLE_CLIENT_ID,
         });
 
-        const email = typeof payload.email === "string" ? payload.email.trim() : undefined;
+        const email =
+          typeof payload.email === "string" ? payload.email.trim().toLowerCase() : undefined;
         const sub = typeof payload.sub === "string" ? payload.sub.trim() : undefined;
         const rawName = typeof payload.name === "string" ? payload.name.trim() : "";
         const name = (rawName || email?.split("@")[0] || "Focus Practitioner").slice(0, 100);

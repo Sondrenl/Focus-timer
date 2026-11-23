@@ -306,7 +306,12 @@ export const useTimerCloudSync = ({
         return;
       }
 
-      if (forceApply) {
+      const isServerCompletionOfCurrentRun = Boolean(
+        refs.timerRunIdRef.current &&
+          remote.lastCompletedTimerRunId === refs.timerRunIdRef.current
+      );
+
+      if (forceApply || isServerCompletionOfCurrentRun) {
         refs.lastLocalActionWallMsRef.current = 0;
       } else if (
         wallNowMs - refs.lastLocalActionWallMsRef.current < 1500 &&
@@ -484,6 +489,20 @@ export const useTimerCloudSync = ({
           timerRunId: remote.timerRunId || null,
           activeTagId: remote.activeTagId,
         });
+        if (remoteAutoStartedNextInterval && remote.timerRunId && diffSec > 0) {
+          void telemetryTracker.onSessionStarted({
+            attemptId: remote.timerRunId,
+            sessionType: remote.sessionType,
+            plannedDurationSeconds: remote.totalSeconds,
+            cycleIndex: remote.currentCycle || 1,
+            tagId: remote.activeTagId ?? null,
+            autoStarted: true,
+            settings: refs.settingsRef.current,
+            dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes ?? 120,
+            targetEndTimeMs: remote.targetEndTime,
+            nowMs: now,
+          });
+        }
         refs.lastTickWallMsRef.current = Date.now();
       } else if (remote.status === 'PAUSED') {
         const PAUSED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -661,9 +680,13 @@ export const useTimerCloudSync = ({
 
     const hasRecentLocalAction = Date.now() - refs.lastLocalActionWallMsRef.current < 1500;
     const isNewer = remoteTimer.updatedAtMs > refs.localUpdatedAtRef.current;
+    const isServerCompletionOfCurrentRun = Boolean(
+      refs.timerRunIdRef.current &&
+        remoteTimer.lastCompletedTimerRunId === refs.timerRunIdRef.current
+    );
 
-    if (!hasRecentLocalAction || isNewer) {
-      applyRemoteStateRef.current(toRemoteTimerState(remoteTimer));
+    if (!hasRecentLocalAction || isNewer || isServerCompletionOfCurrentRun) {
+      applyRemoteStateRef.current(toRemoteTimerState(remoteTimer), isServerCompletionOfCurrentRun);
     }
 
     acknowledgeRemoteRunIfActive(remoteTimer);

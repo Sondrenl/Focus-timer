@@ -61,8 +61,11 @@ export function useTagsData({
 
   const ensureValidActiveTag = useCallback(
     (tagList: Tag[]) => {
-      if (tagList.length === 0) return;
       const currentId = activeTagIdRef.current;
+      if (tagList.length === 0) {
+        if (currentId !== null) setActiveTagId(null);
+        return;
+      }
       if (currentId && tagList.some((t) => t.id === currentId && !t.isArchived)) {
         return;
       }
@@ -72,6 +75,8 @@ export function useTagsData({
     [setActiveTagId]
   );
 
+  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+
   // Initial load of guest tags from localStorage
   useEffect(() => {
     tagRepository.getAll().then((loaded) => {
@@ -79,6 +84,16 @@ export function useTagsData({
       ensureValidActiveTag(loaded);
     });
   }, [ensureValidActiveTag]);
+
+  // Reset in-memory guest tags & activeTagId on sign-out so pre-sign-in tags never reappear
+  useEffect(() => {
+    const wasAuth = wasAuthenticatedRef.current;
+    wasAuthenticatedRef.current = isEffectiveAuthenticated;
+    if (wasAuth && !isEffectiveAuthenticated) {
+      setGuestTags(DEFAULT_TAGS);
+      setActiveTagId(DEFAULT_TAGS[0]?.id ?? null);
+    }
+  }, [isEffectiveAuthenticated, setActiveTagId]);
 
   // When signed in, Convex user.tags is the direct source of truth.
   const tags = useMemo<Tag[]>(() => {

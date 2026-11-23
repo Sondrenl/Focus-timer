@@ -375,7 +375,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           avatarEmoji: profileRef.current.avatarEmoji || '',
           displayName: user.displayName || profileRef.current.displayName,
         };
-        await profileRepository.save(updatedProfile);
+        if (!isConvexConfigured) {
+          await profileRepository.save(updatedProfile);
+        }
         setLocalProfile(updatedProfile);
       } catch (err) {
         const message = (err as Error).message || 'Google sign-in failed';
@@ -481,6 +483,12 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const handleStorage = (e: StorageEvent) => {
       if (e.key === AUTH_USER_KEY && e.newValue === null && !isLoggingOutRef.current) {
         if (!authService.hasConvexAuthSession(convexUrl)) {
+          wasConvexAuthenticatedRef.current = false;
+          try {
+            convexClient.clearAuth();
+          } catch {
+            // Ignore
+          }
           void notificationService.unsubscribePush();
           void resetLocalAuthUi({ isTokenExpired: false, wipeCaches: false });
         }
@@ -635,6 +643,10 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
             ...settingsRepository.getSync(),
             notificationsEnabled: newValues.notificationsEnabled,
           };
+          settingsRef.current = {
+            ...settingsRef.current,
+            notificationsEnabled: newValues.notificationsEnabled,
+          };
           setLocalSettings(updatedLocal);
           await settingsRepository.save(updatedLocal);
         }
@@ -653,6 +665,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ...settingsRef.current,
         ...definedLocalValues,
       };
+      settingsRef.current = merged;
       setLocalSettings(merged);
       await settingsRepository.save(merged);
       markGuestDataModified();

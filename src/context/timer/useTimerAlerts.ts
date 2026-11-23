@@ -194,25 +194,8 @@ export const useTimerAlerts = ({
     ]
   );
 
-  const clearAlertClaim = useCallback((runId?: string | null) => {
-    if (!runId) return;
-    if (lastAlertRunIdRef.current === runId) {
-      lastAlertRunIdRef.current = null;
-      lastAlertWallMsRef.current = 0;
-    }
-    const existingClaim = readCrossTabClaim();
-    if (existingClaim && existingClaim.runId === runId && typeof localStorage !== 'undefined') {
-      try {
-        localStorage.removeItem(CROSS_TAB_ALERT_CLAIM_KEY);
-      } catch {
-        // Ignore storage errors
-      }
-    }
-  }, []);
-
   return {
     dispatchCompletionAlert,
-    clearAlertClaim,
     triggerCompletionConfetti,
   };
 };

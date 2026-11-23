@@ -105,7 +105,11 @@ export const CoffeeWorkspace: React.FC = () => {
   }, [cupsForDate, tags]);
 
   const handleAdd = useCallback(async () => {
-    await addCoffeeCup(selectedTagId, toDateKey(new Date()));
+    try {
+      await addCoffeeCup(selectedTagId, toDateKey(new Date()));
+    } catch (err) {
+      console.warn('Failed to add coffee cup:', err);
+    }
   }, [addCoffeeCup, selectedTagId]);
 
   // Find cups logged for today matching the currently selected tag (or untagged if selectedTagId is null)
@@ -121,7 +125,11 @@ export const CoffeeWorkspace: React.FC = () => {
     const targetCup = cupsOfSelectedTag[cupsOfSelectedTag.length - 1];
     if (!targetCup) return;
 
-    await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
+    try {
+      await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
+    } catch (err) {
+      console.warn('Failed to remove coffee cup:', err);
+    }
   }, [canRemove, cupsOfSelectedTag, removeCoffeeCup, todayKey]);
 
   // Keyboard shortcut listener (+ / = to add cup, - to remove cup)

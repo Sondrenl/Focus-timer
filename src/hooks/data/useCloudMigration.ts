@@ -109,10 +109,13 @@ async function clearLocalGuestRepositories(): Promise<void> {
     sessionRepository.clear(),
     coffeeRepository.clear(),
     tagRepository.resetToDefaults(),
+    profileRepository.resetToDefaults(),
     telemetryTracker.clearAll(),
   ]);
   clearGuestDataModifiedFlag();
 }
+
+const MAX_MIGRATION_RETRIES = 5;
 
 interface UseCloudMigrationParams {
   isEffectiveAuthenticated: boolean;
@@ -130,6 +133,7 @@ export function useCloudMigration({
   const isConvexAuthReady = isConvexAuthReadyParam ?? isEffectiveAuthenticated;
   const {
     isConvexConfigured,
+    isConvexConnected,
     convexUser,
     convexCoffee,
     convexSessions,
@@ -139,6 +143,8 @@ export function useCloudMigration({
   const convexUserId = convexUser?.id ?? null;
 
   const [syncedUserId, setSyncedUserId] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState<number>(0);
+  const retryCountRef = useRef<number>(0);
   const isReconcilingUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -221,11 +227,13 @@ export function useCloudMigration({
   useEffect(() => {
     if (!isEffectiveAuthenticated || !isConvexConfigured) {
       setSyncedUserId(null);
+      retryCountRef.current = 0;
       isReconcilingUserIdRef.current = null;
       return;
     }
     if (convexUserId && syncedUserId && syncedUserId !== convexUserId) {
       setSyncedUserId(null);
+      retryCountRef.current = 0;
       isReconcilingUserIdRef.current = null;
     }
   }, [isEffectiveAuthenticated, isConvexConfigured, convexUserId, syncedUserId]);
@@ -235,6 +243,7 @@ export function useCloudMigration({
       !isEffectiveAuthenticated ||
       !isConvexConfigured ||
       !isConvexAuthReady ||
+      isConvexConnected === false ||
       !convexUser ||
       !Array.isArray(convexSessions) ||
       !Array.isArray(convexCoffee)
@@ -249,6 +258,7 @@ export function useCloudMigration({
 
     isReconcilingUserIdRef.current = userId;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const runSyncGate = async () => {
       try {
@@ -256,6 +266,7 @@ export function useCloudMigration({
 
         if (owner === `user:${userId}`) {
           if (!cancelled) {
+            retryCountRef.current = 0;
             setSyncedUserId(userId);
           }
           return;
@@ -265,6 +276,7 @@ export function useCloudMigration({
           await clearLocalGuestRepositories();
           setLocalDataOwner(`user:${userId}`);
           if (!cancelled) {
+            retryCountRef.current = 0;
             setSyncedUserId(userId);
           }
           return;
@@ -301,6 +313,7 @@ export function useCloudMigration({
           await clearLocalGuestRepositories();
           setLocalDataOwner(`user:${userId}`);
           if (!cancelled) {
+            retryCountRef.current = 0;
             setSyncedUserId(userId);
           }
           return;
@@ -405,12 +418,20 @@ export function useCloudMigration({
         await clearLocalGuestRepositories();
         setLocalDataOwner(`user:${userId}`);
         if (!cancelled) {
+          retryCountRef.current = 0;
           setSyncedUserId(userId);
         }
       } catch (err) {
         console.warn('Cloud auto-merge sync gate failed (will retry):', err);
         if (isReconcilingUserIdRef.current === userId) {
           isReconcilingUserIdRef.current = null;
+        }
+        if (!cancelled && retryCountRef.current < MAX_MIGRATION_RETRIES) {
+          retryCountRef.current += 1;
+          const delayMs = Math.min(15_000, 3000 * retryCountRef.current);
+          retryTimer = setTimeout(() => {
+            if (!cancelled) setRetryTick((t) => t + 1);
+          }, delayMs);
         }
       }
     };
@@ -419,15 +440,18 @@ export function useCloudMigration({
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [
     isEffectiveAuthenticated,
     isConvexConfigured,
     isConvexAuthReady,
+    isConvexConnected,
     convexUser,
     convexSessions,
     convexCoffee,
     syncedUserId,
+    retryTick,
     convexMutations,
     syncBackupToConvexChunked,
     setActiveTagId,

@@ -58,6 +58,7 @@ export const MONTH_NAMES = [
  */
 export function formatFriendlyDate(dateStr: string | Date, includeYear = false): string {
   const d = parseDateInput(dateStr);
+  if (Number.isNaN(d.getTime())) return '';
   const day = d.getDate();
   const month = MONTH_NAMES[d.getMonth()].slice(0, 3);
   const weekday = WEEKDAY_NAMES[d.getDay()].slice(0, 3);

@@ -10,9 +10,18 @@ import {
   MAX_DAILY_GOAL_MINUTES,
 } from "./defaultData";
 
-function assertRange(val: number | undefined, min: number, max: number, label: string): void {
+function assertRange(
+  val: number | undefined,
+  min: number,
+  max: number,
+  label: string,
+  integerOnly = false
+): void {
   if (val !== undefined && (!Number.isFinite(val) || val < min || val > max)) {
     throw new Error(`${label} must be between ${min} and ${max}.`);
+  }
+  if (val !== undefined && integerOnly && !Number.isInteger(val)) {
+    throw new Error(`${label} must be an integer.`);
   }
 }
 
@@ -66,7 +75,7 @@ export const updateProfile = mutation({
       }
     }
     if (args.dailyGoalMinutes !== undefined) {
-      assertRange(args.dailyGoalMinutes, 1, MAX_DAILY_GOAL_MINUTES, "Daily goal minutes");
+      assertRange(args.dailyGoalMinutes, 1, MAX_DAILY_GOAL_MINUTES, "Daily goal minutes", true);
       if (args.dailyGoalMinutes !== user.dailyGoalMinutes) {
         updates.dailyGoalMinutes = args.dailyGoalMinutes;
       }
@@ -99,7 +108,7 @@ export const updateSettings = mutation({
     assertRange(args.workDurationMinutes, MIN_DURATION_MINUTES, MAX_WORK_DURATION_MINUTES, "workDurationMinutes");
     assertRange(args.shortBreakDurationMinutes, MIN_DURATION_MINUTES, MAX_SHORT_BREAK_MINUTES, "shortBreakDurationMinutes");
     assertRange(args.longBreakDurationMinutes, MIN_DURATION_MINUTES, MAX_LONG_BREAK_MINUTES, "longBreakDurationMinutes");
-    assertRange(args.longBreakInterval, 1, MAX_LONG_BREAK_INTERVAL, "longBreakInterval");
+    assertRange(args.longBreakInterval, 1, MAX_LONG_BREAK_INTERVAL, "longBreakInterval", true);
     assertRange(args.soundVolume, 0, 1, "soundVolume");
 
     const cleanUpdates = Object.fromEntries(

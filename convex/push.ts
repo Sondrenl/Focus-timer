@@ -416,7 +416,8 @@ export const scheduleTestPush = mutation({
       return { scheduled: false as const, reason: "no_subscriptions" as const };
     }
 
-    const clampedDelay = Math.max(0, Math.min(30_000, Math.round(args.delayMs ?? 5000)));
+    const rawDelay = args.delayMs !== undefined && Number.isFinite(args.delayMs) ? args.delayMs : 5000;
+    const clampedDelay = Math.max(0, Math.min(30_000, Math.round(rawDelay)));
     await ctx.db.patch(user._id, { lastTestPushAtMs: nowMs });
     await ctx.scheduler.runAfter(clampedDelay, internal.pushActions.sendTestPush, {
       userId: user._id,

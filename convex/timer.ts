@@ -373,6 +373,63 @@ export const onTimerCompleted = internalMutation({
 
     const user = await ctx.db.get(args.userId);
     const settings = user?.settings ?? DEFAULT_SETTINGS;
+
+    // Decision 5B: Record a server_scheduled telemetry fallback row so background/locked-screen
+    // completions are never missing from ML session_attempts (an open client tab upgrades it).
+    const existingAttempt = await ctx.db
+      .query("session_attempts")
+      .withIndex("by_user_attempt", (q) =>
+        q.eq("userId", args.userId).eq("attemptId", args.timerRunId)
+      )
+      .first();
+    if (!existingAttempt) {
+      const plannedSec = Math.max(1, Math.round(timer.totalSeconds));
+      const endedDate = new Date(completedAtMs);
+      await ctx.db.insert("session_attempts", {
+        userId: args.userId,
+        attemptId: args.timerRunId,
+        sessionType: timer.sessionType,
+        status: "completed",
+        wasStarted: true,
+        plannedDurationSeconds: plannedSec,
+        actualActiveSeconds: plannedSec,
+        remainingSecondsAtEnd: 0,
+        completionRatio: 1,
+        startedAt: new Date(completedAtMs - plannedSec * 1000).toISOString(),
+        endedAt: endedDate.toISOString(),
+        utcOffsetMinutes: 0,
+        localDate: endedDate.toISOString().slice(0, 10),
+        localHour: endedDate.getUTCHours(),
+        localMinuteOfDay: endedDate.getUTCHours() * 60 + endedDate.getUTCMinutes(),
+        localDayOfWeek: endedDate.getUTCDay(),
+        cycleIndex: Math.max(1, timer.currentCycle || 1),
+        longBreakInterval: settings.longBreakInterval,
+        autoStarted: (timer.serverAutoStartStreak ?? 0) > 0,
+        initialTagId: timer.tagId,
+        tagId: timer.tagId,
+        tagChangedMidRun: false,
+        pauseCount: 0,
+        totalPausedSeconds: 0,
+        pauseIntervals: [],
+        dailyGoalMinutes: user?.dailyGoalMinutes ?? 120,
+        settingsSnapshot: {
+          workDurationMinutes: settings.workDurationMinutes,
+          shortBreakDurationMinutes: settings.shortBreakDurationMinutes,
+          longBreakDurationMinutes: settings.longBreakDurationMinutes,
+          longBreakInterval: settings.longBreakInterval,
+          autoStartBreaks: settings.autoStartBreaks,
+          autoStartPomodoros: settings.autoStartPomodoros,
+        },
+        deviceClass: "desktop",
+        tabBackgroundedCount: 0,
+        completionLatencySeconds: timer.targetEndTime
+          ? Math.max(0, Math.round((nowMs - timer.targetEndTime) / 1000))
+          : 0,
+        source: "server_scheduled",
+        updatedAtMs: nowMs,
+      });
+    }
+
     const { nextType, nextCycle, nextDurationSec, shouldAutoStart } = computeServerNextInterval(
       timer.sessionType,
       timer.currentCycle,

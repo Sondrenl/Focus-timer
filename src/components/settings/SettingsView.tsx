@@ -136,6 +136,18 @@ export const SettingsView: React.FC = () => {
     }, 2000);
   };
 
+  const safeUpdateSettings = (updates: Parameters<typeof updateSettings>[0]) => {
+    void updateSettings(updates).catch((err) => {
+      console.warn('[SettingsView] Failed to save settings:', err);
+    });
+  };
+
+  const safeUpdateProfile = (updates: Parameters<typeof updateProfile>[0]) => {
+    void updateProfile(updates).catch((err) => {
+      console.warn('[SettingsView] Failed to save profile:', err);
+    });
+  };
+
   const handleDecimalDurationChange = (
     key: 'workDurationMinutes' | 'shortBreakDurationMinutes' | 'longBreakDurationMinutes',
     raw: string,
@@ -150,7 +162,7 @@ export const SettingsView: React.FC = () => {
     const parsed = parseFloat(cleaned);
     if (!Number.isNaN(parsed) && parsed > 0) {
       const clamped = Math.round(Math.min(maxVal, Math.max(0.01, parsed)) * 100) / 100;
-      updateSettings({ [key]: clamped });
+      safeUpdateSettings({ [key]: clamped });
       showSaved();
     }
   };
@@ -169,7 +181,7 @@ export const SettingsView: React.FC = () => {
         : Math.round(Math.min(maxVal, Math.max(0.01, parsed)) * 100) / 100;
     setter(String(validNum));
     if (settings[key] !== validNum) {
-      updateSettings({ [key]: validNum });
+      safeUpdateSettings({ [key]: validNum });
       showSaved();
     }
   };
@@ -183,7 +195,7 @@ export const SettingsView: React.FC = () => {
     const parsed = parseInt(cleaned, 10);
     if (!Number.isNaN(parsed) && parsed >= 1) {
       const clamped = Math.min(20, parsed);
-      updateSettings({ longBreakInterval: clamped });
+      safeUpdateSettings({ longBreakInterval: clamped });
       showSaved();
     }
   };
@@ -193,7 +205,7 @@ export const SettingsView: React.FC = () => {
     const validNum = Number.isNaN(parsed) || parsed < 1 ? settings.longBreakInterval || 4 : Math.min(20, parsed);
     setIntervalInput(String(validNum));
     if (settings.longBreakInterval !== validNum) {
-      updateSettings({ longBreakInterval: validNum });
+      safeUpdateSettings({ longBreakInterval: validNum });
       showSaved();
     }
   };
@@ -207,7 +219,7 @@ export const SettingsView: React.FC = () => {
     const parsed = parseInt(cleaned, 10);
     if (!Number.isNaN(parsed) && parsed >= 1) {
       const clamped = Math.min(1440, parsed);
-      updateProfile({ dailyGoalMinutes: clamped });
+      safeUpdateProfile({ dailyGoalMinutes: clamped });
       showSaved();
     }
   };
@@ -217,7 +229,7 @@ export const SettingsView: React.FC = () => {
     const validNum = Number.isNaN(parsed) || parsed < 1 ? profile.dailyGoalMinutes || 120 : Math.min(1440, parsed);
     setDailyGoalInput(String(validNum));
     if (profile.dailyGoalMinutes !== validNum) {
-      updateProfile({ dailyGoalMinutes: validNum });
+      safeUpdateProfile({ dailyGoalMinutes: validNum });
       showSaved();
     }
   };
@@ -228,8 +240,8 @@ export const SettingsView: React.FC = () => {
     setLongBreakInput(String(DEFAULT_SETTINGS.longBreakDurationMinutes));
     setIntervalInput(String(DEFAULT_SETTINGS.longBreakInterval));
     setDailyGoalInput('120');
-    updateSettings(DEFAULT_SETTINGS);
-    updateProfile({ dailyGoalMinutes: 120 });
+    safeUpdateSettings(DEFAULT_SETTINGS);
+    safeUpdateProfile({ dailyGoalMinutes: 120 });
     void notifications.unsubscribePush(
       convexSync.isConvexConfigured && isEffectiveAuthenticated
         ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
@@ -276,7 +288,7 @@ export const SettingsView: React.FC = () => {
 
       <AutomationSection
         settings={settings}
-        updateSettings={updateSettings}
+        updateSettings={safeUpdateSettings}
         onSaved={showSaved}
       />
 

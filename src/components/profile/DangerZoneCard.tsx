@@ -130,7 +130,10 @@ export const DangerZoneCard: React.FC<DangerZoneCardProps> = ({
       {/* Danger Zone Confirmation Modal */}
       <Modal
         isOpen={!!resetModalScope}
-        onClose={() => setResetModalScope(null)}
+        onClose={() => {
+          if (!isResetting) setResetModalScope(null);
+        }}
+        dismissible={!isResetting}
         title={resetModalScope === 'sessions-only' ? 'Clear Focus & Coffee History' : 'Reset All Data'}
       >
         {resetModalScope && (
@@ -170,13 +173,18 @@ export const DangerZoneCard: React.FC<DangerZoneCardProps> = ({
                   {isAuthenticated && <span>• All remote cloud records for your account</span>}
                 </div>
                 <p className="text-[11px] text-md-on-surface-variant italic">
-                  Tip: Use the "Export JSON Backup" button first if you may want to restore your data later.
+                  Tip: Use the "Export JSON Backup" button first if you want a personal copy of your history.
                 </p>
               </div>
             )}
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-md-outline-variant/20">
-              <Button variant="text" size="sm" onClick={() => setResetModalScope(null)}>
+              <Button
+                variant="text"
+                size="sm"
+                disabled={isResetting}
+                onClick={() => setResetModalScope(null)}
+              >
                 Cancel
               </Button>
               <Button

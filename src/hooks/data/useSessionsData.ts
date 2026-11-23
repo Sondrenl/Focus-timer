@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CompletedSession } from '../../types/session';
 import { sessionRepository } from '../../context/services';
 import { useAuthProfile } from '../../context/AuthProfileContext';
@@ -19,11 +19,21 @@ export function useSessionsData({
   const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
 
   const [guestSessions, setGuestSessions] = useState<CompletedSession[]>([]);
+  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
 
   // Initial load of guest sessions from localStorage
   useEffect(() => {
     sessionRepository.getAll().then(setGuestSessions);
   }, []);
+
+  // Clear in-memory guest sessions on sign-out so pre-sign-in data never reappears
+  useEffect(() => {
+    const wasAuth = wasAuthenticatedRef.current;
+    wasAuthenticatedRef.current = isEffectiveAuthenticated;
+    if (wasAuth && !isEffectiveAuthenticated) {
+      setGuestSessions([]);
+    }
+  }, [isEffectiveAuthenticated]);
 
   // When signed in, Convex query is the direct source of truth.
   const sessions = useMemo<CompletedSession[]>(() => {

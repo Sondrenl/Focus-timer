@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CoffeeCup } from '../../types/coffee';
 import { toDateKey } from '../../utils/dates';
 import { coffeeRepository } from '../../context/services';
@@ -20,11 +20,21 @@ export function useCoffeeData({
   const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
 
   const [guestCoffeeCups, setGuestCoffeeCups] = useState<CoffeeCup[]>([]);
+  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
 
   // Initial load of guest coffee cups from localStorage
   useEffect(() => {
     coffeeRepository.getAll().then(setGuestCoffeeCups);
   }, []);
+
+  // Clear in-memory guest coffee cups on sign-out so pre-sign-in data never reappears
+  useEffect(() => {
+    const wasAuth = wasAuthenticatedRef.current;
+    wasAuthenticatedRef.current = isEffectiveAuthenticated;
+    if (wasAuth && !isEffectiveAuthenticated) {
+      setGuestCoffeeCups([]);
+    }
+  }, [isEffectiveAuthenticated]);
 
   const coffeeCups = useMemo<CoffeeCup[]>(() => {
     if (isCloudMode) {

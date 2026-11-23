@@ -3,8 +3,6 @@ export const GUEST_DATA_MODIFIED_KEY = 'pomodor_guest_modified_v1';
 
 export type LocalDataOwner = 'guest' | `user:${string}`;
 
-const ownerListeners = new Set<() => void>();
-
 function getStorage(): Storage | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -12,23 +10,6 @@ function getStorage(): Storage | null {
   } catch {
     return null;
   }
-}
-
-function notifyOwnerListeners(): void {
-  ownerListeners.forEach((fn) => {
-    try {
-      fn();
-    } catch {
-      // Ignore listener errors
-    }
-  });
-}
-
-export function subscribeLocalDataOwnerChange(listener: () => void): () => void {
-  ownerListeners.add(listener);
-  return () => {
-    ownerListeners.delete(listener);
-  };
 }
 
 export function getLocalDataOwner(): LocalDataOwner | null {
@@ -59,7 +40,6 @@ export function setLocalDataOwner(owner: LocalDataOwner): void {
     if (owner !== 'guest') {
       storage.removeItem(GUEST_DATA_MODIFIED_KEY);
     }
-    notifyOwnerListeners();
   } catch {
     // Ignore storage errors
   }
@@ -73,7 +53,6 @@ export function markGuestDataModified(): void {
     if (!current || current === 'guest') {
       storage.setItem(LOCAL_DATA_OWNER_KEY, 'guest');
       storage.setItem(GUEST_DATA_MODIFIED_KEY, '1');
-      notifyOwnerListeners();
     }
   } catch {
     // Ignore storage errors
@@ -95,7 +74,6 @@ export function clearGuestDataModifiedFlag(): void {
   if (!storage) return;
   try {
     storage.removeItem(GUEST_DATA_MODIFIED_KEY);
-    notifyOwnerListeners();
   } catch {
     // Ignore storage errors
   }

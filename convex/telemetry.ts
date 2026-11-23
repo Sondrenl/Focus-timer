@@ -43,7 +43,8 @@ export const upsertAttempt = mutation({
     if (!parsed.ok) {
       throw new Error(parsed.error);
     }
-    const normalized = parsed.value;
+    // Public client upserts are always client-originated; only internal server mutations emit server_scheduled.
+    const normalized = { ...parsed.value, source: "client" as const };
 
     const existing = await ctx.db
       .query("session_attempts")
@@ -55,10 +56,21 @@ export const upsertAttempt = mutation({
     if (existing) {
       const upgradesStale =
         existing.status === "abandoned_stale" && normalized.status !== "abandoned_stale";
+      const sameTerminalStatus =
+        existing.status === normalized.status && existing.status !== "in_progress";
+      const incomingIsRicher =
+        (existing.source === "server_scheduled" && normalized.source === "client") ||
+        normalized.pauseCount > existing.pauseCount ||
+        normalized.pauseIntervals.length > existing.pauseIntervals.length ||
+        normalized.tabBackgroundedCount > existing.tabBackgroundedCount ||
+        (normalized.tagChangedMidRun && !existing.tagChangedMidRun) ||
+        (normalized.autoStarted && !existing.autoStarted);
+
       if (
         (existing.status === "completed" && normalized.status !== "completed") ||
         (existing.status !== "in_progress" && normalized.status === "abandoned_stale") ||
-        (!upgradesStale && normalized.updatedAtMs < existing.updatedAtMs)
+        (sameTerminalStatus && !incomingIsRicher) ||
+        (!upgradesStale && !sameTerminalStatus && normalized.updatedAtMs < existing.updatedAtMs)
       ) {
         return formatAttemptForClient(existing);
       }

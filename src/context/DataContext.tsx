@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { BackupData } from '../types/user';
@@ -9,6 +9,11 @@ import { useSessionsData } from '../hooks/data/useSessionsData';
 import { useCoffeeData } from '../hooks/data/useCoffeeData';
 import { useCloudMigration } from '../hooks/data/useCloudMigration';
 import { useBackupAndMigration } from '../hooks/data/useBackupAndMigration';
+
+export interface DataResetEvent {
+  id: number;
+  scope: 'sessions-only' | 'factory-reset';
+}
 
 export interface DataContextValue {
   tags: Tag[];
@@ -27,6 +32,7 @@ export interface DataContextValue {
   removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
   exportBackup: () => BackupData;
   resetAllData: (scope: 'sessions-only' | 'factory-reset') => Promise<void>;
+  resetEvent: DataResetEvent | null;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -43,6 +49,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   } = useAuthProfile();
 
   const setActiveTagIdRef = useRef<((id: string | null) => void) | null>(null);
+  const [resetEvent, setResetEvent] = useState<DataResetEvent | null>(null);
+  const handleDataReset = useCallback((scope: 'sessions-only' | 'factory-reset') => {
+    setResetEvent((prev) => ({ id: (prev?.id ?? 0) + 1, scope }));
+  }, []);
 
   const { isSyncGateActive } = useCloudMigration({
     isEffectiveAuthenticated,
@@ -111,6 +121,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSessions,
     coffeeCups,
     setCoffeeCups,
+    onDataReset: handleDataReset,
   });
 
   const value = useMemo<DataContextValue>(
@@ -131,6 +142,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       removeCoffeeCup,
       exportBackup,
       resetAllData,
+      resetEvent,
     }),
     [
       tags,
@@ -149,6 +161,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       removeCoffeeCup,
       exportBackup,
       resetAllData,
+      resetEvent,
     ]
   );
 

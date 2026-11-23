@@ -8,9 +8,11 @@ import React, {
   useMemo,
 } from 'react';
 import { SessionType, TimerStatus } from '../types/timer';
-import { UserSettings } from '../types/settings';
+import { UserSettings, DEFAULT_SETTINGS } from '../types/settings';
+import { DEFAULT_TAGS } from '../types/tag';
 import { useAuthProfile } from './AuthProfileContext';
 import { useData } from './DataContext';
+import { wakeLockService } from '../services/screen/WakeLockService';
 import { getDurationForType as getBaseDurationForType } from '../utils/timerTransitions';
 import {
   DEVICE_ID,
@@ -27,6 +29,7 @@ import {
 import { useTimerWorker } from './timer/useTimerWorker';
 import { useTimerNewDayReset } from './timer/useTimerNewDayReset';
 import { useTimerActions } from './timer/useTimerActions';
+import { telemetryTracker } from './services';
 
 export interface TimerContextValue {
   sessionType: SessionType;
@@ -55,7 +58,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     convexSync,
   } = useAuthProfile();
 
-  const { activeTagId, setActiveTagId, recordSession, sessions } = useData();
+  const { activeTagId, setActiveTagId, recordSession, sessions, resetEvent } = useData();
 
   const getDurationForType = useCallback(
     (type: SessionType): number => getBaseDurationForType(type, settings),
@@ -108,6 +111,9 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   isDevicePushRegisteredRef.current = convexSync.devicePushStatus?.registered;
 
   const serverClockOffsetMsRef = useRef<number>(0);
+  const wakeDeferredAtMsRef = useRef<number>(0);
+  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+  const lastHandledResetIdRef = useRef<number>(0);
   const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
 
   const refs = useMemo<TimerSharedRefs>(
@@ -295,20 +301,95 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     isConvexConfigured,
   ]);
 
+  // Reset timer state cleanly when signing out so cloud timer state never leaks into guest mode
+  useEffect(() => {
+    const wasAuth = wasAuthenticatedRef.current;
+    wasAuthenticatedRef.current = isEffectiveAuthenticated;
+    if (wasAuth && !isEffectiveAuthenticated) {
+      const defaultDuration = Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60));
+      serverClockOffsetMsRef.current = 0;
+      localUpdatedAtRef.current = 0;
+      lastLocalActionWallMsRef.current = 0;
+      wakeDeferredAtMsRef.current = 0;
+      prevActiveTagIdRef.current = DEFAULT_TAGS[0]?.id ?? null;
+      commitTimerSnapshot({
+        sessionType: 'WORK',
+        status: 'IDLE',
+        currentCycle: 1,
+        totalSeconds: defaultDuration,
+        remainingSeconds: defaultDuration,
+        targetEndTime: null,
+        timerRunId: null,
+      });
+      wakeLockService.release();
+      telemetryTracker.invalidateDraftCache();
+    }
+  }, [isEffectiveAuthenticated, commitTimerSnapshot]);
+
+  // Reset timer state and cancel any active Convex timer on Danger Zone resetAllData
+  useEffect(() => {
+    if (!resetEvent || resetEvent.id === lastHandledResetIdRef.current) return;
+    lastHandledResetIdRef.current = resetEvent.id;
+
+    const { scope } = resetEvent;
+    const defaultDuration =
+      scope === 'factory-reset'
+        ? Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60))
+        : getDurationForType('WORK');
+    const nowMs = getServerAlignedNowMs();
+    const resetTagId =
+      scope === 'factory-reset' ? (DEFAULT_TAGS[0]?.id ?? null) : activeTagIdRef.current;
+
+    localUpdatedAtRef.current = nowMs;
+    commitTimerSnapshot({
+      sessionType: 'WORK',
+      status: 'IDLE',
+      currentCycle: 1,
+      totalSeconds: defaultDuration,
+      remainingSeconds: defaultDuration,
+      targetEndTime: null,
+      timerRunId: null,
+    });
+    wakeLockService.release();
+    telemetryTracker.invalidateDraftCache();
+
+    if (scope === 'factory-reset') {
+      prevActiveTagIdRef.current = resetTagId;
+    }
+
+    publishLocalTimerState(
+      {
+        sessionType: 'WORK',
+        status: 'IDLE',
+        remainingSeconds: defaultDuration,
+        totalSeconds: defaultDuration,
+        targetEndTime: null,
+        currentCycle: 1,
+        activeTagId: resetTagId,
+        timerRunId: null,
+        updatedAtMs: nowMs,
+      },
+      true
+    );
+  }, [resetEvent, getDurationForType, getServerAlignedNowMs, commitTimerSnapshot, publishLocalTimerState]);
+
+  const shouldPersistLocallyRef = useRef<boolean>(!(isConvexConfigured && isEffectiveAuthenticated));
+  shouldPersistLocallyRef.current = !(isConvexConfigured && isEffectiveAuthenticated);
+
   // Persist timer state to localStorage strictly in guest mode (Convex is source of truth when signed in)
   const persistedRemainingSeconds = status === 'RUNNING' ? null : remainingSeconds;
   useEffect(() => {
     if (isConvexConfigured && isEffectiveAuthenticated) return;
     saveTimerState({
-      sessionType,
-      status,
-      currentCycle,
+      sessionType: sessionTypeRef.current,
+      status: statusRef.current,
+      currentCycle: currentCycleRef.current,
       remainingSeconds: remainingSecondsRef.current,
-      totalSeconds,
-      targetEndTime,
+      totalSeconds: totalSecondsRef.current,
+      targetEndTime: targetEndTimeRef.current,
       timerRunId: timerRunIdRef.current,
       updatedAtMs: localUpdatedAtRef.current,
-      activeTagId,
+      activeTagId: activeTagIdRef.current,
       deviceId: DEVICE_ID,
       lastActiveAtMs: Date.now(),
       wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
@@ -361,11 +442,23 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [status, settings.soundEnabled, sound]);
 
-  // When signed in and connected to Convex, defer completion to server-scheduled onTimerCompleted
-  const shouldDeferExpiredCompletion = useCallback(
-    () => isOnlineAndConnected(),
-    [isOnlineAndConnected]
-  );
+  // When signed in and connected to Convex, defer completion to server-scheduled onTimerCompleted.
+  // When signed in and temporarily reconnecting (e.g. wake from sleep), wait up to 2.5s before falling back.
+  const shouldDeferExpiredCompletion = useCallback(() => {
+    if (isOnlineAndConnected()) {
+      wakeDeferredAtMsRef.current = 0;
+      return true;
+    }
+    if (isConvexConfigured && isAuthenticatedRef.current && !isConvexConnectedRef.current) {
+      const nowWall = Date.now();
+      if (wakeDeferredAtMsRef.current === 0) {
+        wakeDeferredAtMsRef.current = nowWall;
+      }
+      return nowWall - wakeDeferredAtMsRef.current < 2500;
+    }
+    wakeDeferredAtMsRef.current = 0;
+    return false;
+  }, [isOnlineAndConnected, isConvexConfigured]);
 
   useTimerWorker({
     status,
@@ -385,6 +478,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     getServerAlignedNowMs,
     handleCompleteRef,
     shouldDeferExpiredCompletion,
+    shouldPersistLocallyRef,
     onStaleExpiration: handleStaleExpiration,
     setRemainingSeconds,
   });

@@ -369,7 +369,8 @@ export function computeActivityBars(
   const [eY, eM, eD] = sanitizedCustomRange.end.split('-').map(Number);
   const sUtc = Date.UTC(sY, sM - 1, sD);
   const eUtc = Date.UTC(eY, eM - 1, eD);
-  const dayDiff = Math.max(1, Math.round((eUtc - sUtc) / 86400000) + 1);
+  const rawDayDiff = Number.isFinite(eUtc - sUtc) ? Math.round((eUtc - sUtc) / 86400000) + 1 : 1;
+  const dayDiff = Math.max(1, Math.min(3660, rawDayDiff));
 
   const dayList = Array.from({ length: dayDiff }, (_, i) => {
     const d = new Date(startDate);
@@ -383,12 +384,13 @@ export function computeActivityBars(
       count: 0,
     };
   });
+  const dayMap = new Map(dayList.map((item) => [item.dateKey, item]));
 
   filteredSessions.forEach((s) => {
     const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
     if (!effectiveDate) return;
     const key = toDateKey(effectiveDate);
-    const target = dayList.find((d) => d.dateKey === key);
+    const target = dayMap.get(key);
     if (target) {
       target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
       target.count += 1;
