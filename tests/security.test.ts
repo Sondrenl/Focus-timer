@@ -312,10 +312,9 @@ describe("Security Hardening & Input Validation", () => {
       });
     });
     const asUserB = t.withIdentity({
-      tokenIdentifier: "test-provider|user-b",
-      subject: "user-b",
+      subject: `${userBId}|session-b`,
       email: "user-b@example.com",
-      emailVerified: true,
+      name: "User B",
     });
 
     const sharedEndpoint = "https://fcm.googleapis.com/fcm/send/shared-browser-endpoint";

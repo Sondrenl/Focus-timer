@@ -555,7 +555,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     );
   });
 
-  it("blocks phantom user auto-creation for deleted accounts and upgrades legacy bare sub tokenIdentifier", async () => {
+  it("blocks phantom user auto-creation for deleted accounts", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
@@ -568,39 +568,6 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
         completedAt: "2026-04-01T10:00:00.000Z",
       })
     ).rejects.toThrow("Unauthorized");
-
-    const legacyId = await t.run(async (ctx) =>
-      ctx.db.insert("users", {
-        tokenIdentifier: "legacy-sub-999",
-        email: "legacy@example.com",
-        displayName: "Legacy User",
-        avatarEmoji: "🦉",
-        dailyGoalMinutes: 120,
-        settings: {
-          workDurationMinutes: 25,
-          shortBreakDurationMinutes: 5,
-          longBreakDurationMinutes: 25,
-          longBreakInterval: 4,
-          autoStartBreaks: false,
-          autoStartPomodoros: false,
-          soundVolume: 0.7,
-          soundEnabled: true,
-          notificationsEnabled: false,
-          keepAwake: false,
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        tags: [],
-      })
-    );
-    expect(
-      await t.mutation(internal.users.getOrCreateUserForAuth, {
-        email: "legacy@example.com",
-        sub: "legacy-sub-999",
-        name: "Legacy User",
-      })
-    ).toBe(legacyId);
-    const upgraded = await t.run(async (ctx) => ctx.db.get(legacyId));
-    expect(upgraded?.tokenIdentifier).toBe("https://accounts.google.com|legacy-sub-999");
   });
 
   it("omits serverNowMs from getActive, resets streak via acknowledgeActive, rejects stale actions, and coerces invalid tagIds", async () => {

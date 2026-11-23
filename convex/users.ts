@@ -145,10 +145,6 @@ export const getOrCreateUserForAuth = internalMutation({
       (await ctx.db
         .query("users")
         .withIndex("by_token", (q) => q.eq("tokenIdentifier", canonicalTokenId))
-        .first()) ??
-      (await ctx.db
-        .query("users")
-        .withIndex("by_token", (q) => q.eq("tokenIdentifier", args.sub))
         .first());
 
     if (existing) {
