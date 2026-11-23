@@ -1,6 +1,5 @@
 import { SessionType, TimerStatus } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
-import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import {
   shouldResetForNewDay,
   getLogicalDayKey,
@@ -44,7 +43,6 @@ export interface SavedTimerState {
   updatedAtMs: number;
   activeTagId: string | null;
   deviceId: string;
-  tabId: string;
   lastActiveAtMs: number;
   wasHidden?: boolean;
 }
@@ -62,7 +60,6 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     updatedAtMs: 0,
     activeTagId: null,
     deviceId: DEVICE_ID,
-    tabId: TAB_ID,
     lastActiveAtMs: Date.now(),
     wasHidden: false,
   };

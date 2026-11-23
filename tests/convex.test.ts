@@ -1,15 +1,8 @@
 // @vitest-environment edge-runtime
-import { describe, it, expect, vi } from "vitest";
-vi.hoisted(() => {
-  if (typeof (globalThis as any).window === "undefined") (globalThis as any).window = {};
-  if (!(globalThis as any).window.location) (globalThis as any).window.location = { hostname: "localhost" };
-});
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { describe, it, expect } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-import { useCloudMigration } from "../src/hooks/data/useCloudMigration";
 
 const modules = import.meta.glob("../convex/**/*.*s");
 
@@ -166,63 +159,6 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(sessions[0].tagId).toBe("tag-study");
   });
 
-  it("filters out sample-* and seed-* sessions in migrations.importBackup so dev sample data never leaks to cloud", async () => {
-    const t = convexTest(schema, modules);
-    const { asUser } = await createAuthenticatedTestUser(t);
-
-    const result = await asUser.mutation(api.migrations.importBackup, {
-      mode: "merge",
-      tags: [{ id: "custom-1", name: "Coding", color: "#10B981", isArchived: false, createdAt: "2026-03-01T00:00:00.000Z" }],
-      sessions: [
-        {
-          id: "sample-0-1-999999",
-          tagId: "tag-study",
-          sessionType: "WORK",
-          durationSeconds: 1500,
-          completedAt: "2026-03-11T10:00:00.000Z",
-        },
-        {
-          id: "seed-12345",
-          tagId: "tag-work",
-          sessionType: "WORK",
-          durationSeconds: 1500,
-          completedAt: "2026-03-11T12:00:00.000Z",
-        },
-        {
-          id: "session-real-1",
-          tagId: "custom-1",
-          sessionType: "WORK",
-          durationSeconds: 1800,
-          completedAt: "2026-03-12T15:00:00.000Z",
-        },
-      ],
-      coffeeCups: [
-        {
-          id: "sample-coffee-1",
-          tagId: "tag-study",
-          date: "2026-03-11",
-          createdAt: "2026-03-11T08:00:00.000Z",
-        },
-        {
-          id: "coffee-real-1",
-          tagId: "custom-1",
-          date: "2026-03-12",
-          createdAt: "2026-03-12T09:00:00.000Z",
-        },
-      ],
-    });
-
-    expect(result.success).toBe(true);
-
-    const cloudSessions = await asUser.query(api.sessions.list, {});
-    expect(cloudSessions).toHaveLength(1);
-    expect(cloudSessions[0].completedAt).toBe("2026-03-12T15:00:00.000Z");
-
-    const cloudCoffee = await asUser.query(api.coffee.list, {});
-    expect(cloudCoffee).toHaveLength(1);
-    expect(cloudCoffee[0].date).toBe("2026-03-12");
-  });
-
   it("updates tagId when timer.pause is called with a new tag selection while PAUSED", async () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createAuthenticatedTestUser(t);
@@ -362,149 +298,18 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(active?.timerRunId).toBeNull();
   });
 
-  it("rejects run-less complete calls against tagged runs and allows Case 2 autoStartNext within 120s", async () => {
-    const t = convexTest(schema, modules);
-    const { userId, asUser } = await createAuthenticatedTestUser(t);
-
-    // Phone starts a tagged WORK run
-    await asUser.mutation(api.timer.start, {
-      sessionType: "WORK",
-      durationSeconds: 1500,
-      remainingSeconds: 1500,
-      totalSeconds: 1500,
-      currentCycle: 2,
-      tagId: "tag-study",
-      timerRunId: "run-work-2",
-    });
-
-    // Stale device without matching timerRunId cannot complete the active run
-    await asUser.mutation(api.timer.complete, {
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 2,
-      autoStartNext: false,
-    });
-
-    let active = await asUser.query(api.timer.getActive, {});
-    expect(active?.status).toBe("RUNNING");
-    expect(active?.timerRunId).toBe("run-work-2");
-
-    // Simulate an IDLE state WITHOUT lastCompletedTimerRunId (e.g., user manually skipped/reset)
-    const fortyFiveSecondsAgo = Date.now() - 45_000;
-    await t.run(async (ctx) => {
-      const existing = await ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          sessionType: "WORK",
-          status: "IDLE",
-          remainingSeconds: 1500,
-          totalSeconds: 1500,
-          targetEndTime: undefined,
-          currentCycle: 2,
-          timerRunId: undefined,
-          lastCompletedTimerRunId: undefined,
-          updatedAtMs: fortyFiveSecondsAgo,
-        });
-      }
-    });
-
-    // Ghost auto-start without matching lastCompletedTimerRunId MUST be rejected
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "break-run-1",
-      nextSessionType: "WORK",
-      nextDurationSeconds: 1500,
-      nextCurrentCycle: 2,
-      autoStartNext: true,
-      nextTimerRunId: "ghost-auto-work-run",
-    });
-
-    active = await asUser.query(api.timer.getActive, {});
-    expect(active?.status).toBe("IDLE");
-
-    // Now simulate server onTimerCompleted finishing SHORT_BREAK 45s ago (records lastCompletedTimerRunId)
-    await t.run(async (ctx) => {
-      const existing = await ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          lastCompletedTimerRunId: "break-run-1",
-        });
-      }
-    });
-
-    // Mismatched nextSessionType/cycle should NOT auto-start Case 2
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "break-run-1",
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 2,
-      autoStartNext: true,
-      nextTimerRunId: "wrong-next-run",
-    });
-
-    active = await asUser.query(api.timer.getActive, {});
-    expect(active?.status).toBe("IDLE");
-
-    // Case 2b refuses stale client autoStartNext when server settings have autoStartPomodoros OFF
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "break-run-1",
-      nextSessionType: "WORK",
-      nextDurationSeconds: 1500,
-      nextCurrentCycle: 2,
-      autoStartNext: true,
-      nextTimerRunId: "blocked-work-run-2",
-    });
-
-    active = await asUser.query(api.timer.getActive, {});
-    expect(active?.status).toBe("IDLE");
-
-    // Once server settings enable autoStartPomodoros, matching Case 2b transitions WORK cycle 2 to RUNNING
-    await asUser.mutation(api.users.updateSettings, {
-      autoStartPomodoros: true,
-    });
-
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "break-run-1",
-      nextSessionType: "WORK",
-      nextDurationSeconds: 1500,
-      nextCurrentCycle: 2,
-      autoStartNext: true,
-      nextTimerRunId: "auto-work-run-2",
-    });
-
-    active = await asUser.query(api.timer.getActive, {});
-    expect(active?.status).toBe("RUNNING");
-    expect(active?.sessionType).toBe("WORK");
-    expect(active?.currentCycle).toBe(2);
-    expect(active?.timerRunId).toBe("auto-work-run-2");
-  });
-
-  it("increments cycle on SHORT_BREAK server completion after client timer.complete", async () => {
+  it("increments cycle on SHORT_BREAK server completion", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     await asUser.mutation(api.timer.start, {
-      sessionType: "WORK",
-      durationSeconds: 1500,
+      sessionType: "SHORT_BREAK",
+      durationSeconds: 300,
       remainingSeconds: 1,
-      totalSeconds: 1500,
+      totalSeconds: 300,
       currentCycle: 1,
       tagId: "tag-study",
-      timerRunId: "run-attempt-reconcile",
-    });
-
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-attempt-reconcile",
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 1,
-      autoStartNext: true,
-      nextTimerRunId: "run-short-break-1",
+      timerRunId: "run-short-break-1",
     });
 
     await t.mutation(internal.timer.onTimerCompleted, {
@@ -657,11 +462,9 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     expect(activeAfter!.updatedAtMs).toBeGreaterThanOrEqual(started.updatedAtMs);
   });
 
-  it("handles importBackup tag collisions, replace dangling timer tagId cleanup, and chunked clearForReplaceBatch", async () => {
+  it("handles importBackup tag ID collisions by minting a fresh tag ID and remapping guest sessions", async () => {
     const t = convexTest(schema, modules);
-    await expect(t.mutation(api.migrations.clearForReplaceBatch, {})).rejects.toThrow(/Unauthorized/i);
-
-    const { userId, asUser } = await createAuthenticatedTestUser(t);
+    const { asUser } = await createAuthenticatedTestUser(t);
 
     // Colliding tag ID with different name mints a fresh tag ID and remaps sessions
     await asUser.mutation(api.migrations.importBackup, {
@@ -676,43 +479,5 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     const mergedSessions = await asUser.query(api.sessions.list, {});
     expect(mergedSessions?.[0].tagId).toBe(quantumTag?.id);
     expect(mergedSessions?.[0].timerRunId).toBe("run-u-1");
-
-    // Chunked replace wipes >500 docs via clearForReplaceBatch and clears dangling active_timers.tagId
-    await asUser.mutation(api.timer.start, { sessionType: "WORK", durationSeconds: 1500, currentCycle: 1, tagId: "tag-study", timerRunId: "run-rep-1" });
-    await t.run(async (ctx) => {
-      const baseMs = Date.parse("2026-01-01T00:00:00.000Z");
-      for (let i = 0; i < 520; i++) {
-        await ctx.db.insert("sessions", { userId, tagId: "tag-study", sessionType: "WORK", durationSeconds: 1500, completedAt: new Date(baseMs + i * 60_000).toISOString() });
-      }
-    });
-
-    const clearBatchSpy = vi.fn(async () => asUser.mutation(api.migrations.clearForReplaceBatch, {}));
-    const importBackupSpy = vi.fn(async (args: any) => asUser.mutation(api.migrations.importBackup, args));
-    let syncChunked!: ReturnType<typeof useCloudMigration>["syncBackupToConvexChunked"];
-    function Harness() {
-      syncChunked = useCloudMigration({
-        isEffectiveAuthenticated: true,
-        convexSync: {
-          isConvexConfigured: true,
-          convexUser: undefined,
-          convexCoffee: undefined,
-          convexSessions: undefined,
-          mutations: { clearForReplaceBatch: clearBatchSpy, importBackup: importBackupSpy } as any,
-        } as any,
-      }).syncBackupToConvexChunked;
-      return null;
-    }
-    renderToStaticMarkup(React.createElement(Harness));
-
-    await syncChunked(
-      "replace",
-      [{ id: "tag-fresh", name: "Fresh Focus", color: "#10B981", isArchived: false }],
-      [{ id: "new-s-1", tagId: "tag-fresh", sessionType: "WORK", durationSeconds: 1800, completedAt: "2026-04-01T10:00:00.000Z" }],
-      []
-    );
-    expect(clearBatchSpy).toHaveBeenCalledTimes(2);
-    expect(importBackupSpy.mock.calls[0][0].skipReplaceClear).toBe(true);
-    expect(await asUser.query(api.sessions.list, { limit: 5000 })).toHaveLength(1);
-    expect((await asUser.query(api.timer.getActive, {}))?.tagId).toBeUndefined();
   });
 });

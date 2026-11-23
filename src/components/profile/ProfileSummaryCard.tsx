@@ -9,8 +9,6 @@ import { CompletedSession } from '../../types/session';
 import { Tag } from '../../types/tag';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { toDateKey } from '../../utils/dates';
-import { isProduction } from '../../utils/environment';
-import { isSampleSessionId } from '../../services/storage/guestRepositories';
 import { useTodayKey } from '../../hooks/useTodayKey';
 import { getEffectiveSessionDate } from '../../utils/stats/focusStats';
 
@@ -95,10 +93,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
     setIsEditingProfile(false);
   };
 
-  const shouldExcludeSample = isProduction() || isAuthenticated;
-  const workSessions = sessions.filter(
-    (s) => s.sessionType === 'WORK' && (!shouldExcludeSample || !isSampleSessionId(s.id))
-  );
+  const workSessions = sessions.filter((s) => s.sessionType === 'WORK');
 
   // Total Focus Time in seconds (Work sessions only)
   const totalFocusSeconds = workSessions.reduce(

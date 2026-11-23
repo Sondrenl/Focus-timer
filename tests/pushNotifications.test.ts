@@ -398,12 +398,9 @@ describe("Web Push Backend & Declarative Push", () => {
       });
     });
 
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-break-1",
-      nextSessionType: "WORK",
-      nextDurationSeconds: 1500,
-      nextCurrentCycle: 2,
-      autoStartNext: false,
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-break-1",
     });
 
     const activeAfter = await asUser.query(api.timer.getActive, {});
@@ -423,7 +420,7 @@ describe("Web Push Backend & Declarative Push", () => {
     ).toBe(true);
   });
 
-  it("does not prematurely complete a running timer or double-schedule when onTimerCompleted already transitioned to IDLE", async () => {
+  it("does not double-schedule push when onTimerCompleted fires twice for the same timerRunId", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createTestUser(t);
     await asUser.mutation(api.push.register, {
@@ -433,7 +430,6 @@ describe("Web Push Backend & Declarative Push", () => {
       isMobile: true,
     });
 
-    // 1. Timer still has 60s left -> premature complete should be ignored
     const now = Date.now();
     await t.run(async (ctx) => {
       await ctx.db.insert("active_timers", {
@@ -442,37 +438,22 @@ describe("Web Push Backend & Declarative Push", () => {
         status: "RUNNING",
         remainingSeconds: 60,
         totalSeconds: 300,
-        targetEndTime: now + 60_000,
+        targetEndTime: now - 500,
         currentCycle: 1,
-        timerRunId: "run-break-early",
+        timerRunId: "run-break-once",
         updatedAtMs: now,
       });
     });
 
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-break-early",
-      nextSessionType: "WORK",
-      nextDurationSeconds: 1500,
-      nextCurrentCycle: 2,
-      autoStartNext: false,
-    });
-
-    const stillRunning = await asUser.query(api.timer.getActive, {});
-    expect(stillRunning?.status).toBe("RUNNING");
-    expect(stillRunning?.sessionType).toBe("SHORT_BREAK");
-
-    // 2. If server onTimerCompleted already transitioned to IDLE, calling complete afterwards is a safe no-op
     await t.mutation(internal.timer.onTimerCompleted, {
       userId,
-      timerRunId: "run-break-early",
+      timerRunId: "run-break-once",
     });
 
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-break-early",
-      nextSessionType: "WORK",
-      nextDurationSeconds: 1500,
-      nextCurrentCycle: 2,
-      autoStartNext: false,
+    // Second invocation for same timerRunId after transition to IDLE is a safe no-op
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-break-once",
     });
 
     const scheduledAfter = await t.run(async (ctx) => {
@@ -610,39 +591,14 @@ describe("Web Push Backend & Declarative Push", () => {
     await t.run(async (ctx) => {
       await ctx.db.insert("active_timers", {
         userId,
-        sessionType: "WORK",
-        status: "RUNNING",
-        remainingSeconds: 1500,
-        totalSeconds: 1500,
-        targetEndTime: now - 500,
-        currentCycle: 1,
-        timerRunId: "run-no-sub-client",
-        updatedAtMs: now - 1_500_500,
-      });
-    });
-
-    await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-no-sub-client",
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 1,
-      autoStartNext: false,
-    });
-
-    await t.run(async (ctx) => {
-      const existing = await ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first();
-      await ctx.db.patch(existing!._id, {
         sessionType: "SHORT_BREAK",
         status: "RUNNING",
         remainingSeconds: 300,
         totalSeconds: 300,
-        targetEndTime: Date.now() - 500,
+        targetEndTime: now - 500,
         currentCycle: 1,
         timerRunId: "run-no-sub-server",
-        updatedAtMs: Date.now() - 300_500,
+        updatedAtMs: now - 300_500,
       });
     });
 

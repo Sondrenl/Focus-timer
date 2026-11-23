@@ -3,13 +3,6 @@ import { Tag, CreateTagInput, UpdateTagInput, DEFAULT_TAGS } from '../../types/t
 import { CompletedSession } from '../../types/session';
 import { CoffeeCup } from '../../types/coffee';
 import {
-  broadcastTags,
-  subscribeAuthEvent,
-  subscribeTags,
-  broadcastCoffeeCups,
-  subscribeReset,
-} from '../../services/timer/TimerBroadcast';
-import {
   tagRepository,
   sessionRepository,
   coffeeRepository,
@@ -87,35 +80,6 @@ export function useTagsData({
     });
   }, [ensureValidActiveTag]);
 
-  // Multi-tab BroadcastChannel sync for guest mode and resets
-  useEffect(() => {
-    const unsubTags = subscribeTags((incomingTags) => {
-      setGuestTags(incomingTags);
-      ensureValidActiveTag(incomingTags);
-      void sessionRepository.getAll().then(setSessions);
-    });
-
-    const unsubReset = subscribeReset((scope) => {
-      if (scope === 'factory-reset') {
-        setGuestTags(DEFAULT_TAGS);
-        setActiveTagId(DEFAULT_TAGS[0]?.id ?? null);
-      }
-    });
-
-    const unsubAuth = subscribeAuthEvent((payload) => {
-      if (payload.action === 'logout') {
-        setGuestTags(DEFAULT_TAGS);
-        setActiveTagId(DEFAULT_TAGS[0]?.id ?? null);
-      }
-    });
-
-    return () => {
-      unsubTags();
-      unsubReset();
-      unsubAuth();
-    };
-  }, [ensureValidActiveTag, setActiveTagId, setSessions]);
-
   // When signed in, Convex user.tags is the direct source of truth.
   const tags = useMemo<Tag[]>(() => {
     if (isCloudMode) {
@@ -155,7 +119,6 @@ export function useTagsData({
       const updated = await tagRepository.getAll();
       setGuestTags(updated);
       setActiveTagId(created.id);
-      broadcastTags(updated);
       return created;
     },
     [isCloudMode, convexMutations, setActiveTagId]
@@ -178,7 +141,6 @@ export function useTagsData({
       const updated = await tagRepository.getAll();
       setGuestTags(updated);
       ensureValidActiveTag(updated);
-      broadcastTags(updated);
       return result;
     },
     [isCloudMode, convexMutations, ensureValidActiveTag]
@@ -203,7 +165,6 @@ export function useTagsData({
         const nextActive = updated.find((t) => !t.isArchived);
         setActiveTagId(nextActive?.id ?? null);
       }
-      broadcastTags(updated);
       return result;
     },
     [isCloudMode, tags, setActiveTagId, convexMutations]
@@ -223,7 +184,6 @@ export function useTagsData({
       if (!activeTagIdRef.current) {
         ensureValidActiveTag(updated);
       }
-      broadcastTags(updated);
       return result;
     },
     [isCloudMode, convexMutations, ensureValidActiveTag]
@@ -256,7 +216,6 @@ export function useTagsData({
       );
       await coffeeRepository.saveAll(updatedCoffee);
       setCoffeeCups(updatedCoffee);
-      broadcastCoffeeCups(updatedCoffee);
 
       const updatedTags = await tagRepository.getAll();
       setGuestTags(updatedTags);
@@ -264,7 +223,6 @@ export function useTagsData({
         const nextActive = updatedTags.find((t) => !t.isArchived);
         setActiveTagId(nextActive?.id ?? null);
       }
-      broadcastTags(updatedTags);
       return success;
     },
     [isCloudMode, tags, setActiveTagId, convexMutations, setSessions, setCoffeeCups]

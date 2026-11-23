@@ -22,15 +22,6 @@ import {
   NotificationService,
   PushSubscriptionStatus,
 } from '../services/notification/NotificationService';
-import {
-  broadcastAuthEvent,
-  broadcastProfile,
-  broadcastSettings,
-  subscribeAuthEvent,
-  subscribeProfile,
-  subscribeReset,
-  subscribeSettings,
-} from '../services/timer/TimerBroadcast';
 import { useConvexSync } from '../services/convex/useConvexSync';
 import { usePushSubscriptionSync } from '../hooks/usePushSubscriptionSync';
 import { DEVICE_ID, TIMER_STORAGE_KEY } from './timer/timerPersistence';
@@ -38,12 +29,9 @@ import { sanitizeProfile } from '../services/storage/guestRepositories';
 import { LAST_DAY_RESET_STORAGE_KEY } from '../utils/newDayCheck';
 import {
   clearGuestDataModifiedFlag,
-  getLocalDataOwner,
   getLocalDataOwnerUserId,
-  hasGuestDataBeenModified,
   markGuestDataModified,
   setLocalDataOwner,
-  subscribeLocalDataOwnerChange,
 } from '../services/sync/offlineOutbox';
 import {
   authService,
@@ -161,7 +149,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     authService.getInitialAuthState(convexUrl)
   );
   const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
-  const [, setOwnerVersion] = useState<number>(0);
 
   const authEpochRef = useRef<number>(0);
   const isLoggingOutRef = useRef<boolean>(false);
@@ -193,25 +180,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const isConvexConnectedRef = useRef(isConvexConnected);
   isConvexConnectedRef.current = isConvexConnected;
 
-  useEffect(() => {
-    return subscribeLocalDataOwnerChange(() => {
-      setOwnerVersion((v) => v + 1);
-    });
-  }, []);
-
-  const isWaitingOnGuestReconciliation = Boolean(
-    convexUser &&
-      getLocalDataOwner() !== `user:${convexUser.id}` &&
-      (getLocalDataOwner() === 'guest' || getLocalDataOwner() === null) &&
-      hasGuestDataBeenModified()
-  );
-
   const shouldUseCloudState =
     isConvexConfigured &&
     isConvexAuthReady &&
     Boolean(convexUser) &&
-    !isLoggingOut &&
-    !isWaitingOnGuestReconciliation;
+    !isLoggingOut;
 
   const settings = useMemo<UserSettings>(() => {
     if (shouldUseCloudState && convexUser?.settings) {
@@ -294,8 +267,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     isLoggingOutRef.current = true;
     setIsLoggingOut(true);
     authEpochRef.current += 1;
-
-    broadcastAuthEvent({ action: 'logout' });
 
     try {
       const canCallRemote =
@@ -406,7 +377,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
         };
         await profileRepository.save(updatedProfile);
         setLocalProfile(updatedProfile);
-        broadcastAuthEvent({ action: 'login' });
       } catch (err) {
         const message = (err as Error).message || 'Google sign-in failed';
         setAuth((prev) => ({
@@ -506,41 +476,8 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     resetLocalAuthUi,
   ]);
 
-  // Multi-tab sync for logout, per-device notificationsEnabled, and guest settings/profile
+  // Storage listener for auth/settings/profile changes
   useEffect(() => {
-    const unsubAuth = subscribeAuthEvent((payload, { isRemoteTab }) => {
-      if (payload.action === 'logout' && isRemoteTab) {
-        isLoggingOutRef.current = true;
-        authEpochRef.current += 1;
-        wasConvexAuthenticatedRef.current = false;
-        void notificationService.unsubscribePush();
-        try {
-          convexClient.clearAuth();
-        } catch {
-          // Ignore
-        }
-        void resetLocalAuthUi({ isTokenExpired: false, wipeCaches: false }).finally(() => {
-          settingsRepository.get().then((s) => setLocalSettings(s));
-          isLoggingOutRef.current = false;
-        });
-      }
-    });
-
-    const unsubSettings = subscribeSettings((incoming) => {
-      setLocalSettings((prev) => ({ ...prev, ...incoming }));
-    });
-
-    const unsubProfile = subscribeProfile((incoming) => {
-      setLocalProfile((prev) => sanitizeProfile({ ...prev, ...incoming }));
-    });
-
-    const unsubReset = subscribeReset((scope) => {
-      if (scope === 'factory-reset') {
-        settingsRepository.get().then((s) => setLocalSettings(s));
-        profileRepository.get().then((p) => setLocalProfile(p));
-      }
-    });
-
     const handleStorage = (e: StorageEvent) => {
       if (e.key === AUTH_USER_KEY && e.newValue === null && !isLoggingOutRef.current) {
         if (!authService.hasConvexAuthSession(convexUrl)) {
@@ -559,10 +496,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     return () => {
-      unsubAuth();
-      unsubSettings();
-      unsubProfile();
-      unsubReset();
       if (typeof window !== 'undefined') {
         window.removeEventListener('storage', handleStorage);
       }
@@ -670,7 +603,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const merged = sanitizeProfile({ ...latestStored, ...profileRef.current, ...newProfile });
       setLocalProfile(merged);
       await profileRepository.save(merged);
-      broadcastProfile(patchPayload);
       markGuestDataModified();
     },
     [isConvexConfigured, isEffectiveAuthenticated, isConvexAuthReady, convexMutations]
@@ -684,7 +616,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       avatarEmoji: defaultProfile.avatarEmoji,
       dailyGoalMinutes: defaultProfile.dailyGoalMinutes,
     };
-    broadcastProfile(patch);
 
     if (isConvexConfigured && isEffectiveAuthenticated && isConvexAuthReady) {
       await convexMutations.updateProfile(patch);
@@ -706,7 +637,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           };
           setLocalSettings(updatedLocal);
           await settingsRepository.save(updatedLocal);
-          broadcastSettings({ notificationsEnabled: newValues.notificationsEnabled });
         }
 
         const cleanConvexPatch = Object.fromEntries(
@@ -725,7 +655,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       };
       setLocalSettings(merged);
       await settingsRepository.save(merged);
-      broadcastSettings(definedLocalValues);
       markGuestDataModified();
     },
     [isConvexConfigured, isEffectiveAuthenticated, isConvexAuthReady, convexMutations]
@@ -734,7 +663,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const resetSettingsToDefaults = useCallback(async (): Promise<UserSettings> => {
     const defaultSettings = await settingsRepository.resetToDefaults();
     setLocalSettings(defaultSettings);
-    broadcastSettings(defaultSettings);
 
     const canCallRemote =
       isConvexConfigured &&
@@ -821,7 +749,11 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ]
   );
 
-  return <AuthProfileContext.Provider value={value}>{children}</AuthProfileContext.Provider>;
+  return (
+    <AuthProfileContext.Provider value={value}>
+      {children}
+    </AuthProfileContext.Provider>
+  );
 };
 
 export const useAuthProfile = (): AuthProfileContextValue => {

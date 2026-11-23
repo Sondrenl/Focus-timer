@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SessionType, TimerStatus, RemoteTimerState } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
-import { broadcastTimerState } from '../../services/timer/TimerBroadcast';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { useConvexTimer } from '../../services/convex/useConvexTimer';
 import { getLogicalDayKey, setLastResetDayKey, INACTIVITY_THRESHOLD_MS } from '../../utils/newDayCheck';
@@ -61,11 +60,8 @@ interface UseTimerCloudSyncParams {
   refs: TimerSharedRefs;
   getServerAlignedNowMs: () => number;
   commitTimerSnapshot: (snapshot: TimerSnapshot) => void;
-  setActiveTagId?: (id: string | null) => void;
   getDurationForType: (type: SessionType) => number;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
-  clearAlertClaim?: (runId?: string | null) => void;
-  recordSessionFallback?: (session: CompletedSessionFallback) => Promise<unknown>;
   triggerCompletionConfetti?: () => void;
 }
 
@@ -107,11 +103,8 @@ export const useTimerCloudSync = ({
   refs,
   getServerAlignedNowMs,
   commitTimerSnapshot,
-  setActiveTagId,
   getDurationForType,
   dispatchCompletionAlert,
-  clearAlertClaim,
-  recordSessionFallback,
   triggerCompletionConfetti,
 }: UseTimerCloudSyncParams) => {
   const isConvexQueryAuthReady = !isAuthenticated || Boolean(isConvexAuthReady);
@@ -200,8 +193,6 @@ export const useTimerCloudSync = ({
       const dispatchActionWallMs = refs.lastLocalActionWallMsRef.current;
 
       if (!isOnlineAndConnected()) {
-        // Guest mode or temporarily offline: sync sibling tabs via BroadcastChannel
-        broadcastTimerState(payload);
         return;
       }
 
@@ -253,22 +244,11 @@ export const useTimerCloudSync = ({
       refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, nowAligned);
       refs.lastLocalActionWallMsRef.current = Date.now();
 
-      const currentStatus = refs.statusRef.current;
       if (!isOnlineAndConnected()) {
-        broadcastTimerState({
-          sessionType: refs.sessionTypeRef.current,
-          status: currentStatus,
-          remainingSeconds: refs.remainingSecondsRef.current,
-          totalSeconds: refs.totalSecondsRef.current,
-          targetEndTime: refs.targetEndTimeRef.current,
-          currentCycle: refs.currentCycleRef.current,
-          activeTagId: nextTagId,
-          timerRunId: refs.timerRunIdRef.current,
-          updatedAtMs: nowAligned,
-        });
         return;
       }
 
+      const currentStatus = refs.statusRef.current;
       if (currentStatus !== 'COMPLETED') {
         convexTimerMutationsRef.current
           .updateTag({
@@ -294,107 +274,6 @@ export const useTimerCloudSync = ({
       }
     },
     [isOnlineAndConnected, getServerAlignedNowMs, refs, recordServerClockSample]
-  );
-
-  const publishTimerCompletion = useCallback(
-    (
-      payload: RemoteTimerState,
-      completedTimerRunId?: string | null,
-      completedSessionFallback?: CompletedSessionFallback
-    ) => {
-      refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, payload.updatedAtMs);
-      refs.lastLocalActionWallMsRef.current = Date.now();
-      const dispatchActionWallMs = refs.lastLocalActionWallMsRef.current;
-
-      if (!isOnlineAndConnected()) {
-        broadcastTimerState(payload);
-        if (completedSessionFallback && recordSessionFallback) {
-          void recordSessionFallback(completedSessionFallback);
-        }
-        return;
-      }
-
-      convexTimerMutationsRef.current
-        .completeTimer({
-          completedTimerRunId: completedTimerRunId || undefined,
-          nextSessionType: payload.sessionType,
-          nextDurationSeconds: Math.max(1, Math.round(payload.totalSeconds)),
-          nextCurrentCycle: Math.max(1, Math.round(payload.currentCycle)),
-          autoStartNext: payload.status === 'RUNNING',
-          nextTimerRunId: payload.timerRunId || undefined,
-          tagId: payload.activeTagId || undefined,
-        })
-        .then((res: any) => {
-          if (res === null) {
-            if (completedSessionFallback && recordSessionFallback) {
-              void recordSessionFallback(completedSessionFallback);
-            }
-            if (payload.status === 'RUNNING') {
-              publishLocalTimerState(payload, false);
-            }
-            return;
-          }
-
-          if (res && typeof res === 'object') {
-            recordServerClockSample(res.serverNowMs);
-
-            if (typeof res.updatedAtMs === 'number') {
-              if (res.rejectedReason === 'too_early') {
-                clearAlertClaim?.(completedTimerRunId);
-                if (payload.status === 'RUNNING' && payload.timerRunId) {
-                  void telemetryTracker.discardInProgressAttempt(payload.timerRunId);
-                }
-                if (refs.lastLocalActionWallMsRef.current === dispatchActionWallMs) {
-                  refs.localUpdatedAtRef.current = res.updatedAtMs;
-                  applyRemoteStateRef.current(toRemoteTimerState(res), true);
-                }
-                return;
-              }
-
-              const diverged =
-                res.status !== payload.status ||
-                res.sessionType !== payload.sessionType ||
-                res.currentCycle !== payload.currentCycle ||
-                (res.timerRunId ?? null) !== (payload.timerRunId ?? null);
-              if (diverged) {
-                if (
-                  payload.status === 'RUNNING' &&
-                  payload.timerRunId &&
-                  res.timerRunId !== payload.timerRunId
-                ) {
-                  void telemetryTracker.discardInProgressAttempt(payload.timerRunId);
-                }
-                if (refs.lastLocalActionWallMsRef.current === dispatchActionWallMs) {
-                  refs.localUpdatedAtRef.current = res.updatedAtMs;
-                  applyRemoteStateRef.current(toRemoteTimerState(res), true);
-                }
-              } else {
-                refs.localUpdatedAtRef.current = Math.max(
-                  refs.localUpdatedAtRef.current,
-                  res.updatedAtMs
-                );
-              }
-            }
-          }
-        })
-        .catch((err) => {
-          console.warn('Convex completeTimer failed, falling back to local session recording:', err);
-          if (refs.lastLocalActionWallMsRef.current === dispatchActionWallMs) {
-            refs.lastLocalActionWallMsRef.current = 0;
-          }
-          if (completedSessionFallback && recordSessionFallback) {
-            void recordSessionFallback(completedSessionFallback);
-          }
-        });
-    },
-    [
-      isOnlineAndConnected,
-      refs,
-      recordServerClockSample,
-      clearAlertClaim,
-      recordSessionFallback,
-      publishLocalTimerState,
-    ]
   );
 
   useEffect(() => {
@@ -584,44 +463,28 @@ export const useTimerCloudSync = ({
         const diffSec =
           remote.totalSeconds > 0 ? Math.min(remote.totalSeconds, rawDiffSec) : rawDiffSec;
 
-        if (diffSec > 0) {
-          if (refs.settingsRef.current.keepAwake !== false) {
-            void wakeLockService.acquire();
-          }
-          commitTimerSnapshot({
-            sessionType: remote.sessionType,
-            status: 'RUNNING',
-            currentCycle: remote.currentCycle || 1,
-            totalSeconds: remote.totalSeconds,
-            remainingSeconds: diffSec,
-            targetEndTime: remote.targetEndTime,
-            timerRunId: remote.timerRunId || null,
-            activeTagId: remote.activeTagId,
-          });
-          refs.lastTickWallMsRef.current = Date.now();
-        } else {
-          if (diffMs < -900000) {
-            const isFromPreviousDay =
-              getLogicalDayKey(remote.targetEndTime) !== getLogicalDayKey(now) &&
-              now - remote.targetEndTime >= INACTIVITY_THRESHOLD_MS;
-            resetStaleRemoteTimer(isFromPreviousDay, 0, remote.targetEndTime, false);
-            return;
-          }
-
-          refs.sessionTypeRef.current = remote.sessionType;
-          refs.currentCycleRef.current = remote.currentCycle || 1;
-          refs.totalSecondsRef.current = remote.totalSeconds;
-          refs.remainingSecondsRef.current = 0;
-          refs.targetEndTimeRef.current = remote.targetEndTime;
-          refs.timerRunIdRef.current = remote.timerRunId || null;
-          if (remote.activeTagId !== undefined && setActiveTagId) {
-            refs.activeTagIdRef.current = remote.activeTagId;
-            refs.prevActiveTagIdRef.current = remote.activeTagId;
-            setActiveTagId(remote.activeTagId);
-          }
-
-          refs.handleCompleteRef.current(diffMs < -60000);
+        if (diffMs < -900000) {
+          const isFromPreviousDay =
+            getLogicalDayKey(remote.targetEndTime) !== getLogicalDayKey(now) &&
+            now - remote.targetEndTime >= INACTIVITY_THRESHOLD_MS;
+          resetStaleRemoteTimer(isFromPreviousDay, 0, remote.targetEndTime, false);
+          return;
         }
+
+        if (refs.settingsRef.current.keepAwake !== false) {
+          void wakeLockService.acquire();
+        }
+        commitTimerSnapshot({
+          sessionType: remote.sessionType,
+          status: 'RUNNING',
+          currentCycle: remote.currentCycle || 1,
+          totalSeconds: remote.totalSeconds,
+          remainingSeconds: diffSec,
+          targetEndTime: remote.targetEndTime,
+          timerRunId: remote.timerRunId || null,
+          activeTagId: remote.activeTagId,
+        });
+        refs.lastTickWallMsRef.current = Date.now();
       } else if (remote.status === 'PAUSED') {
         const PAUSED_TTL_MS = 24 * 60 * 60 * 1000;
         const isPausedFromPreviousDay =
@@ -712,7 +575,6 @@ export const useTimerCloudSync = ({
       isOnlineAndConnected,
       getServerAlignedNowMs,
       commitTimerSnapshot,
-      setActiveTagId,
       getDurationForType,
       dispatchCompletionAlert,
       triggerCompletionConfetti,
@@ -870,9 +732,9 @@ export const useTimerCloudSync = ({
   }, [isConvexConfigured, refs, getServerAlignedNowMs, acknowledgeRemoteRunIfActive]);
 
   return {
+    isOnlineAndConnected,
     publishLocalTimerState,
     publishTagUpdate,
-    publishTimerCompletion,
     applyRemoteState,
     isInitialMountDoneRef,
     hasResolvedRemoteTimer,

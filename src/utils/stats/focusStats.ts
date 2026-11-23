@@ -1,5 +1,4 @@
 import { Tag } from '../../types/tag';
-import { isSampleSessionId } from '../../services/storage/guestRepositories';
 import { sanitizeHexColor } from '../colors';
 import { toDateKey, WEEKDAY_NAMES, MONTH_NAMES } from '../dates';
 import { formatDurationHoursMins } from '../formatters';
@@ -39,19 +38,14 @@ export function getEffectiveSessionDate(
 }
 
 /**
- * Filters all sessions and WORK sessions within the given period bounds,
- * excluding dev sample/seed sessions when appropriate.
+ * Filters all sessions and WORK sessions within the given period bounds.
  */
 export function filterPeriodSessions<T extends StatSession>(
   sessions: T[],
   startDate: Date,
-  endDate: Date,
-  shouldExcludeSample: boolean
+  endDate: Date
 ): { periodAllSessions: T[]; filteredSessions: T[] } {
   const periodAllSessions = sessions.filter((s) => {
-    if (shouldExcludeSample && isSampleSessionId(s.id)) {
-      return false;
-    }
     const d = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
     if (!d) return false;
     return d >= startDate && d <= endDate;

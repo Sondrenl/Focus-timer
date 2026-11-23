@@ -7,15 +7,10 @@ import { useAuthProfile } from './AuthProfileContext';
 import { useTagsData } from '../hooks/data/useTagsData';
 import { useSessionsData } from '../hooks/data/useSessionsData';
 import { useCoffeeData } from '../hooks/data/useCoffeeData';
-import {
-  useCloudMigration,
-  PendingGuestReconciliation,
-} from '../hooks/data/useCloudMigration';
+import { useCloudMigration } from '../hooks/data/useCloudMigration';
 import { useBackupAndMigration } from '../hooks/data/useBackupAndMigration';
 
 export interface DataContextValue {
-  isDemoEnvironment: boolean;
-  reloadSampleData: () => Promise<void>;
   tags: Tag[];
   activeTags: Tag[];
   activeTagId: string | null;
@@ -31,12 +26,7 @@ export interface DataContextValue {
   addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
   removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
   exportBackup: () => BackupData;
-  importBackup: (
-    data: BackupData,
-    mode: 'merge' | 'replace'
-  ) => Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }>;
   resetAllData: (scope: 'sessions-only' | 'factory-reset') => Promise<void>;
-  pendingGuestReconciliation: PendingGuestReconciliation | null;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -47,8 +37,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isConvexAuthReady,
     profile,
     settings,
-    updateProfile,
-    updateSettings,
     resetProfileToDefaults,
     resetSettingsToDefaults,
     convexSync,
@@ -56,11 +44,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const setActiveTagIdRef = useRef<((id: string | null) => void) | null>(null);
 
-  const {
-    syncBackupToConvexChunked,
-    isSyncGateActive,
-    pendingGuestReconciliation,
-  } = useCloudMigration({
+  const { isSyncGateActive } = useCloudMigration({
     isEffectiveAuthenticated,
     isConvexAuthReady,
     convexSync,
@@ -70,9 +54,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const {
     sessions,
     setSessions,
-    isDemoEnvironment,
     recordSession,
-    reloadSampleData,
   } = useSessionsData({
     isEffectiveAuthenticated,
     isConvexAuthReady,
@@ -114,20 +96,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   setActiveTagIdRef.current = setActiveTagId;
 
-  const { exportBackup, importBackup, resetAllData } = useBackupAndMigration({
+  const { exportBackup, resetAllData } = useBackupAndMigration({
     isEffectiveAuthenticated,
     isConvexAuthReady,
     profile,
     settings,
-    updateProfile,
-    updateSettings,
     resetProfileToDefaults,
     resetSettingsToDefaults,
     convexSync,
-    syncBackupToConvexChunked,
     tags,
     setTags,
-    activeTagId,
     setActiveTagId,
     sessions,
     setSessions,
@@ -137,8 +115,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const value = useMemo<DataContextValue>(
     () => ({
-      isDemoEnvironment,
-      reloadSampleData,
       tags,
       activeTags,
       activeTagId,
@@ -154,13 +130,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       addCoffeeCup,
       removeCoffeeCup,
       exportBackup,
-      importBackup,
       resetAllData,
-      pendingGuestReconciliation,
     }),
     [
-      isDemoEnvironment,
-      reloadSampleData,
       tags,
       activeTags,
       activeTagId,
@@ -176,9 +148,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       addCoffeeCup,
       removeCoffeeCup,
       exportBackup,
-      importBackup,
       resetAllData,
-      pendingGuestReconciliation,
     ]
   );
 

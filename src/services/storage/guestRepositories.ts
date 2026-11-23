@@ -5,8 +5,6 @@ import { UserSettings, DEFAULT_SETTINGS } from '../../types/settings';
 import { UserProfile, DEFAULT_PROFILE } from '../../types/user';
 import { SessionAttempt } from '../../types/telemetry';
 import { IStorageService } from './IStorageService';
-import { isProduction } from '../../utils/environment';
-import { generateSampleSessions } from '../../utils/sampleData';
 import { toDateKey } from '../../utils/dates';
 import { sanitizeHexColor } from '../../utils/colors';
 
@@ -18,16 +16,6 @@ const MAX_PAUSE_INTERVALS = 50;
 
 export const MAX_DISPLAY_NAME_LENGTH = 50;
 export const MAX_AVATAR_EMOJI_LENGTH = 32;
-
-export function isSampleSessionId(id?: string | null): boolean {
-  return Boolean(
-    id &&
-      (id.startsWith('seed-session-') ||
-        id.startsWith('sample-session-') ||
-        id.startsWith('sample-') ||
-        id.startsWith('seed-'))
-  );
-}
 
 export function sanitizeProfile(raw: Partial<UserProfile> | null | undefined): UserProfile {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_PROFILE };
@@ -82,28 +70,9 @@ abstract class QueuedRepository {
 export class SessionRepository extends QueuedRepository {
   private static readonly KEY = 'sessions_v1';
 
-  constructor(storage: IStorageService) {
-    super(storage);
-    const existing = this.storage.getItem<CompletedSession[] | null>(SessionRepository.KEY, null);
-    if (isProduction()) {
-      if (Array.isArray(existing)) {
-        const clean = existing.filter((s) => !isSampleSessionId(s.id));
-        if (clean.length !== existing.length) this.storage.setItem(SessionRepository.KEY, clean);
-      }
-    } else if (existing === null) {
-      this.storage.setItem(SessionRepository.KEY, generateSampleSessions());
-    }
-  }
-
   async getAll(): Promise<CompletedSession[]> {
     const raw = this.storage.getItem<CompletedSession[]>(SessionRepository.KEY, []);
-    const sessions = Array.isArray(raw) ? raw : [];
-    if (isProduction()) {
-      const clean = sessions.filter((s) => !isSampleSessionId(s.id));
-      if (clean.length !== sessions.length) this.storage.setItem(SessionRepository.KEY, clean);
-      return clean;
-    }
-    return sessions;
+    return Array.isArray(raw) ? raw : [];
   }
 
   async add(session: Omit<CompletedSession, 'id'> & { id?: string }): Promise<CompletedSession> {
@@ -124,32 +93,7 @@ export class SessionRepository extends QueuedRepository {
 
   async saveAll(sessions: CompletedSession[]): Promise<void> {
     return this.enqueue(async () => {
-      const safeList = Array.isArray(sessions) ? sessions : [];
-      const toSave = isProduction() ? safeList.filter((s) => !isSampleSessionId(s.id)) : safeList;
-      this.storage.setItem(SessionRepository.KEY, toSave);
-    });
-  }
-
-  async loadSampleData(): Promise<CompletedSession[]> {
-    if (isProduction()) return [];
-    return this.enqueue(async () => {
-      const raw = this.storage.getItem<CompletedSession[]>(SessionRepository.KEY, []);
-      const real = (Array.isArray(raw) ? raw : []).filter((s) => !isSampleSessionId(s.id));
-      const merged = [...real, ...generateSampleSessions()].sort(
-        (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
-      );
-      this.storage.setItem(SessionRepository.KEY, merged);
-      return merged;
-    });
-  }
-
-  async purgeSampleSessions(): Promise<CompletedSession[]> {
-    return this.enqueue(async () => {
-      const raw = this.storage.getItem<CompletedSession[]>(SessionRepository.KEY, []);
-      const existing = Array.isArray(raw) ? raw : [];
-      const clean = existing.filter((s) => !isSampleSessionId(s.id));
-      if (clean.length !== existing.length) this.storage.setItem(SessionRepository.KEY, clean);
-      return clean;
+      this.storage.setItem(SessionRepository.KEY, Array.isArray(sessions) ? sessions : []);
     });
   }
 

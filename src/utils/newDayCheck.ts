@@ -1,5 +1,4 @@
 import { toDateKey } from './dates';
-import { isSampleSessionId } from '../services/storage/guestRepositories';
 
 export const NEW_DAY_HOUR_CUTOFF = 4; // 04:00 AM local time
 export const INACTIVITY_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
@@ -22,8 +21,7 @@ export function getLogicalDayKey(date: Date | number | string): string {
 }
 
 /**
- * Extracts the latest completedAt timestamp (in ms) from an array of sessions,
- * ignoring seed / sample sessions.
+ * Extracts the latest completedAt timestamp (in ms) from an array of sessions.
  */
 export function getLastSessionCompletedAt(
   sessions: Array<{ id?: string; completedAt: string }> | null | undefined
@@ -33,7 +31,7 @@ export function getLastSessionCompletedAt(
   }
   let latest = 0;
   for (const s of sessions) {
-    if (!s || !s.completedAt || isSampleSessionId(s.id)) continue;
+    if (!s || !s.completedAt) continue;
     const t = new Date(s.completedAt).getTime();
     if (!isNaN(t) && t > latest) {
       latest = t;

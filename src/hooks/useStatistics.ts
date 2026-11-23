@@ -1,9 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useData } from '../context/DataContext';
-import { useAuthProfile } from '../context/AuthProfileContext';
-import { isProduction } from '../utils/environment';
 import { toDateKey } from '../utils/dates';
-import { isSampleSessionId } from '../services/storage/guestRepositories';
 import { useTodayKey } from './useTodayKey';
 import {
   generateAllPeriodInsights,
@@ -44,7 +41,6 @@ export type {
 
 export function useStatistics() {
   const { sessions, tags, coffeeCups } = useData();
-  const { isEffectiveAuthenticated } = useAuthProfile();
 
   const [periodType, setPeriodType] = useState<TimePeriodType>('week');
   const [referenceDate, setReferenceDate] = useState<Date>(() => new Date());
@@ -104,12 +100,10 @@ export function useStatistics() {
       customRange
     );
 
-    const shouldExcludeSample = isProduction() || isEffectiveAuthenticated;
     const { periodAllSessions, filteredSessions } = filterPeriodSessions(
       sessions,
       startDate,
-      endDate,
-      shouldExcludeSample
+      endDate
     );
 
     const { totalFocusSeconds, totalWorkCount } =
@@ -119,9 +113,7 @@ export function useStatistics() {
 
     const dayOverlapCandidates =
       periodType === 'day'
-        ? sessions.filter(
-            (s) => s.sessionType === 'WORK' && (!shouldExcludeSample || !isSampleSessionId(s.id))
-          )
+        ? sessions.filter((s) => s.sessionType === 'WORK')
         : undefined;
 
     const activityBars = computeActivityBars(
@@ -155,7 +147,6 @@ export function useStatistics() {
       sanitizedCustomRange,
       todayKey,
       tags,
-      shouldExcludeSample,
     });
 
     const candidateInsights = generateAllPeriodInsights({
@@ -194,7 +185,6 @@ export function useStatistics() {
     customRange,
     isCurrentPeriod,
     todayKey,
-    isEffectiveAuthenticated,
   ]);
 
   const topInsight = useMemo(() => {

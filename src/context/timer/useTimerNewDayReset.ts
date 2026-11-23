@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect } from 'react';
 import { SessionType, RemoteTimerState } from '../../types/timer';
 import { CompletedSession } from '../../types/session';
-import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import {
   shouldResetForNewDay,
@@ -142,7 +141,6 @@ export function useTimerNewDayReset({
         updatedAtMs: nowMs,
         activeTagId: refs.activeTagIdRef.current,
         deviceId: DEVICE_ID,
-        tabId: TAB_ID,
         lastActiveAtMs: Date.now(),
         wasHidden: typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
       });

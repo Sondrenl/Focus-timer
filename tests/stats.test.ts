@@ -91,27 +91,18 @@ describe('periodBounds', () => {
 });
 
 describe('focusStats', () => {
-  it('filters sessions by period bounds and excludes sample/seed IDs when requested', () => {
+  it('filters sessions by period bounds and separates WORK from break sessions', () => {
     const start = new Date(2026, 10, 15, 0, 0, 0, 0);
     const end = new Date(2026, 10, 15, 23, 59, 59, 999);
     const sessions: StatSession[] = [
       { id: 'real-1', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 15, 10, 0) },
       { id: 'real-break', sessionType: 'SHORT_BREAK', durationSeconds: 300, completedAt: localIso(2026, 11, 15, 10, 5) },
-      { id: 'sample-session-1', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 15, 11, 0) },
-      { id: 'seed-1', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 15, 12, 0) },
       { id: 'out-of-range', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 14, 23, 0) },
     ];
 
-    const excluded = filterPeriodSessions(sessions, start, end, true);
-    expect(excluded.periodAllSessions.map((s) => s.id)).toEqual(['real-1', 'real-break']);
-    expect(excluded.filteredSessions.map((s) => s.id)).toEqual(['real-1']);
-
-    const included = filterPeriodSessions(sessions, start, end, false);
-    expect(included.filteredSessions.map((s) => s.id)).toEqual([
-      'real-1',
-      'sample-session-1',
-      'seed-1',
-    ]);
+    const result = filterPeriodSessions(sessions, start, end);
+    expect(result.periodAllSessions.map((s) => s.id)).toEqual(['real-1', 'real-break']);
+    expect(result.filteredSessions.map((s) => s.id)).toEqual(['real-1']);
   });
 
   it('computes totals safely with negative/zero durations clamped and sanitizes tag colors', () => {
@@ -185,8 +176,8 @@ describe('focusStats', () => {
     const nov15Start = new Date(2026, 10, 15, 0, 0, 0, 0);
     const nov15End = new Date(2026, 10, 15, 23, 59, 59, 999);
 
-    const nov14Filtered = filterPeriodSessions(sessions, nov14Start, nov14End, true);
-    const nov15Filtered = filterPeriodSessions(sessions, nov15Start, nov15End, true);
+    const nov14Filtered = filterPeriodSessions(sessions, nov14Start, nov14End);
+    const nov15Filtered = filterPeriodSessions(sessions, nov15Start, nov15End);
 
     expect(nov14Filtered.filteredSessions.map((s) => s.id)).toEqual(['exact-midnight-1']);
     expect(nov15Filtered.filteredSessions).toHaveLength(0);
@@ -232,25 +223,20 @@ describe('focusStats', () => {
 });
 
 describe('coffeeStats', () => {
-  it('filters sample/seed coffee cups when shouldExcludeSample is true', () => {
+  it('filters coffee cups by period bounds', () => {
     const start = new Date(2026, 10, 1, 0, 0, 0, 0);
     const end = new Date(2026, 10, 7, 23, 59, 59, 999);
     const cups: StatCoffeeCup[] = [
       { id: 'cup-1', date: '2026-11-02', tagId: 'tag-dev' },
-      { id: 'sample-coffee-1', date: '2026-11-02', tagId: 'tag-dev' },
-      { id: 'seed-coffee-2', date: '2026-11-03', tagId: null },
       { date: '2026-11-04', tagId: null },
       { id: 'cup-out', date: '2026-11-10', tagId: 'tag-dev' },
     ];
 
-    const excluded = filterPeriodCoffee(cups, start, end, true);
-    expect(excluded.map((c) => c.id ?? 'no-id')).toEqual(['cup-1', 'no-id']);
-
-    const included = filterPeriodCoffee(cups, start, end, false);
-    expect(included).toHaveLength(4);
+    const filtered = filterPeriodCoffee(cups, start, end);
+    expect(filtered.map((c) => c.id ?? 'no-id')).toEqual(['cup-1', 'no-id']);
   });
 
-  it('computes coffee totals, averages, and peak metric with sample exclusion', () => {
+  it('computes coffee totals, averages, and peak metric', () => {
     const refDate = new Date(2026, 10, 4, 12, 0, 0);
     const { startDate, endDate, sanitizedCustomRange } = computePeriodBounds('week', refDate, {
       start: '2026-11-02',
@@ -261,7 +247,6 @@ describe('coffeeStats', () => {
       { id: 'cup-1', date: '2026-11-02', tagId: 'tag-dev' },
       { id: 'cup-2', date: '2026-11-04', tagId: 'tag-dev' },
       { id: 'cup-3', date: '2026-11-04', tagId: 'tag-dev' },
-      { id: 'sample-cup-99', date: '2026-11-03', tagId: 'tag-dev' },
     ];
 
     const stats = computeCoffeeStats({
@@ -273,7 +258,6 @@ describe('coffeeStats', () => {
       sanitizedCustomRange,
       todayKey: '2026-11-04', // 3 elapsed days: Nov 2, 3, 4
       tags: sampleTags,
-      shouldExcludeSample: true,
     });
 
     expect(stats.totalCoffeeCups).toBe(3);
@@ -306,7 +290,7 @@ describe('coffeeStats', () => {
       coffeeCups: [{ id: 'c1', date: '2026-03-08', tagId: null }, { id: 'c2', date: '2026-03-08', tagId: null }, { id: 'c3', date: '2026-03-09', tagId: null }],
       periodType: 'all', referenceDate: new Date(2026, 2, 10, 12, 0, 0),
       startDate: new Date(2026, 0, 1, 0, 0, 0), endDate: new Date(2026, 2, 10, 23, 59, 59),
-      sanitizedCustomRange: { start: '2026-03-08', end: '2026-03-10' }, todayKey: '2026-03-10', tags: [], shouldExcludeSample: true,
+      sanitizedCustomRange: { start: '2026-03-08', end: '2026-03-10' }, todayKey: '2026-03-10', tags: [],
     });
     expect(coffee.coffeePeakMetric.value).toBe('Sundays');
   });

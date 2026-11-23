@@ -47,7 +47,6 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
   const addCupMutation = useMutation(api.coffee.addCup);
   const removeCupMutation = useMutation(api.coffee.removeCup);
   const clearCoffeeMutation = useMutation(api.coffee.clear);
-  const clearForReplaceBatchMutation = useMutation(api.migrations.clearForReplaceBatch);
   const importBackupMutation = useMutation(api.migrations.importBackup);
   const upsertAttemptMutation = useMutation(api.telemetry.upsertAttempt);
   const clearTelemetryMutation = useMutation(api.telemetry.clear);
@@ -85,7 +84,6 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
       addCup: wrapMutation(addCupMutation, 'addCup'),
       removeCup: wrapMutation(removeCupMutation, 'removeCup'),
       clearCoffee: wrapMutation(clearCoffeeMutation, 'clearCoffee'),
-      clearForReplaceBatch: wrapMutation(clearForReplaceBatchMutation, 'clearForReplaceBatch'),
       importBackup: wrapMutation(importBackupMutation, 'importBackup'),
       upsertAttempt: wrapMutation(upsertAttemptMutation, 'upsertAttempt'),
       clearTelemetry: wrapMutation(clearTelemetryMutation, 'clearTelemetry'),
@@ -105,7 +103,6 @@ export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = i
       addCupMutation,
       removeCupMutation,
       clearCoffeeMutation,
-      clearForReplaceBatchMutation,
       importBackupMutation,
       upsertAttemptMutation,
       clearTelemetryMutation,

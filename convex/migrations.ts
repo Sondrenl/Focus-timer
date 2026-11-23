@@ -1,11 +1,9 @@
 import { v } from "convex/values";
-import { mutation, MutationCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { mutation } from "./_generated/server";
 import { requireUser, DEFAULT_TAGS } from "./authHelper";
 import { sanitizeTagColor, MAX_TAG_NAME_LENGTH, MAX_TAGS_PER_USER } from "./tags";
 import { TAG_ID_REGEX } from "./timerHelpers";
 
-const REPLACE_DELETE_BATCH_SIZE = 500;
 const MERGE_DEDUP_SCAN_LIMIT = 4000;
 
 function sanitizeOptionalIso(raw: string | undefined, fallback: string): string {
@@ -22,57 +20,9 @@ function mintUniqueTagId(validTagIds: Set<string>): string {
   return candidate;
 }
 
-async function deleteReplaceBatchForUser(
-  ctx: MutationCtx,
-  userId: Id<"users">
-): Promise<{ hasMore: boolean }> {
-  const existingSessions = await ctx.db
-    .query("sessions")
-    .withIndex("by_user_completed", (q) => q.eq("userId", userId))
-    .take(REPLACE_DELETE_BATCH_SIZE);
-  for (const s of existingSessions) {
-    await ctx.db.delete(s._id);
-  }
-
-  const existingCups = await ctx.db
-    .query("coffee_cups")
-    .withIndex("by_user_date", (q) => q.eq("userId", userId))
-    .take(REPLACE_DELETE_BATCH_SIZE);
-  for (const c of existingCups) {
-    await ctx.db.delete(c._id);
-  }
-
-  const existingAttempts = await ctx.db
-    .query("session_attempts")
-    .withIndex("by_user_attempt", (q) => q.eq("userId", userId))
-    .take(REPLACE_DELETE_BATCH_SIZE);
-  for (const a of existingAttempts) {
-    await ctx.db.delete(a._id);
-  }
-
-  const hasMore =
-    existingSessions.length >= REPLACE_DELETE_BATCH_SIZE ||
-    existingCups.length >= REPLACE_DELETE_BATCH_SIZE ||
-    existingAttempts.length >= REPLACE_DELETE_BATCH_SIZE;
-
-  return { hasMore };
-}
-
-export const clearForReplaceBatch = mutation({
-  args: {},
-  returns: v.object({
-    hasMore: v.boolean(),
-  }),
-  handler: async (ctx) => {
-    const user = await requireUser(ctx, true);
-    return await deleteReplaceBatchForUser(ctx, user._id);
-  },
-});
-
 export const importBackup = mutation({
   args: {
-    mode: v.union(v.literal("merge"), v.literal("replace")),
-    skipReplaceClear: v.optional(v.boolean()),
+    mode: v.optional(v.literal("merge")),
     tags: v.array(
       v.object({
         id: v.optional(v.string()),
@@ -125,12 +75,8 @@ export const importBackup = mutation({
 
     const now = new Date().toISOString();
 
-    const isSampleId = (id?: string) =>
-      Boolean(id && (id.startsWith("sample-") || id.startsWith("seed-")));
-
     const cleanIncomingSessions = args.sessions.flatMap((s) => {
       if (
-        isSampleId(s.id) ||
         !Number.isFinite(s.durationSeconds) ||
         s.durationSeconds <= 0 ||
         s.durationSeconds > 86400 * 7
@@ -156,7 +102,7 @@ export const importBackup = mutation({
     });
 
     const cleanIncomingCups = (args.coffeeCups ?? []).flatMap((c) => {
-      if (isSampleId(c.id) || !/^\d{4}-\d{2}-\d{2}$/.test(c.date)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(c.date)) {
         return [];
       }
       const parsedMs =
@@ -178,102 +124,6 @@ export const importBackup = mutation({
       return mintUniqueTagId(validTagIds);
     };
 
-    if (args.mode === "replace") {
-      if (!args.skipReplaceClear) {
-        await deleteReplaceBatchForUser(ctx, user._id);
-      }
-
-      const tagIdRemap = new Map<string, string>();
-      const validTagIds = new Set<string>();
-      const seenNames = new Map<string, string>();
-      const formattedTags: Array<{
-        id: string;
-        name: string;
-        color: string;
-        isArchived: boolean;
-        createdAt: string;
-        updatedAt: string;
-      }> = [];
-
-      for (const t of args.tags) {
-        const cleanName = t.name.trim().slice(0, MAX_TAG_NAME_LENGTH) || "Untitled Tag";
-        const nameKey = cleanName.toLowerCase();
-        const existingByNameId = seenNames.get(nameKey);
-        if (existingByNameId) {
-          if (t.id) {
-            tagIdRemap.set(t.id, existingByNameId);
-          }
-          continue;
-        }
-
-        const canonicalId = makeSafeTagId(t.id, validTagIds);
-        if (t.id) {
-          tagIdRemap.set(t.id, canonicalId);
-        }
-        validTagIds.add(canonicalId);
-        seenNames.set(nameKey, canonicalId);
-        const cleanColor = sanitizeTagColor(t.color);
-        const createdAt = sanitizeOptionalIso(t.createdAt, now);
-        const updatedAt = sanitizeOptionalIso(t.updatedAt, createdAt);
-        formattedTags.push({
-          id: canonicalId,
-          name: cleanName,
-          color: cleanColor,
-          isArchived: t.isArchived ?? false,
-          createdAt,
-          updatedAt,
-        });
-      }
-
-      if (formattedTags.length > MAX_TAGS_PER_USER) {
-        throw new Error(`Cannot exceed maximum limit of ${MAX_TAGS_PER_USER} tags.`);
-      }
-
-      await ctx.db.patch(user._id, {
-        tags: formattedTags,
-      });
-
-      const activeTimer = await ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", user._id))
-        .first();
-      if (activeTimer?.tagId && !validTagIds.has(activeTimer.tagId)) {
-        await ctx.db.patch(activeTimer._id, {
-          tagId: undefined,
-          updatedAtMs: Date.now(),
-        });
-      }
-
-      const resolveTagId = (rawTagId?: string | null): string | undefined => {
-        if (!rawTagId) return undefined;
-        const mapped = tagIdRemap.get(rawTagId) ?? rawTagId;
-        return validTagIds.has(mapped) && TAG_ID_REGEX.test(mapped) ? mapped : undefined;
-      };
-
-      for (const session of cleanIncomingSessions) {
-        await ctx.db.insert("sessions", {
-          userId: user._id,
-          tagId: resolveTagId(session.tagId),
-          sessionType: session.sessionType,
-          durationSeconds: session.durationSeconds,
-          completedAt: session.completedAt,
-          ...(session.timerRunId ? { timerRunId: session.timerRunId } : {}),
-        });
-      }
-
-      for (const cup of cleanIncomingCups) {
-        await ctx.db.insert("coffee_cups", {
-          userId: user._id,
-          date: cup.date,
-          tagId: resolveTagId(cup.tagId),
-          createdAt: cup.createdAt,
-        });
-      }
-
-      return { success: true };
-    }
-
-    // MERGE MODE
     const existingTags = user.tags ?? DEFAULT_TAGS;
     const tagMap = new Map<string, (typeof existingTags)[0]>();
     const tagIdRemap = new Map<string, string>();

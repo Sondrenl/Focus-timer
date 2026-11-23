@@ -23,6 +23,7 @@ import { telemetryTracker } from '../services';
 
 interface UseTimerActionsParams {
   refs: TimerSharedRefs;
+  isOnlineAndConnected: () => boolean;
   getServerAlignedNowMs: () => number;
   commitTimerSnapshot: (snapshot: TimerSnapshot) => void;
   setRemainingSeconds: (sec: number) => void;
@@ -30,20 +31,17 @@ interface UseTimerActionsParams {
   sound: SoundService;
   dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
   triggerCompletionConfetti: () => void;
+  recordSession: (session: CompletedSessionFallback) => Promise<unknown>;
   publishLocalTimerState: (
     nextState: RemoteTimerState,
     isDirectUserAction?: boolean,
     resetOptions?: ResetTimerOptions
   ) => void;
-  publishTimerCompletion: (
-    nextState: RemoteTimerState,
-    completedTimerRunId: string | null,
-    completedSessionFallback?: CompletedSessionFallback
-  ) => void;
 }
 
 export function useTimerActions({
   refs,
+  isOnlineAndConnected,
   getServerAlignedNowMs,
   commitTimerSnapshot,
   setRemainingSeconds,
@@ -51,8 +49,8 @@ export function useTimerActions({
   sound,
   dispatchCompletionAlert,
   triggerCompletionConfetti,
+  recordSession,
   publishLocalTimerState,
-  publishTimerCompletion,
 }: UseTimerActionsParams) {
   const finalizeActiveRunIfStarted = useCallback(
     (outcome: 'reset' | 'skipped' | 'switched', nowMs: number) => {
@@ -94,8 +92,16 @@ export function useTimerActions({
     }
   }, []);
 
+  // Local completion handler for guest mode (or offline fallback)
   const handleComplete = useCallback(
     (silent = false) => {
+      if (isOnlineAndConnected()) {
+        // When signed in and connected, Convex onTimerCompleted is authoritative
+        refs.remainingSecondsRef.current = 0;
+        setRemainingSeconds(0);
+        return;
+      }
+
       const completedType = refs.sessionTypeRef.current;
       const currentRunId = refs.timerRunIdRef.current;
       const currentTotal = refs.totalSecondsRef.current;
@@ -124,13 +130,13 @@ export function useTimerActions({
       const completedTimestampMs =
         currentTargetEnd !== null && currentTargetEnd < now ? currentTargetEnd : now;
 
-      const completedSessionFallback: CompletedSessionFallback = {
+      void recordSession({
         tagId: refs.activeTagIdRef.current,
         sessionType: completedType,
         durationSeconds: elapsedSeconds,
         completedAt: new Date(completedTimestampMs).toISOString(),
         timerRunId: currentRunId || undefined,
-      };
+      });
 
       void telemetryTracker.onSessionFinalized({
         attemptId: currentRunId,
@@ -155,6 +161,7 @@ export function useTimerActions({
           : null;
       const nextStatus: TimerStatus = newRunId ? 'RUNNING' : 'IDLE';
 
+      refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, now);
       commitTimerSnapshot({
         sessionType: nextType,
         status: nextStatus,
@@ -179,30 +186,15 @@ export function useTimerActions({
           nowMs: now,
         });
       }
-
-      publishTimerCompletion(
-        {
-          sessionType: nextType,
-          status: nextStatus,
-          remainingSeconds: nextDuration,
-          totalSeconds: nextDuration,
-          targetEndTime: nextTargetEnd,
-          currentCycle: nextCycle,
-          activeTagId: refs.activeTagIdRef.current,
-          timerRunId: newRunId,
-          lastCompletedTimerRunId: currentRunId,
-          updatedAtMs: now,
-        },
-        currentRunId,
-        completedSessionFallback
-      );
     },
     [
       refs,
+      isOnlineAndConnected,
       getServerAlignedNowMs,
+      setRemainingSeconds,
       commitTimerSnapshot,
       ensureResetDayKeyIfPastCutoff,
-      publishTimerCompletion,
+      recordSession,
       dispatchCompletionAlert,
       triggerCompletionConfetti,
     ]

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { wakeLockService } from '../../services/screen/WakeLockService';
-import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { formatTime } from '../../utils/formatters';
 import { DEVICE_ID, SavedTimerState, saveTimerState } from './timerPersistence';
 import { telemetryTracker } from '../services';
@@ -120,15 +119,17 @@ export const useTimerWorker = ({
     const diffSec = Math.min(maxSec, rawDiffSec);
 
     if (diffSec <= 0) {
-      if (shouldDeferExpiredCompletion && shouldDeferExpiredCompletion()) {
-        return 0;
-      }
       if (diffMs < -900_000) {
         onStaleExpiration();
         return null;
       }
-      remainingSecondsRef.current = 0;
-      setRemainingSeconds(0);
+      if (remainingSecondsRef.current !== 0) {
+        remainingSecondsRef.current = 0;
+        setRemainingSeconds(0);
+      }
+      if (shouldDeferExpiredCompletion && shouldDeferExpiredCompletion()) {
+        return 0;
+      }
       const expiredLongAgo = diffMs < -60_000;
       handleCompleteRef.current(expiredLongAgo);
       return null;
@@ -220,7 +221,6 @@ export const useTimerWorker = ({
           updatedAtMs: localUpdatedAtRef.current,
           activeTagId: activeTagIdRef.current,
           deviceId: DEVICE_ID,
-          tabId: TAB_ID,
           lastActiveAtMs: Date.now(),
           wasHidden: isHidden,
         };

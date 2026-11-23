@@ -1,5 +1,4 @@
 import { Tag } from '../../types/tag';
-import { isSampleSessionId } from '../../services/storage/guestRepositories';
 import { toDateKey, WEEKDAY_NAMES, MONTH_NAMES } from '../dates';
 import {
   CoffeePeakMetric,
@@ -9,20 +8,17 @@ import {
 } from './types';
 
 /**
- * Filters coffee cups whose date falls within the period [startDate, endDate],
- * excluding dev sample/seed coffee cups when appropriate.
+ * Filters coffee cups whose date falls within the period [startDate, endDate].
  */
 export function filterPeriodCoffee<T extends StatCoffeeCup>(
   coffeeCups: T[],
   startDate: Date,
-  endDate: Date,
-  shouldExcludeSample = false
+  endDate: Date
 ): T[] {
   const startKey = toDateKey(startDate);
   const endKey = toDateKey(endDate);
   return coffeeCups.filter((cup) => {
     if (!cup || !cup.date) return false;
-    if (shouldExcludeSample && isSampleSessionId(cup.id)) return false;
     return cup.date >= startKey && cup.date <= endKey;
   });
 }
@@ -342,7 +338,6 @@ export function computeCoffeeStats<T extends StatCoffeeCup>(params: {
   sanitizedCustomRange: CustomDateRange;
   todayKey: string;
   tags: Tag[];
-  shouldExcludeSample?: boolean;
 }): {
   filteredCoffee: T[];
   totalCoffeeCups: number;
@@ -358,10 +353,9 @@ export function computeCoffeeStats<T extends StatCoffeeCup>(params: {
     sanitizedCustomRange,
     todayKey,
     tags,
-    shouldExcludeSample = false,
   } = params;
 
-  const filteredCoffee = filterPeriodCoffee(coffeeCups, startDate, endDate, shouldExcludeSample);
+  const filteredCoffee = filterPeriodCoffee(coffeeCups, startDate, endDate);
   const totalCoffeeCups = filteredCoffee.length;
   const coffeeElapsedDays = computeCoffeeElapsedDays(
     periodType,

@@ -6,7 +6,7 @@ import { api, internal } from "../convex/_generated/api";
 
 const modules = import.meta.glob("../convex/**/*.*s");
 
-describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
+describe("Topic 2 — Convex Timer Accuracy & Server-Authoritative Completion", () => {
   async function createAuthenticatedTestUser(t: ReturnType<typeof convexTest>) {
     const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
       email: "accuracy@example.com",
@@ -91,63 +91,6 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     );
   });
 
-  it("adopts server auto-started run on client complete (Case 2a) and resets serverAutoStartStreak", async () => {
-    const t = convexTest(schema, modules);
-    const { userId, asUser } = await createAuthenticatedTestUser(t);
-
-    await asUser.mutation(api.users.updateSettings, {
-      autoStartBreaks: true,
-      shortBreakDurationMinutes: 5,
-    });
-
-    await asUser.mutation(api.timer.start, {
-      sessionType: "WORK",
-      durationSeconds: 1500,
-      currentCycle: 1,
-      timerRunId: "work-run-case2a",
-    });
-
-    const runningRow = await t.run(async (ctx) =>
-      ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first()
-    );
-
-    // Server completes first and auto-starts SHORT_BREAK
-    await t.mutation(internal.timer.onTimerCompleted, {
-      userId,
-      timerRunId: "work-run-case2a",
-      scheduleNonce: runningRow!.scheduleNonce,
-    });
-
-    const serverStarted = await asUser.query(api.timer.getActive, {});
-    expect(serverStarted?.status).toBe("RUNNING");
-    expect(serverStarted?.sessionType).toBe("SHORT_BREAK");
-    const serverRunId = serverStarted!.timerRunId;
-
-    // Client arrives late with complete(completedTimerRunId: "work-run-case2a")
-    const completeRes = await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "work-run-case2a",
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 1,
-      autoStartNext: true,
-      nextTimerRunId: "client-would-be-run",
-    });
-
-    // Must keep the server's authoritative run ID and reset streak to 0
-    expect(completeRes?.status).toBe("RUNNING");
-    expect(completeRes?.timerRunId).toBe(serverRunId);
-    const dbRow = await t.run(async (ctx) =>
-      ctx.db
-        .query("active_timers")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .first()
-    );
-    expect(dbRow?.serverAutoStartStreak).toBe(0);
-  });
-
   it("rejects stale scheduled onTimerCompleted jobs when scheduleNonce no longer matches after pause/resume", async () => {
     const t = convexTest(schema, modules);
     const { userId, asUser } = await createAuthenticatedTestUser(t);
@@ -201,7 +144,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     expect(stillRunning?.timerRunId).toBe("run-nonce-test");
   });
 
-  it("enforces guards on timer.pause, timer.updateTag, timer.reset(onlyIfIdle), and timer.complete(too_early)", async () => {
+  it("enforces guards on timer.pause, timer.updateTag, and timer.reset(onlyIfIdle)", async () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createAuthenticatedTestUser(t);
 
@@ -235,18 +178,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     expect(wrongTagRes?.applied).toBe(false);
     expect(wrongTagRes?.tagId).toBe("tag-deep-work");
 
-    // 3. complete >5s early returns rejectedReason: "too_early" and keeps RUNNING
-    const earlyRes = await asUser.mutation(api.timer.complete, {
-      completedTimerRunId: "run-guard-1",
-      nextSessionType: "SHORT_BREAK",
-      nextDurationSeconds: 300,
-      nextCurrentCycle: 1,
-      autoStartNext: false,
-    });
-    expect(earlyRes?.rejectedReason).toBe("too_early");
-    expect(earlyRes?.status).toBe("RUNNING");
-
-    // 4. pause with wrong expectedTimerRunId is refused
+    // 3. pause with wrong expectedTimerRunId is refused
     const wrongPause = await asUser.mutation(api.timer.pause, {
       remainingSeconds: 1000,
       expectedTimerRunId: "other-run",
@@ -254,7 +186,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     expect(wrongPause?.applied).toBe(false);
     expect(wrongPause?.status).toBe("RUNNING");
 
-    // 5. pause clamps remainingSeconds <= totalSeconds (1500)
+    // 4. pause clamps remainingSeconds <= totalSeconds (1500)
     const validPause = await asUser.mutation(api.timer.pause, {
       remainingSeconds: 9999,
       expectedTimerRunId: "run-guard-1",
@@ -263,7 +195,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     expect(validPause?.status).toBe("PAUSED");
     expect(validPause?.remainingSeconds).toBe(1500);
 
-    // 6. reset with onlyIfIdle: true refuses to wipe a PAUSED timer
+    // 5. reset with onlyIfIdle: true refuses to wipe a PAUSED timer
     const blockedReset = await asUser.mutation(api.timer.reset, {
       sessionType: "WORK",
       durationSeconds: 1800,
@@ -273,7 +205,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-vs-Client Races", () => {
     expect(blockedReset?.applied).toBe(false);
     expect(blockedReset?.status).toBe("PAUSED");
 
-    // 7. Full reset transitions to IDLE; subsequent pause on IDLE is refused (no resurrection!)
+    // 6. Full reset transitions to IDLE; subsequent pause on IDLE is refused (no resurrection!)
     const fullReset = await asUser.mutation(api.timer.reset, {
       sessionType: "WORK",
       durationSeconds: 1500,

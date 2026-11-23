@@ -1,11 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { CoffeeCup } from '../../types/coffee';
-import {
-  broadcastCoffeeCups,
-  subscribeAuthEvent,
-  subscribeCoffeeCups,
-  subscribeReset,
-} from '../../services/timer/TimerBroadcast';
 import { toDateKey } from '../../utils/dates';
 import { coffeeRepository } from '../../context/services';
 import { useAuthProfile } from '../../context/AuthProfileContext';
@@ -30,29 +24,6 @@ export function useCoffeeData({
   // Initial load of guest coffee cups from localStorage
   useEffect(() => {
     coffeeRepository.getAll().then(setGuestCoffeeCups);
-  }, []);
-
-  // Multi-tab BroadcastChannel sync for guest mode and resets
-  useEffect(() => {
-    const unsubCoffee = subscribeCoffeeCups((cups) => {
-      setGuestCoffeeCups(cups);
-    });
-
-    const unsubReset = subscribeReset(() => {
-      setGuestCoffeeCups([]);
-    });
-
-    const unsubAuth = subscribeAuthEvent((payload) => {
-      if (payload.action === 'logout') {
-        setGuestCoffeeCups([]);
-      }
-    });
-
-    return () => {
-      unsubCoffee();
-      unsubReset();
-      unsubAuth();
-    };
   }, []);
 
   const coffeeCups = useMemo<CoffeeCup[]>(() => {
@@ -88,7 +59,6 @@ export function useCoffeeData({
         (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
       setGuestCoffeeCups(sorted);
-      broadcastCoffeeCups(sorted);
       return created;
     },
     [isCloudMode, convexMutations]
@@ -115,7 +85,6 @@ export function useCoffeeData({
         (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
       setGuestCoffeeCups(sorted);
-      broadcastCoffeeCups(sorted);
       return true;
     },
     [isCloudMode, convexMutations]

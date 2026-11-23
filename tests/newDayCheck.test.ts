@@ -52,20 +52,11 @@ describe('New Day Check Utilities', () => {
       expect(getLastSessionCompletedAt(undefined)).toBeNull();
     });
 
-    it('ignores sample and seed sessions', () => {
-      const sessions = [
-        { id: 'sample-session-1', completedAt: '2026-11-07T12:00:00.000Z' },
-        { id: 'seed-session-1', completedAt: '2026-11-07T12:30:00.000Z' },
-      ];
-      expect(getLastSessionCompletedAt(sessions)).toBeNull();
-    });
-
-    it('returns the latest timestamp among real completed sessions', () => {
+    it('returns the latest timestamp among completed sessions', () => {
       const time1 = new Date(2026, 10, 7, 10, 0, 0).toISOString();
       const time2 = new Date(2026, 10, 7, 11, 0, 0).toISOString();
       const sessions = [
         { id: 'real-1', completedAt: time1 },
-        { id: 'sample-session-1', completedAt: new Date(2026, 10, 7, 13, 0, 0).toISOString() },
         { id: 'real-2', completedAt: time2 },
       ];
       expect(getLastSessionCompletedAt(sessions)).toBe(new Date(time2).getTime());

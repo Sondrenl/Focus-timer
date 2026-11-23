@@ -22,10 +22,7 @@ export const ProfileView: React.FC = () => {
     tags,
     coffeeCups,
     exportBackup,
-    importBackup,
     resetAllData,
-    reloadSampleData,
-    isDemoEnvironment,
   } = useData();
 
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -56,14 +53,8 @@ export const ProfileView: React.FC = () => {
 
       <DataManagementCard
         exportBackup={exportBackup}
-        importBackup={importBackup}
-        reloadSampleData={reloadSampleData}
-        isDemoEnvironment={isDemoEnvironment}
-        isAuthenticated={isEffectiveAuthenticated}
         statusMessage={statusMessage}
         errorMessage={errorMessage}
-        onStatusMessage={setStatusMessage}
-        onErrorMessage={setErrorMessage}
       />
 
       <DangerZoneCard
