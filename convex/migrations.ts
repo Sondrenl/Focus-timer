@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation } from "./_generated/server";
+import { mutation, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireUser, DEFAULT_TAGS } from "./authHelper";
 import { sanitizeTagColor, MAX_TAG_NAME_LENGTH, MAX_TAGS_PER_USER } from "./tags";
 import { TAG_ID_REGEX } from "./timerHelpers";
@@ -274,5 +275,98 @@ export const importBackup = mutation({
     }
 
     return { success: true };
+  },
+});
+
+const LEGACY_CLEANUP_PAGE_SIZE = 500;
+
+/**
+ * One-off maintenance migration: strips removed pre-refactor legacy fields from
+ * `session_attempts` and `active_timers` so those optional fields can be deleted
+ * from `convex/schema.ts`. Invoke once from the Convex Dashboard (`migrations:stripLegacyFields`).
+ */
+export const stripLegacyFields = internalMutation({
+  args: {
+    stage: v.optional(v.union(v.literal("session_attempts"), v.literal("active_timers"))),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.object({
+    stage: v.string(),
+    patchedCount: v.number(),
+    scheduledNext: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const stage = args.stage ?? "session_attempts";
+    const cursor = args.cursor ?? null;
+    let patchedCount = 0;
+
+    if (stage === "session_attempts") {
+      const page = await ctx.db
+        .query("session_attempts")
+        .paginate({ numItems: LEGACY_CLEANUP_PAGE_SIZE, cursor });
+
+      for (const doc of page.page) {
+        const hasLegacy =
+          doc.timeSincePreviousAttemptSeconds !== undefined ||
+          doc.previousAttemptType !== undefined ||
+          doc.previousAttemptOutcome !== undefined ||
+          doc.workSessionsCompletedToday !== undefined ||
+          doc.workActiveSecondsToday !== undefined ||
+          doc.skipsToday !== undefined ||
+          doc.coffeeCupsTodayAtStart !== undefined ||
+          doc.minutesSinceLastCoffeeAtStart !== undefined ||
+          doc.coffeeLoggedDuringRun !== undefined;
+
+        if (hasLegacy) {
+          await ctx.db.patch(doc._id, {
+            timeSincePreviousAttemptSeconds: undefined,
+            previousAttemptType: undefined,
+            previousAttemptOutcome: undefined,
+            workSessionsCompletedToday: undefined,
+            workActiveSecondsToday: undefined,
+            skipsToday: undefined,
+            coffeeCupsTodayAtStart: undefined,
+            minutesSinceLastCoffeeAtStart: undefined,
+            coffeeLoggedDuringRun: undefined,
+          });
+          patchedCount += 1;
+        }
+      }
+
+      if (!page.isDone) {
+        await ctx.scheduler.runAfter(0, internal.migrations.stripLegacyFields, {
+          stage: "session_attempts",
+          cursor: page.continueCursor,
+        });
+        return { stage, patchedCount, scheduledNext: true };
+      }
+
+      await ctx.scheduler.runAfter(0, internal.migrations.stripLegacyFields, {
+        stage: "active_timers",
+        cursor: null,
+      });
+      return { stage, patchedCount, scheduledNext: true };
+    }
+
+    const page = await ctx.db
+      .query("active_timers")
+      .paginate({ numItems: LEGACY_CLEANUP_PAGE_SIZE, cursor });
+
+    for (const doc of page.page) {
+      if (doc.peerPresence !== undefined) {
+        await ctx.db.patch(doc._id, { peerPresence: undefined });
+        patchedCount += 1;
+      }
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.stripLegacyFields, {
+        stage: "active_timers",
+        cursor: page.continueCursor,
+      });
+      return { stage, patchedCount, scheduledNext: true };
+    }
+
+    return { stage, patchedCount, scheduledNext: false };
   },
 });

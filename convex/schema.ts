@@ -79,6 +79,8 @@ export default defineSchema({
     serverAutoStartStreak: v.optional(v.number()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
+    // Legacy field on pre-refactor production documents
+    peerPresence: v.optional(v.any()),
   })
     .index("by_user", ["userId"])
     .index("by_status_updated", ["status", "updatedAtMs"]),
@@ -129,6 +131,16 @@ export default defineSchema({
   session_attempts: defineTable({
     userId: v.id("users"),
     ...sessionAttemptDbFields,
+    // Legacy fields on pre-refactor production documents
+    timeSincePreviousAttemptSeconds: v.optional(v.number()),
+    previousAttemptType: v.optional(v.string()),
+    previousAttemptOutcome: v.optional(v.string()),
+    workSessionsCompletedToday: v.optional(v.number()),
+    workActiveSecondsToday: v.optional(v.number()),
+    skipsToday: v.optional(v.number()),
+    coffeeCupsTodayAtStart: v.optional(v.number()),
+    minutesSinceLastCoffeeAtStart: v.optional(v.number()),
+    coffeeLoggedDuringRun: v.optional(v.number()),
   })
     .index("by_user_attempt", ["userId", "attemptId"])
     .index("by_user_ended", ["userId", "endedAt"])
