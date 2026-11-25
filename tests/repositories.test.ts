@@ -280,7 +280,7 @@ describe("Guest Repositories, Serialization & Backup Export", () => {
       renderToStaticMarkup(React.createElement(HookHarness));
 
       expect(exportedBackupData).not.toBeNull();
-      expect(exportedBackupData!.version).toBe("3.0.3");
+      expect(exportedBackupData!.version).toBe("3.1.0");
 
       const exportedProfile = exportedBackupData!.profile as any;
       expect(exportedProfile.email).toBeUndefined();
