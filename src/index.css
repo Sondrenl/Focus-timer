@@ -1,6 +1,62 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  /* Material Design 3 Bright, Luminous Cotton Palette tokens */
+  --color-md-primary: #6750A4;
+  --color-md-on-primary: #FFFFFF;
+  --color-md-primary-container: #EADDFF;
+  --color-md-on-primary-container: #21005D;
+  --color-md-secondary: #625B71;
+  --color-md-on-secondary: #FFFFFF;
+  --color-md-secondary-container: #E8DEF8;
+  --color-md-on-secondary-container: #1D192B;
+  --color-md-tertiary: #7D5260;
+  --color-md-on-tertiary: #FFFFFF;
+  --color-md-tertiary-container: #FFD8E4;
+  --color-md-on-tertiary-container: #31111D;
+  --color-md-error: #B3261E;
+  --color-md-on-error: #FFFFFF;
+  --color-md-error-container: #F9DEDC;
+  --color-md-on-error-container: #410E0B;
+  --color-md-background: #FFFFFF;
+  --color-md-on-background: #1E1B16;
+  --color-md-surface: #FFFFFF;
+  --color-md-on-surface: #1E1B16;
+  --color-md-surface-variant: #F5F6F8;
+  --color-md-on-surface-variant: #4B5563;
+  --color-md-outline: #71717A;
+  --color-md-outline-variant: #E5E7EB;
+  --color-md-surface-container-lowest: #FFFFFF;
+  --color-md-surface-container-low: #FFFFFF;
+  --color-md-surface-container: #F5F6F8;
+  --color-md-surface-container-high: #EEEFF3;
+  --color-md-surface-container-highest: #E2E5EA;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-3xl: 28px;
+  --radius-full: 9999px;
+
+  --font-sans: "Roboto Flex", "Roboto", system-ui, -apple-system, sans-serif;
+  --font-mono: "Droid Sans Mono", monospace;
+
+  --shadow-xs: 0px 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-elevation-1: 0px 1px 3px 1px rgba(0, 0, 0, 0.04), 0px 1px 2px 0px rgba(0, 0, 0, 0.06);
+  --shadow-elevation-2: 0px 2px 6px 2px rgba(0, 0, 0, 0.04), 0px 1px 2px 0px rgba(0, 0, 0, 0.06);
+  --shadow-elevation-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.04), 0px 1px 3px 0px rgba(0, 0, 0, 0.06);
+  --shadow-elevation-4: 0px 6px 10px 4px rgba(0, 0, 0, 0.04), 0px 2px 3px 0px rgba(0, 0, 0, 0.06);
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
 
 @font-face {
   font-family: 'Roboto Flex';
