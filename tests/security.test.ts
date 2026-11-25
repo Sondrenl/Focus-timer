@@ -395,4 +395,24 @@ describe("Security Hardening & Input Validation", () => {
     expect(timer?.status).toBe("IDLE");
     expect(timer?.targetEndTime).toBeUndefined();
   });
+
+  it("guards query limits against NaN/floats and enforces integer-only profile/setting fields", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // NaN and fractional limits must not crash .take()
+    expect(await asUser.query(api.sessions.list, { limit: Number.NaN })).toEqual([]);
+    expect(await asUser.query(api.sessions.list, { limit: 1.7 })).toEqual([]);
+    expect(await asUser.query(api.coffee.list, { limit: Number.NaN })).toEqual([]);
+    expect(await asUser.query(api.coffee.list, { limit: 1.7 })).toEqual([]);
+
+    // Non-integer values must be rejected for integer-only fields
+    await expect(
+      asUser.mutation(api.users.updateProfile, { dailyGoalMinutes: 120.5 })
+    ).rejects.toThrow("Daily goal minutes must be an integer.");
+
+    await expect(
+      asUser.mutation(api.users.updateSettings, { longBreakInterval: 2.5 })
+    ).rejects.toThrow("longBreakInterval must be an integer.");
+  });
 });

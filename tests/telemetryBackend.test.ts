@@ -150,4 +150,60 @@ describe("ML Telemetry Convex Backend", () => {
     expect(await asUser.mutation(api.telemetry.clear, {})).toBe(true);
     expect(await asUser.query(api.telemetry.listAttempts, {})).toEqual([]);
   });
+
+  it("records server_scheduled fallback on timer completion, upgrades on richer client upsert, and blocks sparser overwrites or source spoofing", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+
+    // 1. Start a timer and complete it server-side with no client telemetry row yet
+    const startRes = await asUser.mutation(api.timer.start, {
+      sessionType: "WORK",
+      durationSeconds: 1500,
+      currentCycle: 1,
+      timerRunId: "run-bg-1",
+    });
+    expect(startRes.applied).toBe(true);
+
+    await t.mutation(internal.timer.onTimerCompleted, {
+      userId,
+      timerRunId: "run-bg-1",
+      scheduleNonce: startRes.scheduleNonce,
+    });
+
+    const afterServer = await asUser.query(api.telemetry.listAttempts, {});
+    expect(afterServer).toHaveLength(1);
+    expect(afterServer?.[0].attemptId).toBe("run-bg-1");
+    expect(afterServer?.[0].status).toBe("completed");
+    expect(afterServer?.[0].source).toBe("server_scheduled");
+
+    // 2. Client upsert upgrades server_scheduled row with richer local telemetry
+    const upgraded = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-bg-1",
+        status: "completed",
+        pauseCount: 2,
+        tabBackgroundedCount: 1,
+        source: "server_scheduled", // Public mutation must force "client"
+        updatedAtMs: 1700002000000,
+      })
+    );
+    expect(upgraded.source).toBe("client");
+    expect(upgraded.pauseCount).toBe(2);
+    expect(upgraded.tabBackgroundedCount).toBe(1);
+
+    // 3. Sparser multi-tab upsert with newer updatedAtMs must not clobber the richer completed row
+    const afterSparser = await asUser.mutation(
+      api.telemetry.upsertAttempt,
+      makeSampleAttempt({
+        attemptId: "run-bg-1",
+        status: "completed",
+        pauseCount: 0,
+        tabBackgroundedCount: 0,
+        updatedAtMs: 1700009000000,
+      })
+    );
+    expect(afterSparser.pauseCount).toBe(2);
+    expect(afterSparser.tabBackgroundedCount).toBe(1);
+  });
 });

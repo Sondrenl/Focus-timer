@@ -294,4 +294,37 @@ describe('coffeeStats', () => {
     });
     expect(coffee.coffeePeakMetric.value).toBe('Sundays');
   });
+
+  it('handles malformed custom ranges, caps extreme custom spans, and computes extreme all-time coffee peaks without hanging', () => {
+    const refDate = new Date(2026, 10, 15, 12, 0, 0);
+
+    // Malformed custom keys fall back safely to valid dates
+    const badBounds = computePeriodBounds('custom', refDate, { start: 'not-a-date', end: '' });
+    expect(Number.isNaN(badBounds.startDate.getTime())).toBe(false);
+    expect(Number.isNaN(badBounds.endDate.getTime())).toBe(false);
+
+    // Extreme 126-year custom span is capped at 3660 days (3661 bars max)
+    const hugeBars = computeActivityBars([], 'custom', refDate, new Date(1900, 0, 1), {
+      start: '1900-01-01',
+      end: '2026-11-15',
+    });
+    expect(hugeBars.length).toBeLessThanOrEqual(3661);
+
+    // Extreme 56-year all-time coffee span computes peak weekday via O(1) math
+    const extremeCoffee = computeCoffeeStats({
+      coffeeCups: [
+        { id: 'old-1', date: '1970-01-01', tagId: null }, // Thursday
+        { id: 'new-1', date: '2026-11-12', tagId: null }, // Thursday
+      ],
+      periodType: 'all',
+      referenceDate: refDate,
+      startDate: new Date(1970, 0, 1),
+      endDate: refDate,
+      sanitizedCustomRange: { start: '1970-01-01', end: '2026-11-15' },
+      todayKey: '2026-11-15',
+      tags: [],
+    });
+    expect(extremeCoffee.coffeePeakMetric.hasData).toBe(true);
+    expect(extremeCoffee.coffeePeakMetric.value).toBe('Thursdays');
+  });
 });
