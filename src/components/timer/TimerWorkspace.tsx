@@ -42,11 +42,34 @@ function isKeyboardFocusedInteractiveTarget(target: EventTarget | null): boolean
   if (!interactiveEl || typeof interactiveEl.matches !== 'function') {
     return false;
   }
+  if (
+    typeof interactiveEl.getAttribute === 'function' &&
+    interactiveEl.getAttribute('aria-current') === 'page'
+  ) {
+    return false;
+  }
   try {
     return interactiveEl.matches(':focus-visible');
   } catch {
     return false;
   }
+}
+
+export function shouldBlurActiveElementForTimerShortcuts(
+  activeElement: EventTarget | null,
+  hasOpenOverlay: boolean
+): boolean {
+  if (hasOpenOverlay) return false;
+  if (!activeElement || typeof activeElement !== 'object') return false;
+  if (isEditableShortcutTarget(activeElement)) return false;
+
+  const el = activeElement as Partial<HTMLElement>;
+  const tagName = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  if (!tagName || tagName === 'BODY' || tagName === 'HTML') {
+    return false;
+  }
+
+  return typeof el.blur === 'function';
 }
 
 export function resolveTimerShortcutAction(
@@ -97,6 +120,31 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
     skipInterval,
     previousInterval,
   } = useTimer();
+
+  // Clear stale non-editable focus (e.g. sidebar logo or previously clicked buttons)
+  // when entering the Timer view or switching browser tabs so Space works immediately.
+  useEffect(() => {
+    if (!isActiveView) return;
+
+    const clearStaleFocus = () => {
+      const hasOpenOverlay = Boolean(
+        document.querySelector('[role="dialog"], [role="listbox"]')
+      );
+      const activeElement = document.activeElement;
+      if (shouldBlurActiveElementForTimerShortcuts(activeElement, hasOpenOverlay)) {
+        (activeElement as HTMLElement).blur();
+      }
+    };
+
+    clearStaleFocus();
+
+    window.addEventListener('focus', clearStaleFocus);
+    document.addEventListener('visibilitychange', clearStaleFocus);
+    return () => {
+      window.removeEventListener('focus', clearStaleFocus);
+      document.removeEventListener('visibilitychange', clearStaleFocus);
+    };
+  }, [isActiveView]);
 
   // Keyboard shortcut listener (Space = Toggle, ArrowLeft = Back, ArrowRight = Skip, R = Reset)
   // Only active when the Timer tab is actively displayed to the user

@@ -25,8 +25,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'settings' as const, label: 'Settings', icon: Settings },
   ];
 
-  const handleNav = (view: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile') => {
+  const handleNav = (
+    view: 'timer' | 'coffee' | 'tags' | 'stats' | 'settings' | 'profile',
+    triggerEl?: HTMLButtonElement | null
+  ) => {
     setCurrentView(view);
+    if (view === 'timer') {
+      triggerEl?.blur();
+    }
     if (onCloseMobile) onCloseMobile();
   };
 
@@ -61,8 +67,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Top: Pomodor Brand / Home Navigation with Tomato Icon */}
         <div className="flex flex-col gap-6">
           <button
-            onClick={() => handleNav('timer')}
-            className="flex items-center gap-3.5 p-1 rounded-2xl transition-colors text-left group/brand hover:bg-md-surface-container"
+            type="button"
+            onClick={(e) => handleNav('timer', e.currentTarget)}
+            aria-current={currentView === 'timer' ? 'page' : undefined}
+            className="flex items-center gap-3.5 p-1 rounded-2xl transition-colors text-left group/brand hover:bg-md-surface-container focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary"
             title="Pomodor Home"
           >
             {/* Crisp Tomato Brand Icon */}
@@ -88,10 +96,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               return (
                 <button
                   key={item.id}
+                  type="button"
                   onClick={() => handleNav(item.id)}
+                  aria-current={isActive ? 'page' : undefined}
                   title={item.label}
                   className={clsx(
-                    'flex items-center gap-3.5 min-h-[48px] lg:min-h-0 p-2.5 lg:p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left relative overflow-hidden',
+                    'flex items-center gap-3.5 min-h-[48px] lg:min-h-0 p-2.5 lg:p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left relative overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary',
                     isActive
                       ? 'bg-md-primary-container text-md-on-primary-container font-semibold shadow-xs'
                       : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
@@ -117,10 +127,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Bottom: User Profile Link */}
         <div className="border-t border-md-outline-variant/20 pt-3">
           <button
+            type="button"
             onClick={() => handleNav('profile')}
+            aria-current={isProfileActive ? 'page' : undefined}
             title="Profile"
             className={clsx(
-              'flex items-center gap-3.5 min-h-[48px] lg:min-h-0 p-2.5 lg:p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left w-full relative overflow-hidden',
+              'flex items-center gap-3.5 min-h-[48px] lg:min-h-0 p-2.5 lg:p-2 rounded-2xl text-sm font-medium transition-all duration-200 text-left w-full relative overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary',
               isProfileActive
                 ? 'bg-md-primary-container text-md-on-primary-container font-semibold shadow-xs'
                 : 'text-md-on-surface-variant hover:bg-md-surface-container hover:text-md-on-surface'
