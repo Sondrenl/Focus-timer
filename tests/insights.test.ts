@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  generatePeriodInsights,
   generateAllPeriodInsights,
   selectTieredInsight,
   INSIGHT_TIERS,
@@ -9,28 +8,58 @@ import { CompletedSession } from '../src/types/session';
 import { CoffeeCup } from '../src/types/coffee';
 import { Tag } from '../src/types/tag';
 
+function localIso(
+  year: number,
+  month1Based: number,
+  day: number,
+  hour: number,
+  minute = 0,
+  second = 0
+): string {
+  return new Date(year, month1Based - 1, day, hour, minute, second).toISOString();
+}
+
 const testTags: Tag[] = [
-  { id: 'tag-code', name: 'Coding', color: '#3B82F6', isArchived: false },
-  { id: 'tag-write', name: 'Writing', color: '#10B981', isArchived: false },
-  { id: 'tag-admin', name: 'Admin', color: '#F59E0B', isArchived: false },
+  {
+    id: 'tag-code',
+    name: 'Coding',
+    color: '#3B82F6',
+    isArchived: false,
+    createdAt: '2026-10-01T00:00:00.000Z',
+  },
+  {
+    id: 'tag-write',
+    name: 'Writing',
+    color: '#10B981',
+    isArchived: false,
+    createdAt: '2026-10-01T00:00:00.000Z',
+  },
+  {
+    id: 'tag-admin',
+    name: 'Admin',
+    color: '#F59E0B',
+    isArchived: false,
+    createdAt: '2026-10-01T00:00:00.000Z',
+  },
 ];
 
-describe('generatePeriodInsights & tiered insight selection', () => {
+describe('generateAllPeriodInsights & tiered insight selection', () => {
   it('returns empty state (Tier 3) when no sessions and no coffee cups exist', () => {
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions: [],
       coffeeCups: [],
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 0,
-      totalCoffeeCups: 0,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('empty-state');
-    expect(insights[0].tier).toBe(3);
-    expect(insights[0].headline).toContain('No activity logged');
-    expect(insights[0].description).toBe('Complete a session or log a cup of coffee to view insights');
+    expect(allInsights).toHaveLength(1);
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('empty-state');
+    expect(insight!.tier).toBe(3);
+    expect(insight!.headline).toContain('No activity logged');
+    expect(insight!.description).toBe('Complete a session or log a cup of coffee to view insights');
   });
 
   it('generates a daily summary (Tier 3) for day view when no higher-tier insights apply', () => {
@@ -40,7 +69,7 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1500,
-        completedAt: '2026-11-03T10:30:00.000Z',
+        completedAt: localIso(2026, 11, 3, 10, 30),
       },
     ];
     const coffee: CoffeeCup[] = [
@@ -48,24 +77,25 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         id: 'c1',
         date: '2026-11-03',
         tagId: 'tag-code',
-        createdAt: '2026-11-03T09:00:00.000Z',
+        createdAt: localIso(2026, 11, 3, 9, 0),
       },
     ];
 
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions,
       coffeeCups: coffee,
       tags: testTags,
       periodType: 'day',
       totalFocusSeconds: 1500,
-      totalCoffeeCups: 1,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('daily-summary');
-    expect(insights[0].tier).toBe(3);
-    expect(insights[0].headline).toContain('1 Pomodoro');
-    expect(insights[0].headline).toContain('1 cup');
+    expect(allInsights).toHaveLength(1);
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('daily-summary');
+    expect(insight!.tier).toBe(3);
+    expect(insight!.headline).toContain('1 Pomodoro');
+    expect(insight!.headline).toContain('1 cup');
   });
 
   it('detects precision peak focus window (Tier 1)', () => {
@@ -75,79 +105,119 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1800,
-        completedAt: '2026-11-03T09:30:00.000Z',
+        completedAt: localIso(2026, 11, 3, 9, 30),
       },
       {
         id: 's2',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1800,
-        completedAt: '2026-11-03T10:15:00.000Z',
+        completedAt: localIso(2026, 11, 3, 10, 15),
       },
       {
         id: 's3',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1800,
-        completedAt: '2026-11-03T11:00:00.000Z',
+        completedAt: localIso(2026, 11, 3, 11, 0),
       },
     ];
 
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions,
       coffeeCups: [],
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 5400,
-      totalCoffeeCups: 0,
+    });
+    const insight = selectTieredInsight(allInsights);
+
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('peak-focus-window');
+    expect(insight!.tier).toBe(1);
+    expect(insight!.badge).toBe('Peak Flow Window');
+    expect(insight!.headline).toContain('Your peak focus window is');
+  });
+
+  it('detects precision peak focus window wrapping across midnight (Tier 1)', () => {
+    const sessions: CompletedSession[] = [
+      {
+        id: 's1',
+        tagId: 'tag-code',
+        sessionType: 'WORK',
+        durationSeconds: 1800,
+        completedAt: localIso(2026, 11, 3, 23, 30), // 23:00-23:30
+      },
+      {
+        id: 's2',
+        tagId: 'tag-code',
+        sessionType: 'WORK',
+        durationSeconds: 1800,
+        completedAt: localIso(2026, 11, 4, 0, 15), // 23:45-00:15 (crosses midnight)
+      },
+      {
+        id: 's3',
+        tagId: 'tag-code',
+        sessionType: 'WORK',
+        durationSeconds: 1800,
+        completedAt: localIso(2026, 11, 4, 1, 30), // 01:00-01:30
+      },
+    ];
+
+    const allInsights = generateAllPeriodInsights({
+      sessions,
+      coffeeCups: [],
+      tags: testTags,
+      periodType: 'week',
+      totalFocusSeconds: 5400,
     });
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('peak-focus-window');
-    expect(insights[0].tier).toBe(1);
-    expect(insights[0].badge).toBe('Peak Flow Window');
-    expect(insights[0].headline).toContain('Your peak focus window is');
+    const peak = allInsights.find((i) => i.type === 'peak-focus-window');
+    expect(peak).toBeDefined();
+    expect(peak!.tier).toBe(1);
+    expect(peak!.headline).toContain('23:00–01:30');
+    expect(peak!.description).toContain('100%');
   });
 
   it('detects tag-coffee affinity (Tier 1) using day and tag correlations', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: 'tag-code', createdAt: '2026-11-01T00:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: 'tag-code', createdAt: '2026-11-02T00:00:00.000Z' },
-      { id: 'c3', date: '2026-11-03', tagId: 'tag-write', createdAt: '2026-11-03T00:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: 'tag-code', createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-02', tagId: 'tag-code', createdAt: localIso(2026, 11, 2, 9, 0) },
+      { id: 'c3', date: '2026-11-03', tagId: 'tag-write', createdAt: localIso(2026, 11, 3, 9, 0) },
     ];
 
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-01T10:00:00.000Z' },
-      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-02T10:00:00.000Z' },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: localIso(2026, 11, 1, 10, 0) },
+      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: localIso(2026, 11, 2, 10, 0) },
     ];
 
-    const insights = generatePeriodInsights({
+    const allInsights = generateAllPeriodInsights({
       sessions,
       coffeeCups: coffee,
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 7200,
-      totalCoffeeCups: 3,
     });
+    const insight = selectTieredInsight(allInsights);
 
-    expect(insights).toHaveLength(1);
-    expect(insights[0].type).toBe('tag-coffee-affinity');
-    expect(insights[0].tier).toBe(1);
-    expect(insights[0].badge).toBe('Caffeine Affinity');
-    expect(insights[0].headline).toContain('% of coffee was logged for Coding');
+    expect(insight).not.toBeNull();
+    expect(insight!.type).toBe('tag-coffee-affinity');
+    expect(insight!.tier).toBe(1);
+    expect(insight!.badge).toBe('Caffeine Affinity');
+    expect(insight!.headline).toContain('% of coffee was logged for Coding');
   });
 
   it('detects daily coffee ritual (Tier 3) when logged on majority of active focus days', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
-      { id: 'c3', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: localIso(2026, 11, 2, 9, 0) },
+      { id: 'c3', date: '2026-11-03', tagId: null, createdAt: localIso(2026, 11, 3, 9, 0) },
     ];
 
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-01T10:00:00.000Z' },
-      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-02T10:00:00.000Z' },
-      { id: 's3', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-03T10:00:00.000Z' },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 1, 10, 0) },
+      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 2, 10, 0) },
+      { id: 's3', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 3, 10, 0) },
     ];
 
     const allInsights = generateAllPeriodInsights({
@@ -156,7 +226,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 4500,
-      totalCoffeeCups: 3,
     });
 
     const ritualInsight = allInsights.find((i) => i.type === 'coffee-ritual');
@@ -174,21 +243,21 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1500,
-        completedAt: '2026-11-01T09:25:00.000Z',
+        completedAt: localIso(2026, 11, 1, 9, 25),
       },
       {
         id: 'd1-s2',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1200,
-        completedAt: '2026-11-01T09:47:00.000Z',
+        completedAt: localIso(2026, 11, 1, 9, 47),
       },
       {
         id: 'd1-s3',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 800,
-        completedAt: '2026-11-01T10:02:00.000Z',
+        completedAt: localIso(2026, 11, 1, 10, 2),
       },
 
       // Day 2: balanced with breaks
@@ -197,35 +266,35 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1800,
-        completedAt: '2026-11-02T09:30:00.000Z',
+        completedAt: localIso(2026, 11, 2, 9, 30),
       },
       {
         id: 'd2-b1',
         tagId: null,
         sessionType: 'SHORT_BREAK',
         durationSeconds: 300,
-        completedAt: '2026-11-02T09:35:00.000Z',
+        completedAt: localIso(2026, 11, 2, 9, 35),
       },
       {
         id: 'd2-s2',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1800,
-        completedAt: '2026-11-02T10:05:00.000Z',
+        completedAt: localIso(2026, 11, 2, 10, 5),
       },
       {
         id: 'd2-b2',
         tagId: null,
         sessionType: 'LONG_BREAK',
         durationSeconds: 900,
-        completedAt: '2026-11-02T10:20:00.000Z',
+        completedAt: localIso(2026, 11, 2, 10, 20),
       },
       {
         id: 'd2-s3',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1800,
-        completedAt: '2026-11-02T10:50:00.000Z',
+        completedAt: localIso(2026, 11, 2, 10, 50),
       },
     ];
 
@@ -238,7 +307,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: workSessions.reduce((acc, s) => acc + s.durationSeconds, 0),
-      totalCoffeeCups: 0,
     });
 
     const fatigueInsight = allInsights.find((i) => i.type === 'break-fatigue');
@@ -255,28 +323,28 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1500,
-        completedAt: '2026-11-02T10:00:00.000Z', // Monday
+        completedAt: localIso(2026, 11, 2, 10, 0), // Monday
       },
       {
         id: 's2',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 3600,
-        completedAt: '2026-11-03T10:00:00.000Z', // Tuesday
+        completedAt: localIso(2026, 11, 3, 10, 0), // Tuesday
       },
       {
         id: 's3',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 3600,
-        completedAt: '2026-11-03T15:00:00.000Z', // Tuesday (total 7200s)
+        completedAt: localIso(2026, 11, 3, 15, 0), // Tuesday (total 7200s)
       },
       {
         id: 's4',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1500,
-        completedAt: '2026-11-04T10:00:00.000Z', // Wednesday
+        completedAt: localIso(2026, 11, 4, 10, 0), // Wednesday
       },
     ];
 
@@ -286,7 +354,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 13800,
-      totalCoffeeCups: 0,
     });
 
     const powerhouse = allInsights.find((i) => i.type === 'powerhouse-day');
@@ -303,21 +370,21 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 14400,
-        completedAt: '2026-11-01T10:00:00.000Z',
+        completedAt: localIso(2026, 11, 1, 10, 0),
       },
       {
         id: 's2',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 14400,
-        completedAt: '2026-11-02T10:00:00.000Z',
+        completedAt: localIso(2026, 11, 2, 10, 0),
       },
       {
         id: 's3',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 14400,
-        completedAt: '2026-11-03T10:00:00.000Z',
+        completedAt: localIso(2026, 11, 3, 10, 0),
       },
     ];
 
@@ -327,7 +394,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 43200,
-      totalCoffeeCups: 0,
     });
 
     const streakInsight = allInsights.find((i) => i.type === 'focus-streak');
@@ -348,35 +414,35 @@ describe('generatePeriodInsights & tiered insight selection', () => {
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 3600,
-        completedAt: '2026-11-01T09:00:00.000Z',
+        completedAt: localIso(2026, 11, 1, 9, 0),
       },
       {
         id: 's2',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 3600,
-        completedAt: '2026-11-01T14:00:00.000Z',
+        completedAt: localIso(2026, 11, 1, 14, 0),
       },
       {
         id: 's3',
         tagId: 'tag-code',
         sessionType: 'WORK',
         durationSeconds: 1000,
-        completedAt: '2026-11-02T09:00:00.000Z',
+        completedAt: localIso(2026, 11, 2, 9, 0),
       },
       {
         id: 's4',
         tagId: 'tag-write',
         sessionType: 'WORK',
         durationSeconds: 1000,
-        completedAt: '2026-11-02T11:00:00.000Z',
+        completedAt: localIso(2026, 11, 2, 11, 0),
       },
       {
         id: 's5',
         tagId: 'tag-admin',
         sessionType: 'WORK',
         durationSeconds: 1000,
-        completedAt: '2026-11-02T14:00:00.000Z',
+        completedAt: localIso(2026, 11, 2, 14, 0),
       },
     ];
 
@@ -386,7 +452,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 10200,
-      totalCoffeeCups: 0,
     });
 
     const deepDive = allInsights.find((i) => i.type === 'context-switching');
@@ -398,14 +463,14 @@ describe('generatePeriodInsights & tiered insight selection', () => {
 
   it('detects coffee productivity boost (Tier 1) on coffee days vs zero-coffee days', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: localIso(2026, 11, 2, 9, 0) },
     ];
 
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: null, sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-01T10:00:00.000Z' },
-      { id: 's2', tagId: null, sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-02T10:00:00.000Z' },
-      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 1200, completedAt: '2026-11-03T10:00:00.000Z' },
+      { id: 's1', tagId: null, sessionType: 'WORK', durationSeconds: 3600, completedAt: localIso(2026, 11, 1, 10, 0) },
+      { id: 's2', tagId: null, sessionType: 'WORK', durationSeconds: 3600, completedAt: localIso(2026, 11, 2, 10, 0) },
+      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 1200, completedAt: localIso(2026, 11, 3, 10, 0) },
     ];
 
     const allInsights = generateAllPeriodInsights({
@@ -414,7 +479,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 8400,
-      totalCoffeeCups: 2,
     });
 
     const boost = allInsights.find((i) => i.type === 'coffee-productivity-boost');
@@ -426,19 +490,19 @@ describe('generatePeriodInsights & tiered insight selection', () => {
 
   it('detects coffee sweet spot (Tier 1) and selects randomly among available Tier 1 insights', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
-      { id: 'c3', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
-      { id: 'c4', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
-      { id: 'c5', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
-      { id: 'c6', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: localIso(2026, 11, 2, 9, 0) },
+      { id: 'c3', date: '2026-11-02', tagId: null, createdAt: localIso(2026, 11, 2, 11, 0) },
+      { id: 'c4', date: '2026-11-03', tagId: null, createdAt: localIso(2026, 11, 3, 9, 0) },
+      { id: 'c5', date: '2026-11-03', tagId: null, createdAt: localIso(2026, 11, 3, 11, 0) },
+      { id: 'c6', date: '2026-11-03', tagId: null, createdAt: localIso(2026, 11, 3, 14, 0) },
     ];
 
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: null, sessionType: 'WORK', durationSeconds: 4000, completedAt: '2026-11-01T10:00:00.000Z' },
-      { id: 's2', tagId: null, sessionType: 'WORK', durationSeconds: 4500, completedAt: '2026-11-02T10:00:00.000Z' },
-      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 2000, completedAt: '2026-11-03T10:00:00.000Z' },
-      { id: 's4', tagId: null, sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-04T10:00:00.000Z' },
+      { id: 's1', tagId: null, sessionType: 'WORK', durationSeconds: 4000, completedAt: localIso(2026, 11, 1, 10, 0) },
+      { id: 's2', tagId: null, sessionType: 'WORK', durationSeconds: 4500, completedAt: localIso(2026, 11, 2, 10, 0) },
+      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 2000, completedAt: localIso(2026, 11, 3, 10, 0) },
+      { id: 's4', tagId: null, sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 4, 10, 0) },
     ];
 
     const params = {
@@ -447,7 +511,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 12000,
-      totalCoffeeCups: 6,
     };
 
     const allInsights = generateAllPeriodInsights(params);
@@ -456,15 +519,15 @@ describe('generatePeriodInsights & tiered insight selection', () => {
     expect(sweetSpot?.tier).toBe(1);
     expect(sweetSpot?.badge).toBe('Caffeine Sweet Spot');
 
-    // Verify generatePeriodInsights only returns 1 insight and always picks from Tier 1
-    const firstPick = generatePeriodInsights(params, () => 0.0);
-    const lastPick = generatePeriodInsights(params, () => 0.99);
+    // Verify selectTieredInsight picks a single Tier 1 insight when Tier 1 insights exist
+    const firstPick = selectTieredInsight(allInsights, () => 0.0);
+    const lastPick = selectTieredInsight(allInsights, () => 0.99);
 
-    expect(firstPick).toHaveLength(1);
-    expect(lastPick).toHaveLength(1);
-    expect(firstPick[0].tier).toBe(1);
-    expect(lastPick[0].tier).toBe(1);
-    expect(firstPick[0].id).not.toBe(lastPick[0].id);
+    expect(firstPick).not.toBeNull();
+    expect(lastPick).not.toBeNull();
+    expect(firstPick!.tier).toBe(1);
+    expect(lastPick!.tier).toBe(1);
+    expect(firstPick!.id).not.toBe(lastPick!.id);
   });
 
   it('strictly prioritizes Tier 1 -> Tier 2 -> Tier 3 and picks randomly within the winning tier', () => {
@@ -513,12 +576,12 @@ describe('generatePeriodInsights & tiered insight selection', () => {
 
   it('does not trigger focus-streak from coffee-only days', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: '2026-11-02T00:00:00.000Z' },
-      { id: 'c3', date: '2026-11-03', tagId: null, createdAt: '2026-11-03T00:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-02', tagId: null, createdAt: localIso(2026, 11, 2, 9, 0) },
+      { id: 'c3', date: '2026-11-03', tagId: null, createdAt: localIso(2026, 11, 3, 9, 0) },
     ];
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: '2026-11-01T10:00:00.000Z' },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1500, completedAt: localIso(2026, 11, 1, 10, 0) },
     ];
 
     const allInsights = generateAllPeriodInsights({
@@ -527,7 +590,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 1500,
-      totalCoffeeCups: 3,
     });
 
     expect(allInsights.find((i) => i.type === 'focus-streak')).toBeUndefined();
@@ -536,12 +598,12 @@ describe('generatePeriodInsights & tiered insight selection', () => {
   it('does not trigger break-fatigue when comparison days had zero breaks', () => {
     const sessions: CompletedSession[] = [
       // Day 1: 3 unbroken sessions (total 3000s)
-      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: '2026-11-01T09:00:00.000Z' },
-      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: '2026-11-01T09:30:00.000Z' },
-      { id: 's3', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: '2026-11-01T10:00:00.000Z' },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 's2', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: localIso(2026, 11, 1, 9, 30) },
+      { id: 's3', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 1000, completedAt: localIso(2026, 11, 1, 10, 0) },
       // Day 2: 2 sessions, NO breaks (total 5000s)
-      { id: 's4', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 2500, completedAt: '2026-11-02T09:00:00.000Z' },
-      { id: 's5', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 2500, completedAt: '2026-11-02T14:00:00.000Z' },
+      { id: 's4', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 2500, completedAt: localIso(2026, 11, 2, 9, 0) },
+      { id: 's5', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 2500, completedAt: localIso(2026, 11, 2, 14, 0) },
     ];
 
     const allInsights = generateAllPeriodInsights({
@@ -551,7 +613,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 8000,
-      totalCoffeeCups: 0,
     });
 
     expect(allInsights.find((i) => i.type === 'break-fatigue')).toBeUndefined();
@@ -559,11 +620,11 @@ describe('generatePeriodInsights & tiered insight selection', () => {
 
   it('does not claim clean-energy when untagged coffee was logged on the same work day', () => {
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
-      { id: 'c2', date: '2026-11-01', tagId: null, createdAt: '2026-11-01T00:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: null, createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-01', tagId: null, createdAt: localIso(2026, 11, 1, 11, 0) },
     ];
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: '2026-11-01T10:00:00.000Z' },
+      { id: 's1', tagId: 'tag-code', sessionType: 'WORK', durationSeconds: 3600, completedAt: localIso(2026, 11, 1, 10, 0) },
     ];
 
     const allInsights = generateAllPeriodInsights({
@@ -572,7 +633,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 3600,
-      totalCoffeeCups: 2,
     });
 
     expect(allInsights.find((i) => i.type === 'clean-energy')).toBeUndefined();
@@ -580,13 +640,13 @@ describe('generatePeriodInsights & tiered insight selection', () => {
 
   it('normalizes deleted/unknown tagIds and does not generate Unknown Tag or Unassigned tag dominance insights', () => {
     const sessions: CompletedSession[] = [
-      { id: 's1', tagId: 'deleted-tag-id', sessionType: 'WORK', durationSeconds: 2400, completedAt: '2026-11-01T09:00:00.000Z' },
-      { id: 's2', tagId: 'deleted-tag-id', sessionType: 'WORK', durationSeconds: 2400, completedAt: '2026-11-02T10:00:00.000Z' },
-      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 2400, completedAt: '2026-11-03T11:00:00.000Z' },
+      { id: 's1', tagId: 'deleted-tag-id', sessionType: 'WORK', durationSeconds: 2400, completedAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 's2', tagId: 'deleted-tag-id', sessionType: 'WORK', durationSeconds: 2400, completedAt: localIso(2026, 11, 2, 10, 0) },
+      { id: 's3', tagId: null, sessionType: 'WORK', durationSeconds: 2400, completedAt: localIso(2026, 11, 3, 11, 0) },
     ];
     const coffee: CoffeeCup[] = [
-      { id: 'c1', date: '2026-11-01', tagId: 'deleted-tag-id', createdAt: '2026-11-01T09:00:00.000Z' },
-      { id: 'c2', date: '2026-11-02', tagId: 'deleted-tag-id', createdAt: '2026-11-02T10:00:00.000Z' },
+      { id: 'c1', date: '2026-11-01', tagId: 'deleted-tag-id', createdAt: localIso(2026, 11, 1, 9, 0) },
+      { id: 'c2', date: '2026-11-02', tagId: 'deleted-tag-id', createdAt: localIso(2026, 11, 2, 10, 0) },
     ];
 
     const allInsights = generateAllPeriodInsights({
@@ -595,7 +655,6 @@ describe('generatePeriodInsights & tiered insight selection', () => {
       tags: testTags,
       periodType: 'week',
       totalFocusSeconds: 7200,
-      totalCoffeeCups: 2,
     });
 
     expect(allInsights.find((i) => i.type === 'tag-dominance')).toBeUndefined();
@@ -607,5 +666,3 @@ describe('generatePeriodInsights & tiered insight selection', () => {
     });
   });
 });
-
-

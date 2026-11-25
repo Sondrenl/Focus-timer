@@ -1,10 +1,22 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { requireUser, getAuthenticatedUser, DEFAULT_TAGS } from "./authHelper";
+import { mutation, internalMutation, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { requireUser, DEFAULT_TAGS } from "./authHelper";
+import { assertValidTagId } from "./timerHelpers";
 
 const HEX_COLOR_REGEX = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 export const MAX_TAGS_PER_USER = 100;
 export const MAX_TAG_NAME_LENGTH = 50;
+
+const TAG_CLEANUP_BATCH_SIZE = 500;
+const RESET_CONTINUATION_PAGE_SIZE = 1000;
+const DEFAULT_TAG_ID_SET = new Set(DEFAULT_TAGS.map((t) => t.id));
+
+const resetCleanupStageValidator = v.union(
+  v.literal("sessions"),
+  v.literal("coffee_cups")
+);
 
 export function sanitizeTagColor(color: string): string {
   const trimmed = color.trim();
@@ -22,14 +34,35 @@ export function validateTagName(name: string): string {
   return trimmed;
 }
 
-export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getAuthenticatedUser(ctx);
-    if (!user) return DEFAULT_TAGS;
-    return user.tags ?? DEFAULT_TAGS;
-  },
-});
+async function clearRemovedTagBatch(
+  ctx: MutationCtx,
+  params: {
+    userId: Id<"users">;
+    tagId: string;
+  }
+): Promise<{ hasMore: boolean }> {
+  const sessionsWithTag = await ctx.db
+    .query("sessions")
+    .withIndex("by_user_tag", (q) => q.eq("userId", params.userId).eq("tagId", params.tagId))
+    .take(TAG_CLEANUP_BATCH_SIZE);
+  for (const s of sessionsWithTag) {
+    await ctx.db.patch(s._id, { tagId: undefined });
+  }
+
+  const cupsWithTag = await ctx.db
+    .query("coffee_cups")
+    .withIndex("by_user_tag", (q) => q.eq("userId", params.userId).eq("tagId", params.tagId))
+    .take(TAG_CLEANUP_BATCH_SIZE);
+  for (const c of cupsWithTag) {
+    await ctx.db.patch(c._id, { tagId: undefined });
+  }
+
+  const hasMore =
+    sessionsWithTag.length === TAG_CLEANUP_BATCH_SIZE ||
+    cupsWithTag.length === TAG_CLEANUP_BATCH_SIZE;
+
+  return { hasMore };
+}
 
 export const create = mutation({
   args: {
@@ -39,8 +72,8 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
-    if (args.id !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
-      throw new Error("Invalid tag id format.");
+    if (args.id !== undefined) {
+      assertValidTagId(args.id, "Invalid tag id format.", true);
     }
     const now = new Date().toISOString();
     const sanitizedName = validateTagName(args.name);
@@ -79,9 +112,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
-      throw new Error("Invalid tag id format.");
-    }
+    assertValidTagId(args.id, "Invalid tag id format.", true);
     const now = new Date().toISOString();
     const currentTags = user.tags ?? DEFAULT_TAGS;
 
@@ -129,9 +160,7 @@ export const remove = mutation({
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.id)) {
-      throw new Error("Invalid tag id format.");
-    }
+    assertValidTagId(args.id, "Invalid tag id format.", true);
     const currentTags = user.tags ?? DEFAULT_TAGS;
     const filtered = currentTags.filter((t) => t.id !== args.id);
 
@@ -141,50 +170,55 @@ export const remove = mutation({
       });
     }
 
-    // Clear orphaned tagId references in sessions, coffee_cups, active_timers, and session_attempts using indexes
-    const sessionsWithTag = await ctx.db
-      .query("sessions")
-      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
-      .take(4096);
-    for (const s of sessionsWithTag) {
-      await ctx.db.patch(s._id, { tagId: undefined });
-    }
-
-    const cupsWithTag = await ctx.db
-      .query("coffee_cups")
-      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
-      .take(4096);
-    for (const c of cupsWithTag) {
-      await ctx.db.patch(c._id, { tagId: undefined });
-    }
-
     const activeTimer = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .unique();
+      .first();
     if (activeTimer && activeTimer.tagId === args.id) {
-      await ctx.db.patch(activeTimer._id, { tagId: undefined });
+      await ctx.db.patch(activeTimer._id, { tagId: undefined, updatedAtMs: Date.now() });
     }
 
-    const attemptsWithTag = await ctx.db
-      .query("session_attempts")
-      .withIndex("by_user_tag", (q) => q.eq("userId", user._id).eq("tagId", args.id))
-      .take(4096);
-    for (const a of attemptsWithTag) {
-      await ctx.db.patch(a._id, { tagId: undefined });
-    }
+    const batchResult = await clearRemovedTagBatch(ctx, {
+      userId: user._id,
+      tagId: args.id,
+    });
 
-    const attemptsWithInitialTag = await ctx.db
-      .query("session_attempts")
-      .withIndex("by_user_initial_tag", (q) =>
-        q.eq("userId", user._id).eq("initialTagId", args.id)
-      )
-      .take(4096);
-    for (const a of attemptsWithInitialTag) {
-      await ctx.db.patch(a._id, { initialTagId: undefined });
+    if (batchResult.hasMore) {
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupRemovedTagBatch, {
+        userId: user._id,
+        tagId: args.id,
+      });
     }
 
     return true;
+  },
+});
+
+export const cleanupRemovedTagBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    tagId: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || (user.tags ?? DEFAULT_TAGS).some((t) => t.id === args.tagId)) {
+      return null;
+    }
+
+    const batchResult = await clearRemovedTagBatch(ctx, {
+      userId: args.userId,
+      tagId: args.tagId,
+    });
+
+    if (batchResult.hasMore) {
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupRemovedTagBatch, {
+        userId: args.userId,
+        tagId: args.tagId,
+      });
+    }
+
+    return null;
   },
 });
 
@@ -202,7 +236,6 @@ export const resetToDefaults = mutation({
   ),
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    const defaultTagIds = new Set(DEFAULT_TAGS.map((t) => t.id));
 
     await ctx.db.patch(user._id, {
       tags: DEFAULT_TAGS,
@@ -211,9 +244,10 @@ export const resetToDefaults = mutation({
     const userSessions = await ctx.db
       .query("sessions")
       .withIndex("by_user_completed", (q) => q.eq("userId", user._id))
-      .take(4096);
+      .order("desc")
+      .take(TAG_CLEANUP_BATCH_SIZE);
     for (const s of userSessions) {
-      if (s.tagId && !defaultTagIds.has(s.tagId)) {
+      if (s.tagId && !DEFAULT_TAG_ID_SET.has(s.tagId)) {
         await ctx.db.patch(s._id, { tagId: undefined });
       }
     }
@@ -221,9 +255,10 @@ export const resetToDefaults = mutation({
     const userCups = await ctx.db
       .query("coffee_cups")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
-      .take(4096);
+      .order("desc")
+      .take(TAG_CLEANUP_BATCH_SIZE);
     for (const c of userCups) {
-      if (c.tagId && !defaultTagIds.has(c.tagId)) {
+      if (c.tagId && !DEFAULT_TAG_ID_SET.has(c.tagId)) {
         await ctx.db.patch(c._id, { tagId: undefined });
       }
     }
@@ -231,26 +266,91 @@ export const resetToDefaults = mutation({
     const activeTimer = await ctx.db
       .query("active_timers")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .unique();
-    if (activeTimer && activeTimer.tagId && !defaultTagIds.has(activeTimer.tagId)) {
-      await ctx.db.patch(activeTimer._id, { tagId: undefined });
+      .first();
+    if (activeTimer && activeTimer.tagId && !DEFAULT_TAG_ID_SET.has(activeTimer.tagId)) {
+      await ctx.db.patch(activeTimer._id, { tagId: undefined, updatedAtMs: Date.now() });
     }
 
-    const attempts = await ctx.db
-      .query("session_attempts")
-      .withIndex("by_user_ended", (q) => q.eq("userId", user._id))
-      .take(4096);
-    for (const a of attempts) {
-      const clearTag = Boolean(a.tagId && !defaultTagIds.has(a.tagId));
-      const clearInitialTag = Boolean(a.initialTagId && !defaultTagIds.has(a.initialTagId));
-      if (clearTag || clearInitialTag) {
-        await ctx.db.patch(a._id, {
-          ...(clearTag ? { tagId: undefined } : {}),
-          ...(clearInitialTag ? { initialTagId: undefined } : {}),
-        });
-      }
+    const hitBatchLimit =
+      userSessions.length === TAG_CLEANUP_BATCH_SIZE ||
+      userCups.length === TAG_CLEANUP_BATCH_SIZE;
+
+    if (hitBatchLimit) {
+      const initialStage =
+        userSessions.length === TAG_CLEANUP_BATCH_SIZE ? "sessions" : "coffee_cups";
+
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+        userId: user._id,
+        stage: initialStage,
+        cursor: null,
+      });
     }
 
     return DEFAULT_TAGS;
+  },
+});
+
+export const cleanupResetTagsBatch = internalMutation({
+  args: {
+    userId: v.id("users"),
+    stage: resetCleanupStageValidator,
+    cursor: v.union(v.string(), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    const validTagIdSet = new Set((user.tags ?? DEFAULT_TAGS).map((t) => t.id));
+
+    if (args.stage === "sessions") {
+      const page = await ctx.db
+        .query("sessions")
+        .withIndex("by_user_completed", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
+
+      for (const s of page.page) {
+        if (s.tagId && !validTagIdSet.has(s.tagId)) {
+          await ctx.db.patch(s._id, { tagId: undefined });
+        }
+      }
+
+      if (!page.isDone) {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "sessions",
+          cursor: page.continueCursor,
+        });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+          userId: args.userId,
+          stage: "coffee_cups",
+          cursor: null,
+        });
+      }
+      return null;
+    }
+
+    const page = await ctx.db
+      .query("coffee_cups")
+      .withIndex("by_user_date", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .paginate({ numItems: RESET_CONTINUATION_PAGE_SIZE, cursor: args.cursor });
+
+    for (const c of page.page) {
+      if (c.tagId && !validTagIdSet.has(c.tagId)) {
+        await ctx.db.patch(c._id, { tagId: undefined });
+      }
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.tags.cleanupResetTagsBatch, {
+        userId: args.userId,
+        stage: "coffee_cups",
+        cursor: page.continueCursor,
+      });
+    }
+
+    return null;
   },
 });

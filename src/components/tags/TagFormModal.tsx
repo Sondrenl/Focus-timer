@@ -3,7 +3,7 @@ import { Modal } from '../ui/Modal';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Tag } from '../../types/tag';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { sanitizeHexColor } from '../../utils/colors';
 
 // Curated pastel Material Design 3 palette
@@ -33,7 +33,7 @@ export const TagFormModal: React.FC<TagFormModalProps> = ({
   tagToEdit,
   onTagSaved,
 }) => {
-  const { createTag, updateTag } = useApp();
+  const { createTag, updateTag } = useData();
   const [name, setName] = useState('');
   const [color, setColor] = useState(PASTEL_PALETTE[0]);
   const [error, setError] = useState('');

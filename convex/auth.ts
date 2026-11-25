@@ -16,10 +16,11 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
     ConvexCredentials({
       id: "google-id-token",
       authorize: async (credentials, ctx) => {
-        const token = credentials.token as string | undefined;
-        if (!token) {
+        const rawToken = credentials.token;
+        if (typeof rawToken !== "string" || !rawToken.trim()) {
           throw new Error("Missing Google ID token");
         }
+        const token = rawToken.trim();
 
         // Verify the Google token cryptographically with Google's public JWKS
         const { payload } = await jwtVerify(token, GOOGLE_JWKS, {
@@ -27,20 +28,22 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           audience: GOOGLE_CLIENT_ID,
         });
 
-        const email = payload.email as string | undefined;
-        const sub = payload.sub as string | undefined;
-        const name =
-          (payload.name as string | undefined) ||
-          email?.split("@")[0] ||
-          "Focus Practitioner";
-        const picture = typeof payload.picture === "string" && payload.picture.startsWith("https://")
-          ? payload.picture
-          : undefined;
+        const email =
+          typeof payload.email === "string" ? payload.email.trim().toLowerCase() : undefined;
+        const sub = typeof payload.sub === "string" ? payload.sub.trim() : undefined;
+        const rawName = typeof payload.name === "string" ? payload.name.trim() : "";
+        const name = (rawName || email?.split("@")[0] || "Focus Practitioner").slice(0, 100);
+        const picture =
+          typeof payload.picture === "string" &&
+          payload.picture.startsWith("https://") &&
+          payload.picture.length <= 2048
+            ? payload.picture
+            : undefined;
 
         if (!email || !sub) {
           throw new Error("Invalid token payload: missing email or sub");
         }
-        if (!payload.email_verified) {
+        if (payload.email_verified !== true) {
           throw new Error("Invalid token payload: email is not verified");
         }
 

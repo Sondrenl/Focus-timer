@@ -1,69 +1,16 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 1.0.5
-// Handles Web Push, background, Home Screen, lock-screen, and smartwatch-friendly notifications
+// Version: 2.1.0
+// Native Web Push fallback (for browsers without Declarative Web Push),
+// visible-client silence coordination, pushsubscriptionchange recovery, and safe notificationclick focus
 
-const STALE_ALERT_MAX_AGE_MS = 60 * 1000;
-const RECENT_NOTIFIED_LIMIT = 20;
-
-let scheduledTimerId = null;
-let scheduledResolve = null;
-const notifiedSessionIds = [];
-
-function hasNotifiedSession(sessionId) {
-  if (!sessionId) return false;
-  return notifiedSessionIds.includes(sessionId);
-}
-
-function recordNotifiedSession(sessionId) {
-  if (!sessionId) return;
-  const idx = notifiedSessionIds.indexOf(sessionId);
-  if (idx !== -1) {
-    notifiedSessionIds.splice(idx, 1);
-  }
-  notifiedSessionIds.push(sessionId);
-  if (notifiedSessionIds.length > RECENT_NOTIFIED_LIMIT) {
-    notifiedSessionIds.shift();
-  }
-}
-
-function isMobileUA(hint) {
-  if (typeof hint === 'boolean') return hint;
-  try {
-    const ua = self.navigator && self.navigator.userAgent ? self.navigator.userAgent : '';
-    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
-  } catch {
-    return false;
-  }
-}
-
-function isPureSafariBrowser() {
-  try {
-    const ua = self.navigator && self.navigator.userAgent ? self.navigator.userAgent : '';
-    return /AppleWebKit/i.test(ua) && !/Chrome|CriOS|FxiOS|Edg|EdgiOS|OPR|Android/i.test(ua);
-  } catch {
-    return false;
-  }
-}
-
-function getNotificationTag(sessionId, allowImmediateRepeat) {
-  if (allowImmediateRepeat) {
-    return 'pomodor-test-' + Date.now();
-  }
-  if (sessionId) {
-    return 'pomodor-session-' + sessionId;
-  }
-  return 'pomodor-alert-' + Date.now();
-}
-
-self.addEventListener('install', () => {
-  self.skipWaiting();
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     Promise.all([
       self.clients.claim(),
-      // Safely clear any legacy or obsolete CacheStorage entries on activation
       (async () => {
         if (typeof caches !== 'undefined') {
           try {
@@ -78,34 +25,47 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-function clearExistingSchedule() {
-  if (scheduledTimerId) {
-    clearTimeout(scheduledTimerId);
-    scheduledTimerId = null;
-  }
-  if (scheduledResolve) {
-    const resolve = scheduledResolve;
-    scheduledResolve = null;
-    resolve();
-  }
-}
-
-async function closeAllExistingNotifications() {
+function resolveSameOriginUrl(rawUrl) {
+  const fallback = new URL('/', self.location.origin).href;
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) return fallback;
   try {
-    const existing = await self.registration.getNotifications();
-    for (const notif of existing) {
-      notif.close();
+    const parsed = new URL(rawUrl.trim(), self.location.origin);
+    if (parsed.origin === self.location.origin) {
+      return parsed.href;
     }
   } catch {
-    // Ignore getNotifications errors
+    // Fall back to app root
   }
+  return fallback;
 }
 
-async function closeOlderNotifications(keepTag) {
+async function hasAnyVisibleClient() {
+  try {
+    const clientList = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true,
+    });
+    for (const client of clientList) {
+      if (client.visibilityState === 'visible') {
+        return true;
+      }
+    }
+  } catch {
+    // Ignore matchAll errors
+  }
+  return false;
+}
+
+async function closeOlderSessionNotifications(keepTag) {
+  if (typeof self.registration.getNotifications !== 'function') return;
   try {
     const existing = await self.registration.getNotifications();
     for (const notif of existing) {
-      if (notif.tag !== keepTag) {
+      if (
+        notif.tag &&
+        notif.tag !== keepTag &&
+        notif.tag.startsWith('pomodor-session-')
+      ) {
         notif.close();
       }
     }
@@ -114,173 +74,77 @@ async function closeOlderNotifications(keepTag) {
   }
 }
 
-/**
- * Checks whether any app window on this device is currently open and visible.
- */
-async function hasAnyVisibleClient() {
-  try {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const client of clients) {
-      if (client.visibilityState === 'visible') {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-async function showTimerNotification(title, body, sessionId, allowImmediateRepeat = false, extra = {}) {
-  const notifTag = getNotificationTag(sessionId, allowImmediateRepeat);
-  const silent = Boolean(extra.silent);
-
-  if (!allowImmediateRepeat && sessionId) {
-    if (hasNotifiedSession(sessionId) && !extra.forceRequiredForSafari) {
-      return;
-    }
-    try {
-      const existingWithTag = await self.registration.getNotifications({ tag: notifTag });
-      if (existingWithTag.length > 0 && !extra.forceRequiredForSafari) {
-        recordNotifiedSession(sessionId);
-        return;
-      }
-    } catch {
-      // Ignore getNotifications errors
-    }
-    recordNotifiedSession(sessionId);
-  }
-
-  // Close older notifications BEFORE posting the new one so Android's wearable bridge
-  // never sees a post-close race condition that suppresses watch delivery.
-  await closeOlderNotifications(notifTag);
-
-  const mobile = isMobileUA(extra.isMobile);
-  const options = {
-    body,
-    icon: '/icon-192.png',
-    badge: '/badge-72.png',
-    tag: notifTag,
-    timestamp: Date.now(),
-    renotify: !silent,
-    silent,
-  };
-
-  if (!silent) {
-    options.vibrate = [250, 100, 250];
-  }
-  if (!mobile) {
-    options.requireInteraction = true;
-  }
-
-  await self.registration.showNotification(title, options);
-}
-
-self.addEventListener('message', (event) => {
-  const data = event.data;
-  if (!data || !data.type) return;
-
-  if (data.type === 'SHOW_NOTIFICATION') {
-    clearExistingSchedule();
-    event.waitUntil(
-      showTimerNotification(
-        data.title,
-        data.body,
-        data.sessionId || null,
-        true, // Always allow explicit SHOW_NOTIFICATION requests from the client
-        { isMobile: data.isMobile }
-      )
-    );
-  } else if (data.type === 'SCHEDULE_TIMER_NOTIFICATION') {
-    clearExistingSchedule();
-    const targetEndTime = Number(data.targetEndTime) || 0;
-    const nowMs = Date.now();
-    const delayMs = Math.max(0, targetEndTime - nowMs);
-    const sessionId = data.sessionId || null;
-    const isMobileDevice = Boolean(data.isMobile);
-
-    // Do not fire stale catch-up notifications if targetEndTime already passed >60s ago
-    if (targetEndTime > 0 && nowMs - targetEndTime > STALE_ALERT_MAX_AGE_MS) {
-      return;
-    }
-
-    if (delayMs > 0 && delayMs < 8 * 60 * 60 * 1000) {
-      const waitPromise = new Promise((resolve) => {
-        scheduledResolve = resolve;
-        scheduledTimerId = setTimeout(async () => {
-          scheduledTimerId = null;
-          scheduledResolve = null;
-
-          try {
-            // Abort stale timer callbacks that only woke up late due to OS Doze throttling
-            if (targetEndTime > 0 && Date.now() - targetEndTime > STALE_ALERT_MAX_AGE_MS) {
-              return;
-            }
-            const visible = await hasAnyVisibleClient();
-            if (!visible) {
-              await showTimerNotification(data.title, data.body, sessionId, false, {
-                isMobile: isMobileDevice,
-              });
-            }
-          } catch {
-            if (!(targetEndTime > 0 && Date.now() - targetEndTime > STALE_ALERT_MAX_AGE_MS)) {
-              await showTimerNotification(data.title, data.body, sessionId, false, {
-                isMobile: isMobileDevice,
-              });
-            }
-          } finally {
-            resolve();
-          }
-        }, delayMs);
-      });
-      event.waitUntil(waitPromise);
-    } else if (delayMs === 0) {
-      event.waitUntil(
-        hasAnyVisibleClient().then((visible) => {
-          if (!visible) {
-            return showTimerNotification(data.title, data.body, sessionId, false, {
-              isMobile: isMobileDevice,
-            });
-          }
-        })
-      );
-    }
-  } else if (data.type === 'MARK_SESSION_NOTIFIED') {
-    clearExistingSchedule();
-    if (data.sessionId) {
-      recordNotifiedSession(data.sessionId);
-    }
-  } else if (data.type === 'CANCEL_TIMER_NOTIFICATION') {
-    clearExistingSchedule();
-  } else if (data.type === 'CLEAR_NOTIFICATIONS') {
-    event.waitUntil(closeAllExistingNotifications());
-  }
-});
-
 self.addEventListener('push', (event) => {
   let title = 'Pomodor — Focus session complete';
   let body = 'Your timer session has ended.';
-  let sessionId = null;
-  let isTest = false;
-  let isMobileHint;
+  let tag = 'pomodor-alert';
+  let silent = false;
+  let icon = '/icon-192.png';
+  let badge = '/badge-72.png';
+  let navigate = '/';
+  let timestamp;
+  let hasExplicitTag = false;
 
-  if (event.data) {
+  if (event.notification && typeof event.notification === 'object') {
+    const notif = event.notification;
+    if (typeof notif.title === 'string' && notif.title.trim()) {
+      title = notif.title.trim().slice(0, 100);
+    }
+    if (typeof notif.body === 'string' && notif.body.trim()) {
+      body = notif.body.trim().slice(0, 250);
+    }
+    if (typeof notif.tag === 'string' && notif.tag.trim()) {
+      tag = notif.tag.trim().slice(0, 128);
+      hasExplicitTag = true;
+    }
+    if (typeof notif.silent === 'boolean') {
+      silent = notif.silent;
+    }
+    if (typeof notif.icon === 'string' && notif.icon.trim()) {
+      icon = notif.icon.trim();
+    }
+    if (typeof notif.badge === 'string' && notif.badge.trim()) {
+      badge = notif.badge.trim();
+    }
+    if (typeof notif.navigate === 'string' && notif.navigate.trim()) {
+      navigate = notif.navigate.trim();
+    }
+    if (typeof notif.timestamp === 'number' && Number.isFinite(notif.timestamp)) {
+      timestamp = Math.round(notif.timestamp);
+    }
+  } else if (event.data) {
     try {
       const json = event.data.json();
-      if (typeof json.title === 'string' && json.title.trim()) {
-        title = json.title.trim().slice(0, 100);
+      // Support both Declarative Web Push ({ web_push: 8030, notification: {...} }) and flat payloads
+      const notif =
+        json && typeof json.notification === 'object' && json.notification !== null
+          ? json.notification
+          : json;
+
+      if (typeof notif.title === 'string' && notif.title.trim()) {
+        title = notif.title.trim().slice(0, 100);
       }
-      if (typeof json.body === 'string' && json.body.trim()) {
-        body = json.body.trim().slice(0, 250);
+      if (typeof notif.body === 'string' && notif.body.trim()) {
+        body = notif.body.trim().slice(0, 250);
       }
-      if (typeof json.sessionId === 'string' && json.sessionId.trim()) {
-        sessionId = json.sessionId.trim().slice(0, 128);
+      if (typeof notif.tag === 'string' && notif.tag.trim()) {
+        tag = notif.tag.trim().slice(0, 128);
+        hasExplicitTag = true;
       }
-      if (typeof json.isTest === 'boolean') {
-        isTest = json.isTest;
+      if (typeof notif.silent === 'boolean') {
+        silent = notif.silent;
       }
-      if (typeof json.isMobile === 'boolean') {
-        isMobileHint = json.isMobile;
+      if (typeof notif.icon === 'string' && notif.icon.trim()) {
+        icon = notif.icon.trim();
+      }
+      if (typeof notif.badge === 'string' && notif.badge.trim()) {
+        badge = notif.badge.trim();
+      }
+      if (typeof notif.navigate === 'string' && notif.navigate.trim()) {
+        navigate = notif.navigate.trim();
+      }
+      if (typeof notif.timestamp === 'number' && Number.isFinite(notif.timestamp)) {
+        timestamp = Math.round(notif.timestamp);
       }
     } catch {
       const text = event.data.text();
@@ -290,47 +154,67 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  const safeNavigate = resolveSameOriginUrl(navigate);
+  const isTestAlert = tag.startsWith('pomodor-test-');
+
   event.waitUntil(
     (async () => {
-      clearExistingSchedule();
+      // When the app is actively visible on screen, the page plays the instant in-app Web Audio
+      // chime for timer completions. Keep the OS notification silent to prevent double-sound
+      // while still satisfying browser userVisibleOnly requirements.
+      const visible = !isTestAlert && (await hasAnyVisibleClient());
+      const effectiveSilent = silent || visible;
 
-      const notifTag = getNotificationTag(sessionId, isTest);
-      const visible = await hasAnyVisibleClient();
-      let alreadyDisplayed = false;
+      if (tag.startsWith('pomodor-session-')) {
+        await closeOlderSessionNotifications(tag);
+      }
 
-      if (!isTest && sessionId) {
-        if (hasNotifiedSession(sessionId)) {
-          alreadyDisplayed = true;
-        } else {
-          try {
-            const existing = await self.registration.getNotifications({ tag: notifTag });
-            if (existing.length > 0) {
-              alreadyDisplayed = true;
-            }
-          } catch {
-            // Ignore
-          }
+      const options = {
+        body,
+        icon,
+        badge,
+        tag,
+        silent: effectiveSilent,
+        data: { navigate: safeNavigate },
+      };
+
+      if (typeof timestamp === 'number') {
+        options.timestamp = timestamp;
+      }
+      if (!hasExplicitTag && !effectiveSilent) {
+        options.renotify = true;
+      }
+
+      await self.registration.showNotification(title, options);
+    })()
+  );
+});
+
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const appServerKey = event.oldSubscription?.options?.applicationServerKey;
+        if (appServerKey && self.registration.pushManager) {
+          await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: appServerKey,
+          });
         }
+      } catch {
+        // Ignore silent re-subscribe errors; open clients will resync with Convex
       }
 
-      if (!alreadyDisplayed) {
-        await showTimerNotification(title, body, sessionId, isTest, {
-          isMobile: isMobileHint,
-          silent: false,
+      try {
+        const clientList = await self.clients.matchAll({
+          type: 'window',
+          includeUncontrolled: true,
         });
-        return;
-      }
-
-      // If a notification was already shown for this session on-device:
-      // - Chrome/Firefox allow skipping showNotification when a visible client is open.
-      // - Pure Safari / iOS WebKit strictly enforces userVisibleOnly and can revoke subscriptions
-      //   after repeated silent pushes, so update cleanly with silent: true, renotify: false.
-      if (!visible || isPureSafariBrowser()) {
-        await showTimerNotification(title, body, sessionId, isTest, {
-          isMobile: isMobileHint,
-          silent: true,
-          forceRequiredForSafari: true,
-        });
+        for (const client of clientList) {
+          client.postMessage({ type: 'PUSH_SUBSCRIPTION_CHANGED' });
+        }
+      } catch {
+        // Ignore broadcast errors
       }
     })()
   );
@@ -338,18 +222,23 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const targetUrl = resolveSameOriginUrl(
+    event.notification.data && typeof event.notification.data.navigate === 'string'
+      ? event.notification.data.navigate
+      : '/'
+  );
+
   event.waitUntil(
-    closeAllExistingNotifications().then(() =>
-      self.clients.matchAll({ type: 'window', includeUncontrolled: false }).then((clientList) => {
-        for (const client of clientList) {
-          if (client.url.startsWith(self.location.origin) && 'focus' in client) {
-            return client.focus();
-          }
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+          return client.focus();
         }
-        if (self.clients.openWindow) {
-          return self.clients.openWindow(new URL('/', self.location.origin).href);
-        }
-      })
-    )
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
+    })
   );
 });
+

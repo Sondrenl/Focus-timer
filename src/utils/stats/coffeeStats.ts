@@ -135,7 +135,6 @@ export function computeCoffeePeakMetric(
   todayKey: string,
   tags: Tag[]
 ): CoffeePeakMetric {
-  const now = new Date(`${todayKey}T12:00:00`);
   const tagMap = new Map<string, Tag>();
   tags.forEach((t) => tagMap.set(t.id, t));
 
@@ -164,21 +163,33 @@ export function computeCoffeePeakMetric(
     }
 
     const sortedDates = Array.from(dayCupCounts.keys()).sort();
-    const earliestDate = new Date(`${sortedDates[0]}T00:00:00.000`);
-    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const [eY, eM, eD] = sortedDates[0].split('-').map(Number);
+    const [lY, lM, lD] = sortedDates[sortedDates.length - 1].split('-').map(Number);
+    const [tY, tM, tD] = todayKey.split('-').map(Number);
+    const earliestUtc = Date.UTC(eY, eM - 1, eD);
+    const latestUtc = Date.UTC(lY, lM - 1, lD);
+    const todayUtc = Date.UTC(tY, tM - 1, tD);
+    const effectiveEndUtc = Math.max(latestUtc, todayUtc);
 
     const weekdayOccurrences = new Array(7).fill(0);
     const weekdayTotalCups = new Array(7).fill(0);
 
-    const cur = new Date(earliestDate.getTime());
-    while (cur <= todayDate) {
-      weekdayOccurrences[cur.getDay()] += 1;
-      cur.setDate(cur.getDate() + 1);
+    if (Number.isFinite(earliestUtc) && Number.isFinite(effectiveEndUtc) && effectiveEndUtc >= earliestUtc) {
+      const totalDays = Math.round((effectiveEndUtc - earliestUtc) / 86400000) + 1;
+      const fullWeeks = Math.floor(totalDays / 7);
+      const remainder = totalDays % 7;
+      const startWeekday = new Date(earliestUtc).getUTCDay();
+      for (let i = 0; i < 7; i++) {
+        const offset = (i - startWeekday + 7) % 7;
+        weekdayOccurrences[i] = fullWeeks + (offset < remainder ? 1 : 0);
+      }
     }
 
     dayCupCounts.forEach((count, dKey) => {
-      const d = new Date(`${dKey}T00:00:00.000`);
-      weekdayTotalCups[d.getDay()] += count;
+      const d = new Date(`${dKey}T12:00:00`);
+      if (!Number.isNaN(d.getTime())) {
+        weekdayTotalCups[d.getDay()] += count;
+      }
     });
 
     let bestWeekday = 1;
@@ -207,7 +218,7 @@ export function computeCoffeePeakMetric(
 
   if (periodType === 'week') {
     if (maxCups > 0) {
-      const d = new Date(`${maxDayKey}T00:00:00.000`);
+      const d = new Date(`${maxDayKey}T12:00:00`);
       return {
         title: 'Peak Coffee Day',
         value: WEEKDAY_NAMES[d.getDay()],
@@ -225,7 +236,7 @@ export function computeCoffeePeakMetric(
 
   if (periodType === 'month') {
     if (maxCups > 0) {
-      const d = new Date(`${maxDayKey}T00:00:00.000`);
+      const d = new Date(`${maxDayKey}T12:00:00`);
       return {
         title: 'Peak Coffee Day',
         value: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
@@ -244,7 +255,7 @@ export function computeCoffeePeakMetric(
   if (periodType === 'year') {
     const monthCupCounts = new Array(12).fill(0);
     filteredCoffee.forEach((c) => {
-      const m = new Date(`${c.date}T00:00:00.000`).getMonth();
+      const m = new Date(`${c.date}T12:00:00`).getMonth();
       monthCupCounts[m] += 1;
     });
     let maxMonthIdx = 0;
@@ -308,7 +319,7 @@ export function computeCoffeePeakMetric(
 
   // custom
   if (maxCups > 0) {
-    const d = new Date(`${maxDayKey}T00:00:00.000`);
+    const d = new Date(`${maxDayKey}T12:00:00`);
     return {
       title: 'Peak Coffee Day',
       value: `${d.getDate()} ${MONTH_NAMES[d.getMonth()].slice(0, 3)}`,
@@ -339,7 +350,6 @@ export function computeCoffeeStats<T extends StatCoffeeCup>(params: {
 }): {
   filteredCoffee: T[];
   totalCoffeeCups: number;
-  coffeeElapsedDays: number;
   coffeeDailyAverage: number;
   coffeePeakMetric: CoffeePeakMetric;
 } {
@@ -377,7 +387,6 @@ export function computeCoffeeStats<T extends StatCoffeeCup>(params: {
   return {
     filteredCoffee,
     totalCoffeeCups,
-    coffeeElapsedDays,
     coffeeDailyAverage,
     coffeePeakMetric,
   };

@@ -1,22 +1,19 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Tag, CreateTagInput, UpdateTagInput } from '../../types/tag';
+import { Tag, CreateTagInput, UpdateTagInput, DEFAULT_TAGS } from '../../types/tag';
 import { CompletedSession } from '../../types/session';
 import { CoffeeCup } from '../../types/coffee';
-import {
-  broadcastTags,
-  subscribeTags,
-  broadcastCoffeeCups,
-} from '../../services/timer/TimerBroadcast';
 import {
   tagRepository,
   sessionRepository,
   coffeeRepository,
-  telemetryTracker,
 } from '../../context/services';
 import { useAuthProfile } from '../../context/AuthProfileContext';
+import { markGuestDataModified } from '../../services/sync/offlineOutbox';
 
 interface UseTagsDataParams {
   isEffectiveAuthenticated: boolean;
+  isConvexAuthReady?: boolean;
+  isAdoptionPaused?: boolean;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
   setSessions: React.Dispatch<React.SetStateAction<CompletedSession[]>>;
   setCoffeeCups: React.Dispatch<React.SetStateAction<CoffeeCup[]>>;
@@ -24,16 +21,15 @@ interface UseTagsDataParams {
 
 export function useTagsData({
   isEffectiveAuthenticated,
+  isAdoptionPaused = false,
   convexSync,
   setSessions,
   setCoffeeCups,
 }: UseTagsDataParams) {
   const { isConvexConfigured, convexUser, mutations: convexMutations } = convexSync;
+  const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
 
-  const [tags, setTags] = useState<Tag[]>([]);
-  const tagsRef = useRef<Tag[]>(tags);
-  tagsRef.current = tags;
-
+  const [guestTags, setGuestTags] = useState<Tag[]>(DEFAULT_TAGS);
   const [activeTagId, setActiveTagIdState] = useState<string | null>(() => {
     try {
       return localStorage.getItem('active_tag_id_v1') || null;
@@ -44,13 +40,8 @@ export function useTagsData({
   const activeTagIdRef = useRef<string | null>(activeTagId);
   activeTagIdRef.current = activeTagId;
 
-  const skipNextTagTelemetryRef = useRef<boolean>(false);
-
   const setActiveTagId = useCallback(
-    (id: string | null, options?: { skipTelemetry?: boolean }) => {
-      if (id !== activeTagIdRef.current) {
-        skipNextTagTelemetryRef.current = Boolean(options?.skipTelemetry);
-      }
+    (id: string | null, _options?: { skipTelemetry?: boolean }) => {
       activeTagIdRef.current = id;
       setActiveTagIdState(id);
       try {
@@ -66,170 +57,166 @@ export function useTagsData({
     []
   );
 
-  const consumeSkipTagTelemetry = useCallback((): boolean => {
-    const shouldSkip = skipNextTagTelemetryRef.current;
-    skipNextTagTelemetryRef.current = false;
-    return shouldSkip;
-  }, []);
+  const consumeSkipTagTelemetry = useCallback((): boolean => false, []);
 
   const ensureValidActiveTag = useCallback(
     (tagList: Tag[]) => {
       const currentId = activeTagIdRef.current;
+      if (tagList.length === 0) {
+        if (currentId !== null) setActiveTagId(null);
+        return;
+      }
       if (currentId && tagList.some((t) => t.id === currentId && !t.isArchived)) {
         return;
       }
       const nextActive = tagList.find((t) => !t.isArchived);
-      setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
+      setActiveTagId(nextActive?.id ?? null);
     },
     [setActiveTagId]
   );
 
-  // Initial load of tags from local storage
+  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+
+  // Initial load of guest tags from localStorage
   useEffect(() => {
-    async function initTags() {
-      const loadedTags = await tagRepository.getAll();
-      setTags(loadedTags);
-
-      let storedTagId: string | null = null;
-      try {
-        storedTagId = localStorage.getItem('active_tag_id_v1');
-      } catch {
-        storedTagId = null;
-      }
-
-      if (storedTagId && loadedTags.some((t) => t.id === storedTagId && !t.isArchived)) {
-        setActiveTagId(storedTagId, { skipTelemetry: true });
-      } else {
-        const firstActive = loadedTags.find((t) => !t.isArchived);
-        setActiveTagId(firstActive?.id ?? null, { skipTelemetry: true });
-      }
-    }
-
-    initTags();
-  }, [setActiveTagId]);
-
-  // Reactive adoption of Convex tags
-  useEffect(() => {
-    if (!isEffectiveAuthenticated || !convexUser) return;
-    if (Array.isArray(convexUser.tags)) {
-      const nextTags = convexUser.tags as Tag[];
-      setTags((prev) => {
-        if (
-          prev.length === nextTags.length &&
-          prev.every(
-            (t, i) =>
-              t.id === nextTags[i].id &&
-              t.name === nextTags[i].name &&
-              t.color === nextTags[i].color &&
-              t.isArchived === nextTags[i].isArchived
-          )
-        ) {
-          return prev;
-        }
-        tagRepository.saveAll(nextTags);
-        return nextTags;
-      });
-      ensureValidActiveTag(nextTags);
-    }
-  }, [convexUser, isEffectiveAuthenticated, ensureValidActiveTag]);
-
-  // Multi-tab BroadcastChannel synchronization for tags
-  useEffect(() => {
-    const unsubTags = subscribeTags((incomingTags) => {
-      tagRepository.saveAll(incomingTags);
-      setTags(incomingTags);
-      ensureValidActiveTag(incomingTags);
+    tagRepository.getAll().then((loaded) => {
+      setGuestTags(loaded);
+      ensureValidActiveTag(loaded);
     });
-    return () => {
-      unsubTags();
-    };
   }, [ensureValidActiveTag]);
+
+  // Reset in-memory guest tags & activeTagId on sign-out so pre-sign-in tags never reappear
+  useEffect(() => {
+    const wasAuth = wasAuthenticatedRef.current;
+    wasAuthenticatedRef.current = isEffectiveAuthenticated;
+    if (wasAuth && !isEffectiveAuthenticated) {
+      setGuestTags(DEFAULT_TAGS);
+      setActiveTagId(DEFAULT_TAGS[0]?.id ?? null);
+    }
+  }, [isEffectiveAuthenticated, setActiveTagId]);
+
+  // When signed in, Convex user.tags is the direct source of truth.
+  const tags = useMemo<Tag[]>(() => {
+    if (isCloudMode) {
+      return Array.isArray(convexUser?.tags) ? (convexUser.tags as Tag[]) : DEFAULT_TAGS;
+    }
+    return guestTags;
+  }, [isCloudMode, convexUser?.tags, guestTags]);
+
+  useEffect(() => {
+    if (isCloudMode && !isAdoptionPaused && Array.isArray(convexUser?.tags)) {
+      ensureValidActiveTag(convexUser.tags as Tag[]);
+    }
+  }, [isCloudMode, isAdoptionPaused, convexUser?.tags, ensureValidActiveTag]);
 
   const createTag = useCallback(
     async (input: CreateTagInput): Promise<Tag> => {
-      const created = await tagRepository.create(input);
-      const updated = await tagRepository.getAll();
-      setTags(updated);
-      setActiveTagId(created.id);
-      broadcastTags(updated);
-
-      if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations
-          .createTag({
-            id: created.id,
-            name: input.name,
-            color: input.color,
-          })
-          .catch(console.warn);
+      if (isCloudMode) {
+        const created = await convexMutations.createTag({
+          name: input.name,
+          color: input.color,
+        });
+        const tag: Tag = created
+          ? (created as Tag)
+          : {
+              id: `tag-${Date.now()}`,
+              name: input.name,
+              color: input.color,
+              isArchived: false,
+              createdAt: new Date().toISOString(),
+            };
+        setActiveTagId(tag.id);
+        return tag;
       }
+
+      const created = await tagRepository.create(input);
+      markGuestDataModified();
+      const updated = await tagRepository.getAll();
+      setGuestTags(updated);
+      setActiveTagId(created.id);
       return created;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations, setActiveTagId]
+    [isCloudMode, convexMutations, setActiveTagId]
   );
 
   const updateTag = useCallback(
     async (id: string, updates: UpdateTagInput): Promise<Tag | null> => {
-      const result = await tagRepository.update(id, updates);
-      const updated = await tagRepository.getAll();
-      setTags(updated);
-      ensureValidActiveTag(updated);
-      broadcastTags(updated);
-
-      if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations
-          .updateTag({
-            id,
-            name: updates.name,
-            color: updates.color,
-            isArchived: updates.isArchived,
-          })
-          .catch(console.warn);
+      if (isCloudMode) {
+        const updated = await convexMutations.updateTag({
+          id,
+          name: updates.name,
+          color: updates.color,
+          isArchived: updates.isArchived,
+        });
+        return (updated as Tag | null) ?? null;
       }
+
+      const result = await tagRepository.update(id, updates);
+      markGuestDataModified();
+      const updated = await tagRepository.getAll();
+      setGuestTags(updated);
+      ensureValidActiveTag(updated);
       return result;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations, ensureValidActiveTag]
+    [isCloudMode, convexMutations, ensureValidActiveTag]
   );
 
   const archiveTag = useCallback(
     async (id: string): Promise<Tag | null> => {
+      if (isCloudMode) {
+        if (activeTagIdRef.current === id) {
+          const nextActive = tags.find((t) => t.id !== id && !t.isArchived);
+          setActiveTagId(nextActive?.id ?? null);
+        }
+        const updated = await convexMutations.updateTag({ id, isArchived: true });
+        return (updated as Tag | null) ?? null;
+      }
+
       const result = await tagRepository.archive(id);
+      markGuestDataModified();
       const updated = await tagRepository.getAll();
-      setTags(updated);
+      setGuestTags(updated);
       if (activeTagIdRef.current === id) {
         const nextActive = updated.find((t) => !t.isArchived);
-        setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
-      }
-      broadcastTags(updated);
-
-      if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations.updateTag({ id, isArchived: true }).catch(console.warn);
+        setActiveTagId(nextActive?.id ?? null);
       }
       return result;
     },
-    [setActiveTagId, isConvexConfigured, isEffectiveAuthenticated, convexMutations]
+    [isCloudMode, tags, setActiveTagId, convexMutations]
   );
 
   const unarchiveTag = useCallback(
     async (id: string): Promise<Tag | null> => {
+      if (isCloudMode) {
+        const updated = await convexMutations.updateTag({ id, isArchived: false });
+        return (updated as Tag | null) ?? null;
+      }
+
       const result = await tagRepository.unarchive(id);
+      markGuestDataModified();
       const updated = await tagRepository.getAll();
-      setTags(updated);
+      setGuestTags(updated);
       if (!activeTagIdRef.current) {
         ensureValidActiveTag(updated);
       }
-      broadcastTags(updated);
-
-      if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations.updateTag({ id, isArchived: false }).catch(console.warn);
-      }
       return result;
     },
-    [isConvexConfigured, isEffectiveAuthenticated, convexMutations, ensureValidActiveTag]
+    [isCloudMode, convexMutations, ensureValidActiveTag]
   );
 
   const deleteTag = useCallback(
     async (id: string): Promise<boolean> => {
+      if (isCloudMode) {
+        if (activeTagIdRef.current === id) {
+          const nextActive = tags.find((t) => t.id !== id && !t.isArchived);
+          setActiveTagId(nextActive?.id ?? null);
+        }
+        const res = await convexMutations.removeTag({ id });
+        return Boolean(res);
+      }
+
       const success = await tagRepository.delete(id);
+      markGuestDataModified();
 
       const currentSessions = await sessionRepository.getAll();
       const updatedSessions = currentSessions.map((s) =>
@@ -244,44 +231,27 @@ export function useTagsData({
       );
       await coffeeRepository.saveAll(updatedCoffee);
       setCoffeeCups(updatedCoffee);
-      broadcastCoffeeCups(updatedCoffee);
-
-      await telemetryTracker.clearTagReferences(id);
 
       const updatedTags = await tagRepository.getAll();
-      setTags(updatedTags);
+      setGuestTags(updatedTags);
       if (activeTagIdRef.current === id) {
         const nextActive = updatedTags.find((t) => !t.isArchived);
-        setActiveTagId(nextActive?.id ?? null, { skipTelemetry: true });
-      }
-      broadcastTags(updatedTags);
-
-      if (isConvexConfigured && isEffectiveAuthenticated) {
-        convexMutations.removeTag({ id }).catch(console.warn);
+        setActiveTagId(nextActive?.id ?? null);
       }
       return success;
     },
-    [
-      setActiveTagId,
-      isConvexConfigured,
-      isEffectiveAuthenticated,
-      convexMutations,
-      setSessions,
-      setCoffeeCups,
-    ]
+    [isCloudMode, tags, setActiveTagId, convexMutations, setSessions, setCoffeeCups]
   );
 
   const activeTags = useMemo(() => tags.filter((t) => !t.isArchived), [tags]);
 
   return {
     tags,
-    setTags,
-    tagsRef,
+    setTags: setGuestTags,
     activeTags,
     activeTagId,
     setActiveTagId,
     consumeSkipTagTelemetry,
-    activeTagIdRef,
     createTag,
     updateTag,
     archiveTag,

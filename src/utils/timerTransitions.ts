@@ -20,11 +20,11 @@ export interface PreviousIntervalResult {
 export function getDurationForType(type: SessionType, settings: UserSettings): number {
   switch (type) {
     case 'WORK':
-      return Math.round(settings.workDurationMinutes * 60);
+      return Math.max(1, Math.round(settings.workDurationMinutes * 60));
     case 'SHORT_BREAK':
-      return Math.round(settings.shortBreakDurationMinutes * 60);
+      return Math.max(1, Math.round(settings.shortBreakDurationMinutes * 60));
     case 'LONG_BREAK':
-      return Math.round(settings.longBreakDurationMinutes * 60);
+      return Math.max(1, Math.round(settings.longBreakDurationMinutes * 60));
   }
 }
 

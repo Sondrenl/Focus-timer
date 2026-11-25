@@ -9,6 +9,8 @@ import { CompletedSession } from '../../types/session';
 import { Tag } from '../../types/tag';
 import { formatDurationHoursMins } from '../../utils/formatters';
 import { toDateKey } from '../../utils/dates';
+import { useTodayKey } from '../../hooks/useTodayKey';
+import { getEffectiveSessionDate } from '../../utils/stats/focusStats';
 
 const AVATAR_EMOJI_OPTIONS = [
   '🍅', '⚡', '☕', '🚀', '🧠', '🔥', '🎯', '📚', '💻', '🧘', '🌱', '⭐',
@@ -32,43 +34,105 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
   isAuthenticated,
   userEmail,
 }) => {
+  const displayName = profile.displayName || 'Focus Practitioner';
+  const dailyGoalMinutes = profile.dailyGoalMinutes || 120;
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [editName, setEditName] = useState(isAuthenticated ? profile.displayName : 'Focus Practitioner');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [editName, setEditName] = useState(displayName);
   const [editEmoji, setEditEmoji] = useState(profile.avatarEmoji);
-  const [editGoalMinutes, setEditGoalMinutes] = useState(profile.dailyGoalMinutes);
+  const [editGoalInput, setEditGoalInput] = useState(String(dailyGoalMinutes));
+  const todayStr = useTodayKey();
+
+  const [initialEditValues, setInitialEditValues] = useState<{
+    displayName: string;
+    avatarEmoji: string;
+    dailyGoalMinutes: number;
+  }>({
+    displayName,
+    avatarEmoji: profile.avatarEmoji,
+    dailyGoalMinutes,
+  });
 
   const openEditModal = () => {
-    setEditName(isAuthenticated ? profile.displayName : 'Focus Practitioner');
-    setEditEmoji(profile.avatarEmoji);
-    setEditGoalMinutes(profile.dailyGoalMinutes);
+    const initialName = profile.displayName || 'Focus Practitioner';
+    const initialEmoji = profile.avatarEmoji;
+    const initialGoal = profile.dailyGoalMinutes || 120;
+    setInitialEditValues({
+      displayName: initialName,
+      avatarEmoji: initialEmoji,
+      dailyGoalMinutes: initialGoal,
+    });
+    setEditName(initialName);
+    setEditEmoji(initialEmoji);
+    setEditGoalInput(String(initialGoal));
+    setSaveError(null);
     setIsEditingProfile(true);
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     const safeDisplayName = editName.trim().slice(0, 50) || 'Focus Practitioner';
-    const parsedMinutes = Number(editGoalMinutes);
-    const safeGoal = !isNaN(parsedMinutes) ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes))) : 120;
-    await updateProfile({
-      displayName: safeDisplayName,
-      avatarEmoji: editEmoji.trim().slice(0, 10),
-      dailyGoalMinutes: safeGoal,
-    });
+    const safeEmoji = editEmoji.trim().slice(0, 32);
+    const parsedMinutes = parseInt(editGoalInput, 10);
+    const safeGoal = !Number.isNaN(parsedMinutes)
+      ? Math.max(1, Math.min(1440, Math.floor(parsedMinutes)))
+      : initialEditValues.dailyGoalMinutes;
+
+    const patch: Partial<UserProfile> = {};
+    if (safeDisplayName !== initialEditValues.displayName) {
+      patch.displayName = safeDisplayName;
+    }
+    if (safeEmoji !== initialEditValues.avatarEmoji) {
+      patch.avatarEmoji = safeEmoji;
+    }
+    if (safeGoal !== initialEditValues.dailyGoalMinutes) {
+      patch.dailyGoalMinutes = safeGoal;
+    }
+
+    setSaveError(null);
+    if (Object.keys(patch).length > 0) {
+      setIsSaving(true);
+      try {
+        await updateProfile(patch);
+      } catch (err) {
+        console.warn('[ProfileSummaryCard] Failed to save profile:', err);
+        setSaveError('Failed to save profile changes. Please try again.');
+        return;
+      } finally {
+        setIsSaving(false);
+      }
+    }
     setIsEditingProfile(false);
   };
 
-  // Total Focus Time in seconds (Work sessions only)
-  const totalFocusSeconds = sessions
-    .filter((s) => s.sessionType === 'WORK')
-    .reduce((acc, curr) => acc + curr.durationSeconds, 0);
+  const workSessions = sessions.filter((s) => s.sessionType === 'WORK');
 
-  // Today's Focus Time in minutes (local calendar date)
-  const todayStr = toDateKey(new Date());
-  const todayFocusSeconds = sessions
-    .filter((s) => s.sessionType === 'WORK' && toDateKey(s.completedAt) === todayStr)
-    .reduce((acc, curr) => acc + curr.durationSeconds, 0);
-  const todayFocusMinutes = Math.round(todayFocusSeconds / 60);
-  const goalProgressPercent = Math.min(100, Math.round((todayFocusMinutes / (profile.dailyGoalMinutes || 120)) * 100));
+  // Total Focus Time in seconds (Work sessions only)
+  const totalFocusSeconds = workSessions.reduce(
+    (acc, curr) => acc + Math.max(0, curr.durationSeconds),
+    0
+  );
+
+  // Today's Focus Time in minutes (local calendar date, matching Statistics exact-midnight attribution)
+  const todayFocusSeconds = workSessions
+    .filter((s) => {
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      return effectiveDate ? toDateKey(effectiveDate) === todayStr : false;
+    })
+    .reduce((acc, curr) => acc + Math.max(0, curr.durationSeconds), 0);
+  const todayFocusMinutes = Math.floor(todayFocusSeconds / 60);
+  const goalProgressPercent = Math.min(
+    100,
+    Math.floor((todayFocusSeconds / (dailyGoalMinutes * 60)) * 100)
+  );
+  const activeTagsCount = tags.filter((t) => !t.isArchived).length;
+  const parsedDraftGoal = parseInt(editGoalInput, 10);
+  const previewGoalMinutes =
+    !Number.isNaN(parsedDraftGoal) && parsedDraftGoal >= 1
+      ? Math.min(1440, parsedDraftGoal)
+      : dailyGoalMinutes;
 
   return (
     <>
@@ -82,7 +146,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
               ) : isAuthenticated && profile.avatarUrl && profile.avatarUrl.startsWith('https://') ? (
                 <img
                   src={profile.avatarUrl}
-                  alt={isAuthenticated ? profile.displayName : 'Focus Practitioner'}
+                  alt={displayName}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -104,7 +168,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-xl font-bold text-md-on-surface">
-                  {isAuthenticated ? profile.displayName : 'Focus Practitioner'}
+                  {displayName}
                 </h3>
                 {isAuthenticated && userEmail ? (
                   <span className="inline-flex items-center gap-1 text-xs text-md-on-surface-variant font-mono mt-0.5">
@@ -132,7 +196,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="text-md-on-surface-variant font-mono">
-                    {todayFocusMinutes}m / {profile.dailyGoalMinutes}m ({goalProgressPercent}%)
+                    {todayFocusMinutes}m / {dailyGoalMinutes}m ({goalProgressPercent}%)
                   </span>
                   <button
                     onClick={openEditModal}
@@ -167,13 +231,13 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
               </div>
               <div>
                 <span className="block font-bold text-sm text-md-on-surface">
-                  {sessions.filter((s) => s.sessionType === 'WORK').length}
+                  {workSessions.length}
                 </span>
                 Pomodoros Completed
               </div>
               <div>
                 <span className="block font-bold text-sm text-md-on-surface">
-                  {tags.length}
+                  {activeTagsCount}
                 </span>
                 Tags Created
               </div>
@@ -185,10 +249,19 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
       {/* Edit Profile Modal */}
       <Modal
         isOpen={isEditingProfile}
-        onClose={() => setIsEditingProfile(false)}
+        onClose={() => {
+          if (!isSaving) setIsEditingProfile(false);
+        }}
+        dismissible={!isSaving}
         title="Edit Profile & Goals"
       >
         <form onSubmit={handleSaveProfile} className="flex flex-col gap-5">
+          {saveError && (
+            <div className="px-3 py-2 rounded-xl bg-md-error/10 border border-md-error/25 text-xs font-medium text-md-error">
+              {saveError}
+            </div>
+          )}
+
           <div className="flex flex-col gap-2">
             <label className="text-xs font-semibold text-md-on-surface-variant">
               Display Name
@@ -197,7 +270,7 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               placeholder="Your name or handle"
-              maxLength={30}
+              maxLength={50}
             />
           </div>
 
@@ -240,23 +313,28 @@ export const ProfileSummaryCard: React.FC<ProfileSummaryCardProps> = ({
             </label>
             <Input
               type="number"
-              min={15}
+              min={1}
               max={1440}
-              step={15}
-              value={editGoalMinutes}
-              onChange={(e) => setEditGoalMinutes(parseInt(e.target.value) || 120)}
+              value={editGoalInput}
+              onChange={(e) => setEditGoalInput(e.target.value)}
             />
             <span className="text-[11px] text-md-outline">
-              Goal: {(editGoalMinutes / 60).toFixed(1)} hours per day
+              Goal: {(previewGoalMinutes / 60).toFixed(1)} hours per day
             </span>
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-md-outline-variant/20">
-            <Button type="button" variant="text" size="sm" onClick={() => setIsEditingProfile(false)}>
+            <Button
+              type="button"
+              variant="text"
+              size="sm"
+              disabled={isSaving}
+              onClick={() => setIsEditingProfile(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" variant="filled" size="sm">
-              Save Profile
+            <Button type="submit" variant="filled" size="sm" disabled={isSaving}>
+              {isSaving ? 'Saving...' : 'Save Profile'}
             </Button>
           </div>
         </form>

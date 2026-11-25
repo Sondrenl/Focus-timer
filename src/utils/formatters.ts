@@ -13,8 +13,9 @@ export function formatTime(seconds: number): string {
  */
 export function formatDurationHoursMins(totalSeconds: number): string {
   if (totalSeconds <= 0) return '0m';
-  const hours = Math.floor(totalSeconds / 3600);
-  const mins = Math.round((totalSeconds % 3600) / 60);
+  const totalMinutes = Math.max(1, Math.round(totalSeconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
 
   if (hours > 0 && mins > 0) {
     return `${hours}h ${mins}m`;
@@ -23,14 +24,6 @@ export function formatDurationHoursMins(totalSeconds: number): string {
     return `${hours}h`;
   }
   return `${mins}m`;
-}
-
-/**
- * Formats seconds to decimal hours with 1 decimal place (e.g. 4.5 hrs)
- */
-export function formatDecimalHours(totalSeconds: number): string {
-  const hours = totalSeconds / 3600;
-  return hours.toFixed(1);
 }
 
 /**

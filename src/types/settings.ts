@@ -36,4 +36,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   soundVolume: BASE_DEFAULT_SETTINGS.soundVolume,
   soundEnabled: BASE_DEFAULT_SETTINGS.soundEnabled,
   notificationsEnabled: BASE_DEFAULT_SETTINGS.notificationsEnabled,
+  keepAwake: BASE_DEFAULT_SETTINGS.keepAwake,
 };

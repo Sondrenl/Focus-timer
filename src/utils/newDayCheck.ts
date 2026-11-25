@@ -1,5 +1,4 @@
 import { toDateKey } from './dates';
-import { isSampleSessionId } from '../services/repository/SessionRepository';
 
 export const NEW_DAY_HOUR_CUTOFF = 4; // 04:00 AM local time
 export const INACTIVITY_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
@@ -22,8 +21,7 @@ export function getLogicalDayKey(date: Date | number | string): string {
 }
 
 /**
- * Extracts the latest completedAt timestamp (in ms) from an array of sessions,
- * ignoring seed / sample sessions.
+ * Extracts the latest completedAt timestamp (in ms) from an array of sessions.
  */
 export function getLastSessionCompletedAt(
   sessions: Array<{ id?: string; completedAt: string }> | null | undefined
@@ -33,7 +31,7 @@ export function getLastSessionCompletedAt(
   }
   let latest = 0;
   for (const s of sessions) {
-    if (!s || !s.completedAt || isSampleSessionId(s.id)) continue;
+    if (!s || !s.completedAt) continue;
     const t = new Date(s.completedAt).getTime();
     if (!isNaN(t) && t > latest) {
       latest = t;
@@ -48,7 +46,9 @@ export function getLastSessionCompletedAt(
 export function getLastSessionCompletedAtFromStorage(): number | null {
   if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
-    const raw = window.localStorage.getItem('sessions_v1');
+    const raw =
+      window.localStorage.getItem('pomodor:sessions_v1') ??
+      window.localStorage.getItem('sessions_v1');
     if (!raw) return null;
     const sessions = JSON.parse(raw);
     return getLastSessionCompletedAt(sessions);
@@ -107,16 +107,25 @@ export function shouldResetForNewDay({
     return false;
   }
 
-  // A new day is defined as being after 04:00
-  if (now.getHours() < NEW_DAY_HOUR_CUTOFF) {
-    return false;
-  }
-
   const currentLogicalDay = getLogicalDayKey(now);
 
   // If this logical day has already been reset, perform check once only
   if (lastResetDayKey === currentLogicalDay) {
     return false;
+  }
+
+  // Before 04:00 AM, the logical day is still yesterday.
+  // Preserve late-night sessions from the current logical day, but allow resetting
+  // if the stored reset key or last session is from an even older logical day (multi-day stale).
+  if (now.getHours() < NEW_DAY_HOUR_CUTOFF) {
+    const isMultiDayStaleFromResetKey =
+      lastResetDayKey !== null && lastResetDayKey < currentLogicalDay;
+    const isMultiDayStaleFromSession =
+      lastSessionTimeMs !== null &&
+      getLogicalDayKey(new Date(lastSessionTimeMs)) < currentLogicalDay;
+    if (!isMultiDayStaleFromResetKey && !isMultiDayStaleFromSession) {
+      return false;
+    }
   }
 
   // Must not have had any sessions in the last hour

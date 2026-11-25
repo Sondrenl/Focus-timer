@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import {
     NavigationProvider,
     useNavigation,
@@ -24,10 +24,6 @@ export type {
     DataContextValue,
 };
 
-export type AppContextValue = NavigationContextValue &
-    AuthProfileContextValue &
-    DataContextValue;
-
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
     children,
 }) => {
@@ -37,20 +33,5 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
                 <DataProvider>{children}</DataProvider>
             </AuthProfileProvider>
         </NavigationProvider>
-    );
-};
-
-export const useApp = (): AppContextValue => {
-    const navigation = useNavigation();
-    const authProfile = useAuthProfile();
-    const data = useData();
-
-    return useMemo(
-        () => ({
-            ...navigation,
-            ...authProfile,
-            ...data,
-        }),
-        [navigation, authProfile, data],
     );
 };

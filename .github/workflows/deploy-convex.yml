@@ -1,0 +1,112 @@
+name: Deploy Convex
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target Convex deployment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy Convex (Dev)
+    if: >-
+      (github.event_name == 'push' && github.ref != 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'dev')
+    runs-on: ubuntu-latest
+    environment: development
+    timeout-minutes: 10
+    concurrency:
+      group: convex-deploy-dev
+      cancel-in-progress: true
+    steps:
+      - name: Validate dev deploy key
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_DEV }}
+        run: |
+          if [ -z "$CONVEX_DEPLOY_KEY" ]; then
+            echo "::error::Missing secret CONVEX_DEPLOY_KEY_DEV. Generate a dev deploy key (Convex Dashboard -> dev deployment -> Settings -> Deploy keys, or 'npx convex deployment token create github-actions-dev --deployment dev') and add it in GitHub Repo Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [[ "$CONVEX_DEPLOY_KEY" == prod:* ]]; then
+            echo "::error::CONVEX_DEPLOY_KEY_DEV starts with 'prod:'. Refusing to deploy to production from the dev job."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Deploy to Convex dev
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_DEV }}
+        run: |
+          npx convex deploy --typecheck=enable --message "GitHub Actions (dev): ${GITHUB_REF_NAME} (${GITHUB_SHA:0:7})"
+
+  deploy-prod:
+    name: Deploy Convex (Production)
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'prod')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    concurrency:
+      group: convex-deploy-prod
+      cancel-in-progress: false
+    steps:
+      - name: Validate production deploy key
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_PROD }}
+        run: |
+          if [ -z "$CONVEX_DEPLOY_KEY" ]; then
+            echo "::error::Missing secret CONVEX_DEPLOY_KEY_PROD. Generate a production deploy key (Convex Dashboard -> prod deployment -> Settings -> Deploy keys, or 'npx convex deployment token create github-actions-prod --deployment prod') and add it in GitHub Repo Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [[ "$CONVEX_DEPLOY_KEY" != prod:* ]]; then
+            echo "::error::CONVEX_DEPLOY_KEY_PROD must be a production deploy key starting with 'prod:'."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Deploy to Convex production
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_PROD }}
+        run: |
+          npx convex deploy --typecheck=enable --message "GitHub Actions (prod): ${GITHUB_REF_NAME} (${GITHUB_SHA:0:7})"

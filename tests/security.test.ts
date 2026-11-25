@@ -163,7 +163,12 @@ describe("Security Hardening & Input Validation", () => {
       asUser.mutation(api.users.updateSettings, {
         workDurationMinutes: 500,
       })
-    ).rejects.toThrow("workDurationMinutes must be between 1 and 360.");
+    ).rejects.toThrow("workDurationMinutes must be between 0.01 and 360.");
+
+    // Fractional sub-minute duration (0.5 min = 30s) is allowed consistently with the UI
+    await asUser.mutation(api.users.updateSettings, {
+      workDurationMinutes: 0.5,
+    });
 
     await expect(
       asUser.mutation(api.users.updateSettings, {
@@ -207,12 +212,26 @@ describe("Security Hardening & Input Validation", () => {
     const t = convexTest(schema, modules);
     const { asUser } = await createAuthenticatedTestUser(t);
 
+    const makeValidPushKeys = (seed: number) => {
+      const p256Bytes = new Uint8Array(65);
+      p256Bytes[0] = 0x04;
+      p256Bytes.fill(seed, 1);
+      const authBytes = new Uint8Array(16).fill(seed + 1);
+      const toB64Url = (bytes: Uint8Array) =>
+        btoa(String.fromCharCode(...bytes))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+      return { p256dh: toB64Url(p256Bytes), auth: toB64Url(authBytes) };
+    };
+    const { p256dh: validP256dh, auth: validAuth } = makeValidPushKeys(0x11);
+
     await expect(
       asUser.mutation(api.push.register, {
         deviceId: "device-1",
         endpoint: "http://169.254.169.254/latest/meta-data/",
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       })
     ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
@@ -220,8 +239,8 @@ describe("Security Hardening & Input Validation", () => {
       asUser.mutation(api.push.register, {
         deviceId: "device-1",
         endpoint: "https://169.254.169.254/latest/meta-data/",
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       })
     ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
@@ -229,8 +248,8 @@ describe("Security Hardening & Input Validation", () => {
       asUser.mutation(api.push.register, {
         deviceId: "device-1",
         endpoint: "javascript:alert(1)",
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       })
     ).rejects.toThrow("Invalid push subscription endpoint: must be a valid HTTPS URL from an authorized push provider.");
 
@@ -238,31 +257,92 @@ describe("Security Hardening & Input Validation", () => {
     const regId = await asUser.mutation(api.push.register, {
       deviceId: "device-1",
       endpoint: "https://fcm.googleapis.com/fcm/send/sample-token",
-      p256dh: "BM6hZ/VALID=",
-      auth: "AUTHKEY==",
+      p256dh: validP256dh,
+      auth: validAuth,
     });
     expect(regId).toBeDefined();
   });
 
   it("enforces push subscription quota and prunes oldest devices when exceeding quota", async () => {
     const t = convexTest(schema, modules);
-    const { asUser } = await createAuthenticatedTestUser(t);
+    const { userId, asUser } = await createAuthenticatedTestUser(t);
+    const p256Bytes = new Uint8Array(65);
+    p256Bytes[0] = 0x04;
+    p256Bytes.fill(0x33, 1);
+    const validP256dh = btoa(String.fromCharCode(...p256Bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const validAuth = btoa(String.fromCharCode(...new Uint8Array(16).fill(0x44))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
     // Register 11 devices
     for (let i = 1; i <= 11; i++) {
       await asUser.mutation(api.push.register, {
         deviceId: `device-${i}`,
         endpoint: `https://fcm.googleapis.com/fcm/send/token-${i}`,
-        p256dh: "BM6hZ/VALID=",
-        auth: "AUTHKEY==",
+        p256dh: validP256dh,
+        auth: validAuth,
       });
     }
 
-    const subs = await asUser.query(api.push.listSubscriptions, {});
+    const subs = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_user_device", (q) => q.eq("userId", userId))
+        .collect();
+    });
     expect(subs.length).toBeLessThanOrEqual(10);
     // Device 1 should have been pruned
     expect(subs.some((s) => s.deviceId === "device-1")).toBe(false);
     expect(subs.some((s) => s.deviceId === "device-11")).toBe(true);
+  });
+
+  it("removes another user's push subscription when a different account registers the same endpoint", async () => {
+    const t = convexTest(schema, modules);
+    const { userId: userAId, asUser: asUserA } = await createAuthenticatedTestUser(t);
+    const p256Bytes = new Uint8Array(65);
+    p256Bytes[0] = 0x04;
+    p256Bytes.fill(0x55, 1);
+    const validP256dh = btoa(String.fromCharCode(...p256Bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const validAuth = btoa(String.fromCharCode(...new Uint8Array(16).fill(0x66))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+    const userBId = await t.run(async (ctx) => {
+      return await ctx.db.insert("users", {
+        tokenIdentifier: "test-provider|user-b",
+        email: "user-b@example.com",
+        displayName: "User B",
+        dailyGoalMinutes: 120,
+      });
+    });
+    const asUserB = t.withIdentity({
+      subject: `${userBId}|session-b`,
+      email: "user-b@example.com",
+      name: "User B",
+    });
+
+    const sharedEndpoint = "https://fcm.googleapis.com/fcm/send/shared-browser-endpoint";
+
+    await asUserA.mutation(api.push.register, {
+      deviceId: "shared-browser-device",
+      endpoint: sharedEndpoint,
+      p256dh: validP256dh,
+      auth: validAuth,
+    });
+
+    await asUserB.mutation(api.push.register, {
+      deviceId: "shared-browser-device",
+      endpoint: sharedEndpoint,
+      p256dh: validP256dh,
+      auth: validAuth,
+    });
+
+    const subsForEndpoint = await t.run(async (ctx) => {
+      return await ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_endpoint", (q) => q.eq("endpoint", sharedEndpoint))
+        .collect();
+    });
+
+    expect(subsForEndpoint).toHaveLength(1);
+    expect(subsForEndpoint[0].userId).toBe(userBId);
+    expect(subsForEndpoint[0].userId).not.toBe(userAId);
   });
 
   it("rejects oversized backup imports", async () => {
@@ -283,7 +363,7 @@ describe("Security Hardening & Input Validation", () => {
     ).rejects.toThrow("Cannot import more than 100 tags.");
   });
 
-  it("cleans up abandoned RUNNING timers and stale presence via cleanupStaleTimers", async () => {
+  it("cleans up abandoned RUNNING timers via cleanupStaleTimers", async () => {
     const t = convexTest(schema, modules);
     const { userId } = await createAuthenticatedTestUser(t);
 
@@ -299,13 +379,6 @@ describe("Security Hardening & Input Validation", () => {
         targetEndTime: now - 2 * 3600 * 1000,
         currentCycle: 1,
         updatedAtMs: now - 2 * 3600 * 1000,
-        peerPresence: {
-          desktopActive: true,
-          desktopVisible: true,
-          mobileActive: false,
-          mobileVisible: false,
-          lastSeenMs: now - 48 * 3600 * 1000, // 48 hours ago
-        },
       });
     });
 
@@ -321,5 +394,25 @@ describe("Security Hardening & Input Validation", () => {
 
     expect(timer?.status).toBe("IDLE");
     expect(timer?.targetEndTime).toBeUndefined();
+  });
+
+  it("guards query limits against NaN/floats and enforces integer-only profile/setting fields", async () => {
+    const t = convexTest(schema, modules);
+    const { asUser } = await createAuthenticatedTestUser(t);
+
+    // NaN and fractional limits must not crash .take()
+    expect(await asUser.query(api.sessions.list, { limit: Number.NaN })).toEqual([]);
+    expect(await asUser.query(api.sessions.list, { limit: 1.7 })).toEqual([]);
+    expect(await asUser.query(api.coffee.list, { limit: Number.NaN })).toEqual([]);
+    expect(await asUser.query(api.coffee.list, { limit: 1.7 })).toEqual([]);
+
+    // Non-integer values must be rejected for integer-only fields
+    await expect(
+      asUser.mutation(api.users.updateProfile, { dailyGoalMinutes: 120.5 })
+    ).rejects.toThrow("Daily goal minutes must be an integer.");
+
+    await expect(
+      asUser.mutation(api.users.updateSettings, { longBreakInterval: 2.5 })
+    ).rejects.toThrow("longBreakInterval must be an integer.");
   });
 });

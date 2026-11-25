@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Plus, Archive, RotateCcw, Trash2, Edit2, Tag as TagIcon } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { Tag } from '../../types/tag';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -9,7 +9,7 @@ import { clsx } from 'clsx';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
 
 export const TagManager: React.FC = () => {
-  const { tags, sessions, archiveTag, unarchiveTag, deleteTag } = useApp();
+  const { tags, sessions, archiveTag, unarchiveTag, deleteTag } = useData();
 
 
   const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
@@ -148,7 +148,11 @@ export const TagManager: React.FC = () => {
                       </button>
 
                       <button
-                        onClick={() => archiveTag(tag.id)}
+                        onClick={() => {
+                          void archiveTag(tag.id).catch((err) =>
+                            console.warn('Failed to archive tag:', err)
+                          );
+                        }}
                         className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-amber-600 hover:bg-amber-500/10 transition-colors shrink-0"
                         title="Archive Tag (Move to archived list before deleting)"
                         aria-label="Archive Tag"
@@ -159,7 +163,11 @@ export const TagManager: React.FC = () => {
                   ) : (
                     <>
                       <button
-                        onClick={() => unarchiveTag(tag.id)}
+                        onClick={() => {
+                          void unarchiveTag(tag.id).catch((err) =>
+                            console.warn('Failed to restore tag:', err)
+                          );
+                        }}
                         className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-xl text-md-on-surface-variant hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors shrink-0"
                         title="Restore Tag"
                         aria-label="Restore Tag"
@@ -206,8 +214,12 @@ export const TagManager: React.FC = () => {
             size="sm"
             className="bg-md-error text-white hover:bg-red-700"
             onClick={async () => {
-              if (deleteConfirmId) {
+              if (!deleteConfirmId) return;
+              try {
                 await deleteTag(deleteConfirmId);
+              } catch (err) {
+                console.warn('Failed to delete tag:', err);
+              } finally {
                 setDeleteConfirmId(null);
               }
             }}

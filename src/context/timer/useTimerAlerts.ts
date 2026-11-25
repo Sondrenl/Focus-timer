@@ -1,81 +1,75 @@
 import React, { useCallback, useRef } from 'react';
-import { SessionType, TimerStatus, PeerPresence } from '../../types/timer';
+import { SessionType } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
-import type { useApp } from '../AppContext';
-import { evaluateDeviceAlert } from '../../utils/arbitration';
+import { SoundService } from '../../services/audio/SoundService';
+import { NotificationService } from '../../services/notification/NotificationService';
+import { getCompletionNotificationCopy } from '../../services/notification/notificationCopy';
 import { triggerCompletionConfetti } from '../../utils/confetti';
-import { IS_MOBILE } from './timerPersistence';
 
-interface UseTimerAlertsParams {
-  statusRef: React.MutableRefObject<TimerStatus>;
-  sessionTypeRef: React.MutableRefObject<SessionType>;
-  targetEndTimeRef: React.MutableRefObject<number | null>;
+export const CROSS_TAB_ALERT_CLAIM_KEY = 'pomodor_last_alert_run_v1';
+const CROSS_TAB_RUN_CLAIM_TTL_MS = 60_000;
+const FALLBACK_DEBOUNCE_MS = 4_000;
+
+interface CrossTabAlertClaim {
+  runId: string | null;
+  ts: number;
+  audible: boolean;
+}
+
+function readCrossTabClaim(): CrossTabAlertClaim | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(CROSS_TAB_ALERT_CLAIM_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.ts === 'number' &&
+      Number.isFinite(parsed.ts)
+    ) {
+      return {
+        runId: typeof parsed.runId === 'string' ? parsed.runId : null,
+        ts: parsed.ts,
+        audible: Boolean(parsed.audible),
+      };
+    }
+  } catch {
+    // Ignore storage/parse errors
+  }
+  return null;
+}
+
+function writeCrossTabClaim(claim: CrossTabAlertClaim): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CROSS_TAB_ALERT_CLAIM_KEY, JSON.stringify(claim));
+  } catch {
+    // Ignore storage access errors (private browsing / quota)
+  }
+}
+
+export interface UseTimerAlertsParams {
   timerRunIdRef: React.MutableRefObject<string | null>;
   settingsRef: React.MutableRefObject<UserSettings>;
-  peerPresenceRef: React.MutableRefObject<PeerPresence>;
-  sound: ReturnType<typeof useApp>['sound'];
-  notifications: ReturnType<typeof useApp>['notifications'];
+  sound: SoundService;
+  notifications: NotificationService;
+  isEffectiveAuthenticatedRef?: React.MutableRefObject<boolean>;
+  isConvexConnectedRef?: React.MutableRefObject<boolean>;
+  isDevicePushRegisteredRef?: React.MutableRefObject<boolean | undefined>;
 }
 
 export const useTimerAlerts = ({
-  statusRef,
-  sessionTypeRef,
-  targetEndTimeRef,
   timerRunIdRef,
   settingsRef,
-  peerPresenceRef,
   sound,
   notifications,
+  isEffectiveAuthenticatedRef,
+  isConvexConnectedRef,
+  isDevicePushRegisteredRef,
 }: UseTimerAlertsParams) => {
   const lastAlertWallMsRef = useRef<number>(0);
   const lastAlertRunIdRef = useRef<string | null>(null);
-
-  /**
-   * Determines whether THIS device should play the completion chime and show the notification:
-   */
-  const shouldThisDeviceAlert = useCallback(
-    (type: SessionType): boolean => {
-      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-      return evaluateDeviceAlert({
-        isMobile: IS_MOBILE,
-        isVisible,
-        peer: peerPresenceRef.current,
-        type,
-      });
-    },
-    [peerPresenceRef]
-  );
-
-  const syncScheduledNotification = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    if (statusRef.current !== 'RUNNING' || !targetEndTimeRef.current) {
-      notifications.cancelScheduledNotification();
-      return;
-    }
-
-    const currentType = sessionTypeRef.current;
-    const shouldAlert = shouldThisDeviceAlert(currentType);
-    const runId = timerRunIdRef.current;
-
-    if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
-      notifications.scheduleTimerNotification(
-        targetEndTimeRef.current,
-        currentType,
-        shouldAlert,
-        runId
-      );
-    } else {
-      notifications.cancelScheduledNotification();
-    }
-  }, [
-    notifications,
-    shouldThisDeviceAlert,
-    statusRef,
-    targetEndTimeRef,
-    sessionTypeRef,
-    timerRunIdRef,
-    settingsRef,
-  ]);
 
   const dispatchCompletionAlert = useCallback(
     (completedSessionType: SessionType, runId?: string | null) => {
@@ -86,43 +80,121 @@ export const useTimerAlerts = ({
         return;
       }
 
-      if (now - lastAlertWallMsRef.current < 4000) {
+      // Only apply the 4-second wall-clock debounce when no runId is available;
+      // distinct short intervals (e.g., 1-3s test sessions) have unique runIds and must not be dropped.
+      if (!currentRunId && now - lastAlertWallMsRef.current < FALLBACK_DEBOUNCE_MS) {
         return;
+      }
+
+      const currentSettings = settingsRef.current;
+      const wantsNotification =
+        currentSettings.notificationsEnabled && notifications.hasPermission();
+      const isSilent = !currentSettings.soundEnabled;
+      const isVisible =
+        typeof document !== 'undefined' && document.visibilityState === 'visible';
+      const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+      const isAuth = isEffectiveAuthenticatedRef ? isEffectiveAuthenticatedRef.current : true;
+      const isConnected = isConvexConnectedRef ? isConvexConnectedRef.current : true;
+      const isServerRegistered = isDevicePushRegisteredRef
+        ? isDevicePushRegisteredRef.current
+        : undefined;
+
+      // Delegate OS push to Convex only when we have live proof that this device is signed in,
+      // online, connected to Convex, has an active local push subscription, and has not been pruned server-side.
+      const canDelegateToWebPush =
+        isOnline &&
+        isAuth &&
+        isConnected &&
+        notifications.getPushStatus() === 'active' &&
+        isServerRegistered !== false;
+
+      const willProduceLocalAlert = isVisible
+        ? currentSettings.soundEnabled || (wantsNotification && !canDelegateToWebPush)
+        : !wantsNotification
+          ? currentSettings.soundEnabled
+          : !canDelegateToWebPush;
+
+      // Cross-tab deduplication: prevent two open tabs from firing double chimes or double local alerts.
+      // If a hidden tab claimed first with audible=false (server push delegation), a visible tab is still
+      // allowed to upgrade the claim and play the instant in-app chime.
+      const existingClaim = readCrossTabClaim();
+      if (existingClaim) {
+        const matchesSameRun =
+          Boolean(currentRunId) &&
+          existingClaim.runId === currentRunId &&
+          now - existingClaim.ts < CROSS_TAB_RUN_CLAIM_TTL_MS;
+        const matchesFallbackWindow =
+          !currentRunId && now - existingClaim.ts < FALLBACK_DEBOUNCE_MS;
+
+        if (matchesSameRun || matchesFallbackWindow) {
+          if (existingClaim.audible || !willProduceLocalAlert) {
+            return;
+          }
+        }
       }
 
       lastAlertWallMsRef.current = now;
       lastAlertRunIdRef.current = currentRunId || null;
+      writeCrossTabClaim({
+        runId: currentRunId || null,
+        ts: now,
+        audible: willProduceLocalAlert,
+      });
 
-      const currentSettings = settingsRef.current;
-      const willAlert = shouldThisDeviceAlert(completedSessionType);
+      if (isVisible) {
+        // Decision 2A: When the app is open and visible on screen, always play the instant
+        // in-app Web Audio chime if sound is enabled (sw.js silences incoming Web Push while visible).
+        if (currentSettings.soundEnabled) {
+          sound.playChime(currentSettings.soundVolume);
+        }
 
-      if (!willAlert) {
+        // If the user wants OS notifications and server Web Push isn't active on this device,
+        // still display a quiet visual banner (silent: true prevents double sound alongside the chime).
+        if (wantsNotification && !canDelegateToWebPush) {
+          const { title, body } = getCompletionNotificationCopy(completedSessionType);
+          void notifications
+            .notify(title, body, false, currentRunId, { silent: true })
+            .catch(() => false);
+        }
         return;
       }
 
-      if (currentSettings.notificationsEnabled) {
-        const title =
-          completedSessionType === 'WORK'
-            ? 'Pomodor — Focus session complete'
-            : 'Pomodor — Break session complete';
-        const body =
-          completedSessionType === 'WORK'
-            ? 'Your focus timer has finished. Time for a break.'
-            : 'Your break timer has finished. Time for a focus session.';
+      // App is backgrounded / hidden / screen locked
+      if (wantsNotification) {
+        if (canDelegateToWebPush) {
+          // Server Web Push is verified active & connected — let Convex deliver the single OS alert.
+          return;
+        }
 
-        notifications.notify(title, body, false, currentRunId);
-      }
+        const { title, body } = getCompletionNotificationCopy(completedSessionType);
 
-      if (currentSettings.soundEnabled) {
+        // Signed-out, offline, disconnected, server-pruned, or non-push device: dispatch local OS notification.
+        // Fall back to in-app Web Audio chime only if OS notification delivery fails.
+        void notifications
+          .notify(title, body, false, currentRunId, { silent: isSilent })
+          .catch(() => false)
+          .then((sent) => {
+            const latest = settingsRef.current;
+            if (!sent && latest.soundEnabled) {
+              sound.playChime(latest.soundVolume);
+            }
+          });
+      } else if (currentSettings.soundEnabled) {
         sound.playChime(currentSettings.soundVolume);
       }
     },
-    [notifications, sound, shouldThisDeviceAlert, timerRunIdRef, settingsRef]
+    [
+      notifications,
+      sound,
+      timerRunIdRef,
+      settingsRef,
+      isEffectiveAuthenticatedRef,
+      isConvexConnectedRef,
+      isDevicePushRegisteredRef,
+    ]
   );
 
   return {
-    shouldThisDeviceAlert,
-    syncScheduledNotification,
     dispatchCompletionAlert,
     triggerCompletionConfetti,
   };

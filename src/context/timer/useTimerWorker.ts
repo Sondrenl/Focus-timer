@@ -1,9 +1,6 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
-import type { useApp } from '../AppContext';
-import { AuthService } from '../../services/auth/AuthService';
 import { wakeLockService } from '../../services/screen/WakeLockService';
-import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import { formatTime } from '../../utils/formatters';
 import { DEVICE_ID, SavedTimerState, saveTimerState } from './timerPersistence';
 import { telemetryTracker } from '../services';
@@ -30,6 +27,7 @@ interface UseTimerWorkerParams {
   status: TimerStatus;
   sessionType: SessionType;
   remainingSeconds: number;
+  keepAwake: boolean;
   statusRef: React.MutableRefObject<TimerStatus>;
   sessionTypeRef: React.MutableRefObject<SessionType>;
   currentCycleRef: React.MutableRefObject<number>;
@@ -40,19 +38,19 @@ interface UseTimerWorkerParams {
   localUpdatedAtRef: React.MutableRefObject<number>;
   activeTagIdRef: React.MutableRefObject<string | null>;
   lastTickWallMsRef: React.MutableRefObject<number>;
+  getServerAlignedNowMs: () => number;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
+  shouldDeferExpiredCompletion?: () => boolean;
+  shouldPersistLocallyRef?: React.MutableRefObject<boolean>;
   onStaleExpiration: () => void;
   setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
-  sound: ReturnType<typeof useApp>['sound'];
-  syncScheduledNotification: () => void;
-  reportPresence: (isVisible: boolean) => void;
-  authService: AuthService;
 }
 
 export const useTimerWorker = ({
   status,
   sessionType,
   remainingSeconds,
+  keepAwake,
   statusRef,
   sessionTypeRef,
   currentCycleRef,
@@ -63,17 +61,16 @@ export const useTimerWorker = ({
   localUpdatedAtRef,
   activeTagIdRef,
   lastTickWallMsRef,
+  getServerAlignedNowMs,
   handleCompleteRef,
+  shouldDeferExpiredCompletion,
+  shouldPersistLocallyRef,
   onStaleExpiration,
   setRemainingSeconds,
-  sound,
-  syncScheduledNotification,
-  reportPresence,
-  authService,
 }: UseTimerWorkerParams) => {
-  // Manage screen wake lock: keep screen awake while timer is actively running
+  // Manage screen wake lock: keep screen awake while timer is actively running if keepAwake is enabled
   useEffect(() => {
-    if (status === 'RUNNING') {
+    if (status === 'RUNNING' && keepAwake) {
       wakeLockService.acquire();
     } else {
       wakeLockService.release();
@@ -81,7 +78,7 @@ export const useTimerWorker = ({
     return () => {
       wakeLockService.release();
     };
-  }, [status]);
+  }, [status, keepAwake]);
 
   // Synchronize document tab title with timer progress, status, and remaining time
   useEffect(() => {
@@ -106,67 +103,86 @@ export const useTimerWorker = ({
     }
   }, [status, remainingSeconds, sessionType]);
 
-  // Main countdown tick execution
-  const executeTick = useCallback(() => {
+  // Main countdown tick execution; returns active diffSec if still running, or null if stopped/completed
+  const executeTick = useCallback((): number | null => {
     const currentStatus = statusRef.current;
     const nowWall = Date.now();
     lastTickWallMsRef.current = nowWall;
 
     if (currentStatus !== 'RUNNING' || targetEndTimeRef.current === null) {
-      return;
+      return null;
     }
 
-    const now = authService.getServerNow();
+    const now = getServerAlignedNowMs();
     const target = targetEndTimeRef.current;
     const diffMs = target - now;
-    const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+    const rawDiffSec = Math.max(0, Math.ceil(diffMs / 1000));
+    const maxSec = totalSecondsRef.current > 0 ? totalSecondsRef.current : rawDiffSec;
+    const diffSec = Math.min(maxSec, rawDiffSec);
 
     if (diffSec <= 0) {
       if (diffMs < -900_000) {
         onStaleExpiration();
-        return;
+        return null;
       }
-      remainingSecondsRef.current = 0;
-      setRemainingSeconds(0);
+      if (remainingSecondsRef.current !== 0) {
+        remainingSecondsRef.current = 0;
+        setRemainingSeconds(0);
+      }
+      if (shouldDeferExpiredCompletion && shouldDeferExpiredCompletion()) {
+        return 0;
+      }
       const expiredLongAgo = diffMs < -60_000;
       handleCompleteRef.current(expiredLongAgo);
-      return;
+      return null;
     }
 
     if (diffSec !== remainingSecondsRef.current) {
       remainingSecondsRef.current = diffSec;
       setRemainingSeconds(diffSec);
     }
+    return diffSec;
   }, [
-    authService,
     statusRef,
     lastTickWallMsRef,
     targetEndTimeRef,
+    totalSecondsRef,
+    getServerAlignedNowMs,
     handleCompleteRef,
+    shouldDeferExpiredCompletion,
     onStaleExpiration,
     remainingSecondsRef,
     setRemainingSeconds,
   ]);
 
-  // Persistent Web Worker initialization
+  // Keep latest executeTick in a ref so the Blob Web Worker and listeners never respawn on settings changes
+  const executeTickRef = useRef(executeTick);
+  executeTickRef.current = executeTick;
+
+  // Persistent Web Worker initialization (created once per mount)
   useEffect(() => {
     let worker: Worker | null = null;
+    let workerUrl: string | null = null;
     let fallbackInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
       const blob = new Blob([WORKER_SCRIPT], { type: 'application/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
+      workerUrl = URL.createObjectURL(blob);
       worker = new Worker(workerUrl);
 
       worker.onmessage = (e) => {
         if (e.data === 'TICK') {
-          executeTick();
+          executeTickRef.current();
         }
       };
 
       worker.postMessage('START');
     } catch {
-      fallbackInterval = setInterval(executeTick, 250);
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+        workerUrl = null;
+      }
+      fallbackInterval = setInterval(() => executeTickRef.current(), 250);
     }
 
     return () => {
@@ -174,11 +190,14 @@ export const useTimerWorker = ({
         worker.postMessage('STOP');
         worker.terminate();
       }
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+      }
       if (fallbackInterval) {
         clearInterval(fallbackInterval);
       }
     };
-  }, [executeTick]);
+  }, []);
 
   // Visibility, pageshow, and focus sync listeners
   useEffect(() => {
@@ -189,36 +208,11 @@ export const useTimerWorker = ({
         void telemetryTracker.onTabVisibilityChanged(true);
       }
 
-      if (statusRef.current === 'RUNNING') {
-        sound.prepareForPlayback();
-      }
-
-      reportPresence(!isHidden);
-
       if (statusRef.current === 'RUNNING' && targetEndTimeRef.current !== null) {
-        const nowWall = Date.now();
-        lastTickWallMsRef.current = nowWall;
+        const diffSec = executeTickRef.current();
+        if (diffSec === null) return;
 
-        const now = authService.getServerNow();
-        const diffMs = targetEndTimeRef.current - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
-
-        if (diffSec <= 0) {
-          if (diffMs < -900_000) {
-            onStaleExpiration();
-            return;
-          }
-          remainingSecondsRef.current = 0;
-          setRemainingSeconds(0);
-          const expiredLongAgo = diffMs < -60_000;
-          handleCompleteRef.current(expiredLongAgo);
-          return;
-        }
-
-        remainingSecondsRef.current = diffSec;
-        setRemainingSeconds(diffSec);
-
-        syncScheduledNotification();
+        if (shouldPersistLocallyRef && !shouldPersistLocallyRef.current) return;
 
         const stateToSave: SavedTimerState = {
           sessionType: sessionTypeRef.current,
@@ -231,11 +225,10 @@ export const useTimerWorker = ({
           updatedAtMs: localUpdatedAtRef.current,
           activeTagId: activeTagIdRef.current,
           deviceId: DEVICE_ID,
-          tabId: TAB_ID,
           lastActiveAtMs: Date.now(),
           wasHidden: isHidden,
         };
-        saveTimerState(stateToSave, false);
+        saveTimerState(stateToSave);
       }
     };
 
@@ -249,28 +242,20 @@ export const useTimerWorker = ({
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
   }, [
-    sound,
-    syncScheduledNotification,
-    reportPresence,
-    authService,
     statusRef,
     targetEndTimeRef,
-    lastTickWallMsRef,
-    handleCompleteRef,
-    onStaleExpiration,
-    remainingSecondsRef,
-    setRemainingSeconds,
     sessionTypeRef,
     currentCycleRef,
     totalSecondsRef,
     timerRunIdRef,
     localUpdatedAtRef,
     activeTagIdRef,
+    shouldPersistLocallyRef,
   ]);
 
   // Main-thread backup countdown timer
   useEffect(() => {
-    const backupInterval = setInterval(executeTick, 1000);
+    const backupInterval = setInterval(() => executeTickRef.current(), 1000);
     return () => clearInterval(backupInterval);
-  }, [executeTick]);
+  }, []);
 };

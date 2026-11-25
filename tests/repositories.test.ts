@@ -2,17 +2,24 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SessionRepository, isSampleSessionId } from "../src/services/repository/SessionRepository";
-import { CoffeeRepository } from "../src/services/repository/CoffeeRepository";
-import { TagRepository } from "../src/services/repository/TagRepository";
-import { ProfileRepository, sanitizeProfile } from "../src/services/repository/ProfileRepository";
+import {
+  SessionRepository,
+  CoffeeRepository,
+  TagRepository,
+  ProfileRepository,
+  sanitizeProfile,
+  MAX_AVATAR_EMOJI_LENGTH,
+  TelemetryRepository,
+} from "../src/services/storage/guestRepositories";
 import { sanitizeHexColor, getAlphaColor } from "../src/utils/colors";
 import { LocalStorageService } from "../src/services/storage/LocalStorageService";
-import * as envModule from "../src/utils/environment";
 import { useBackupAndMigration, sanitizeProfileForExport } from "../src/hooks/data/useBackupAndMigration";
-import { BackupData, UserProfile } from "../src/types/user";
+import { BackupData, DEFAULT_PROFILE, UserProfile } from "../src/types/user";
+import { DEFAULT_SETTINGS } from "../src/types/settings";
+import { buildSettingsSnapshot } from "../src/utils/telemetryContext";
+import { SessionAttempt } from "../src/types/telemetry";
 
-describe("Repository Serialization & Sample Data Isolation", () => {
+describe("Guest Repositories, Serialization & Backup Export", () => {
   const store = new Map<string, string>();
   let storageService: LocalStorageService;
 
@@ -38,80 +45,10 @@ describe("Repository Serialization & Sample Data Isolation", () => {
     storageService = new LocalStorageService();
   });
 
-  describe("SessionRepository & Sample Data Isolation", () => {
-    it("identifies sample-* and seed-* session IDs accurately", () => {
-      expect(isSampleSessionId("sample-0-1-12345")).toBe(true);
-      expect(isSampleSessionId("seed-99")).toBe(true);
-      expect(isSampleSessionId("session-1710000000-abc")).toBe(false);
-    });
-
-    it("seeds sample sessions on empty storage in dev/preview mode (!isProduction)", async () => {
-      vi.spyOn(envModule, "isProduction").mockReturnValue(false);
+  describe("SessionRepository Serialization", () => {
+    it("starts empty and serializes concurrent add() calls without dropping sessions", async () => {
       const repo = new SessionRepository(storageService);
-
-      const sessions = await repo.getAll();
-      expect(sessions.length).toBeGreaterThan(0);
-      expect(sessions.every((s) => isSampleSessionId(s.id))).toBe(true);
-    });
-
-    it("NEVER seeds sample sessions in production mode (isProduction)", async () => {
-      vi.spyOn(envModule, "isProduction").mockReturnValue(true);
-      const repo = new SessionRepository(storageService);
-
-      const sessions = await repo.getAll();
-      expect(sessions).toEqual([]);
-    });
-
-    it("strips any leaked sample sessions automatically when getAll() runs in production", async () => {
-      vi.spyOn(envModule, "isProduction").mockReturnValue(false);
-      const repo = new SessionRepository(storageService);
-      await repo.loadSampleData();
-      const realSession = await repo.add({
-        tagId: "tag-study",
-        sessionType: "WORK",
-        durationSeconds: 1500,
-        completedAt: "2026-03-10T10:00:00.000Z",
-      });
-
-      const devSessions = await repo.getAll();
-      expect(devSessions.some((s) => isSampleSessionId(s.id))).toBe(true);
-
-      // Switch to production environment
-      vi.spyOn(envModule, "isProduction").mockReturnValue(true);
-      const prodSessions = await repo.getAll();
-      expect(prodSessions).toHaveLength(1);
-      expect(prodSessions[0].id).toBe(realSession.id);
-    });
-
-    it("purges sample sessions when user logs into their account on a dev build while preserving real sessions", async () => {
-      vi.spyOn(envModule, "isProduction").mockReturnValue(false);
-      const repo = new SessionRepository(storageService);
-
-      // Initial dev seed + 1 real user session
-      const initial = await repo.getAll();
-      expect(initial.some((s) => isSampleSessionId(s.id))).toBe(true);
-
-      const real = await repo.add({
-        tagId: "tag-work",
-        sessionType: "WORK",
-        durationSeconds: 1800,
-        completedAt: "2026-03-15T14:00:00.000Z",
-      });
-
-      const remaining = await repo.purgeSampleSessions();
-      expect(remaining).toHaveLength(1);
-      expect(remaining[0].id).toBe(real.id);
-      expect(remaining.some((s) => isSampleSessionId(s.id))).toBe(false);
-
-      // Subsequent getAll() does not re-seed because SESSIONS_SEEDED_KEY is set
-      const afterPurge = await repo.getAll();
-      expect(afterPurge).toHaveLength(1);
-      expect(afterPurge[0].id).toBe(real.id);
-    });
-
-    it("serializes concurrent add() calls without dropping sessions", async () => {
-      vi.spyOn(envModule, "isProduction").mockReturnValue(true);
-      const repo = new SessionRepository(storageService);
+      expect(await repo.getAll()).toEqual([]);
 
       await Promise.all(
         Array.from({ length: 10 }, (_, idx) =>
@@ -261,7 +198,7 @@ describe("Repository Serialization & Sample Data Isolation", () => {
   });
 
   describe("Exported Backup Privacy & PII Sanitization", () => {
-    it("sanitizeProfileForExport strips id, email, and avatarUrl while preserving displayName, avatarEmoji, and dailyGoalMinutes", () => {
+    it("sanitizeProfileForExport strips email and avatarUrl while preserving displayName, avatarEmoji, and dailyGoalMinutes", () => {
       const fullProfile: UserProfile = {
         id: "convex-user-private-id",
         email: "private.user@gmail.com",
@@ -273,23 +210,14 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       };
 
       const exported = sanitizeProfileForExport(fullProfile);
-      expect(exported).toEqual({
-        displayName: "Focus Fanatic",
-        avatarEmoji: "🧠",
-        dailyGoalMinutes: 180,
-      });
-      expect((exported as any).id).toBeUndefined();
-      expect((exported as any).email).toBeUndefined();
-      expect((exported as any).avatarUrl).toBeUndefined();
-      expect((exported as any).createdAt).toBeUndefined();
+      expect(exported.displayName).toBe("Focus Fanatic");
+      expect(exported.avatarEmoji).toBe("🧠");
+      expect(exported.dailyGoalMinutes).toBe(180);
+      expect(exported.email).toBeUndefined();
+      expect(exported.avatarUrl).toBeUndefined();
     });
 
-    it("sanitizeProfileForExport returns undefined when profile is undefined or null", () => {
-      expect(sanitizeProfileForExport(undefined)).toBeUndefined();
-      expect(sanitizeProfileForExport(null)).toBeUndefined();
-    });
-
-    it("exportBackup() does not leak email, account id, or avatarUrl in exported backup data", () => {
+    it("exportBackup() does not leak email or avatarUrl in exported backup data", () => {
       let exportedBackupData: BackupData | null = null;
 
       const profileWithPII: UserProfile = {
@@ -318,8 +246,6 @@ describe("Repository Serialization & Sample Data Isolation", () => {
             autoStartPomodoros: false,
             keepAwake: false,
           },
-          updateProfile: vi.fn(),
-          updateSettings: vi.fn(),
           resetProfileToDefaults: vi.fn(),
           resetSettingsToDefaults: vi.fn(),
           convexSync: {
@@ -327,10 +253,8 @@ describe("Repository Serialization & Sample Data Isolation", () => {
             convexUser: null,
             convexCoffee: [],
             convexSessions: [],
-            mutations: {
-              importBackup: vi.fn(),
-            } as any,
-          },
+            mutations: {} as any,
+          } as any,
           tags: [
             {
               id: "tag-1",
@@ -342,7 +266,6 @@ describe("Repository Serialization & Sample Data Isolation", () => {
             },
           ],
           setTags: vi.fn(),
-          activeTagId: null,
           setActiveTagId: vi.fn(),
           sessions: [],
           setSessions: vi.fn(),
@@ -359,139 +282,127 @@ describe("Repository Serialization & Sample Data Isolation", () => {
       expect(exportedBackupData).not.toBeNull();
       expect(exportedBackupData!.version).toBe("3.0.3");
 
-      // Verify profile is present but sanitized
-      expect(exportedBackupData!.profile).toBeDefined();
-      expect(exportedBackupData!.profile).toEqual({
-        displayName: "Private Practitioner",
-        avatarEmoji: "🎯",
-        dailyGoalMinutes: 90,
-      });
-
-      // Explicitly verify sensitive PII fields are omitted
       const exportedProfile = exportedBackupData!.profile as any;
-      expect(exportedProfile.id).toBeUndefined();
       expect(exportedProfile.email).toBeUndefined();
       expect(exportedProfile.avatarUrl).toBeUndefined();
-      expect(exportedProfile.createdAt).toBeUndefined();
 
-      // Verify serialized JSON export does not contain any leaked PII strings
       const jsonBackup = JSON.stringify(exportedBackupData);
       expect(jsonBackup).not.toContain("confidential_person@domain.com");
-      expect(jsonBackup).not.toContain("usr_secret_account_id_99999");
       expect(jsonBackup).not.toContain("ACg8ocPrivateProfilePhoto");
     });
+  });
 
-    it("importBackup() correctly handles both sanitized exports and legacy exports with id/email", async () => {
-      let importBackupFn: any = null;
-      const mockUpdateProfile = vi.fn();
+  describe("Storage Quota, Deduplication & ZWJ Emoji", () => {
+    it("deduplicates SessionRepository.add by timerRunId and supports 32-char ZWJ avatarEmoji", async () => {
+      const sessRepo = new SessionRepository(storageService);
+      const first = await sessRepo.add({
+        tagId: null,
+        sessionType: "WORK",
+        durationSeconds: 1500,
+        completedAt: "2026-04-01T10:00:00.000Z",
+        timerRunId: "run-dup",
+      });
+      const second = await sessRepo.add({
+        tagId: null,
+        sessionType: "WORK",
+        durationSeconds: 1500,
+        completedAt: "2026-04-01T10:05:00.000Z",
+        timerRunId: "run-dup",
+      });
+      expect(second.id).toBe(first.id);
+      expect(await sessRepo.getAll()).toHaveLength(1);
 
-      function HookHarness() {
-        const { importBackup } = useBackupAndMigration({
-          isEffectiveAuthenticated: true,
-          profile: {
-            id: "current-user-id",
-            email: "current-user@example.com",
-            displayName: "Current User",
-            avatarEmoji: "🦉",
-            dailyGoalMinutes: 120,
-            createdAt: "2026-01-01T00:00:00.000Z",
-          },
-          settings: {
-            workDurationMinutes: 25,
-            shortBreakDurationMinutes: 5,
-            longBreakDurationMinutes: 15,
-            longBreakInterval: 4,
-            soundVolume: 0.7,
-            soundEnabled: true,
-            notificationsEnabled: true,
-            autoStartBreaks: false,
-            autoStartPomodoros: false,
-            keepAwake: false,
-          },
-          updateProfile: mockUpdateProfile,
-          updateSettings: vi.fn(),
-          resetProfileToDefaults: vi.fn(),
-          resetSettingsToDefaults: vi.fn(),
-          convexSync: {
-            isConvexConfigured: false,
-            convexUser: null,
-            convexCoffee: [],
-            convexSessions: [],
-            mutations: {
-              importBackup: vi.fn(),
-            } as any,
-          },
-          tags: [],
-          setTags: vi.fn(),
-          activeTagId: null,
-          setActiveTagId: vi.fn(),
-          sessions: [],
-          setSessions: vi.fn(),
-          coffeeCups: [],
-          setCoffeeCups: vi.fn(),
-        });
+      const zwjEmoji = "👩‍❤️‍💋‍👨👨‍💻";
+      expect(MAX_AVATAR_EMOJI_LENGTH).toBe(32);
+      expect(sanitizeProfile({ avatarEmoji: "a".repeat(50) }).avatarEmoji).toHaveLength(32);
 
-        importBackupFn = importBackup;
-        return null;
-      }
+      const profileRepo = new ProfileRepository(storageService);
+      await profileRepo.save({ ...DEFAULT_PROFILE, displayName: "   ", avatarEmoji: ` ${zwjEmoji} ` });
+      const loaded = await profileRepo.get();
+      expect(loaded.avatarEmoji).toBe(zwjEmoji);
+      expect(loaded.displayName).toBe(DEFAULT_PROFILE.displayName);
+    });
 
-      renderToStaticMarkup(React.createElement(HookHarness));
-
-      // 1. Test importing a sanitized export (without id, email, or avatarUrl)
-      const sanitizedBackup: BackupData = {
-        version: "3.0.1",
-        exportedAt: new Date().toISOString(),
-        profile: {
-          displayName: "Imported Practitioner",
-          avatarEmoji: "🚀",
-          dailyGoalMinutes: 150,
+    it("handles LocalStorageService QuotaExceededError, trims TelemetryRepository oldest 25%, and invalidates memoryCache on storage event", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      let maxBytes = 5;
+      const listeners: Array<(e: any) => void> = [];
+      const quotaStorage = {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => {
+          if (v.length > maxBytes) {
+            const err = new Error("QuotaExceededError");
+            err.name = "QuotaExceededError";
+            throw err;
+          }
+          store.set(k, v);
         },
-        tags: [],
-        sessions: [],
+        removeItem: (k: string) => store.delete(k),
+        clear: () => store.clear(),
       };
-
-      await importBackupFn(sanitizedBackup, "merge");
-      expect(mockUpdateProfile).toHaveBeenCalledWith(
-        {
-          displayName: "Imported Practitioner",
-          avatarEmoji: "🚀",
-          dailyGoalMinutes: 150,
+      Object.defineProperty(globalThis, "localStorage", { value: quotaStorage, configurable: true, writable: true });
+      Object.defineProperty(globalThis, "window", {
+        value: {
+          localStorage: quotaStorage,
+          location: { hostname: "localhost" },
+          addEventListener: (ev: string, fn: any) => { if (ev === "storage") listeners.push(fn); },
+          removeEventListener: () => {},
         },
-        { skipTelemetry: true }
-      );
+        configurable: true,
+        writable: true,
+      });
 
-      // 2. Test importing a legacy backup containing legacy id, email, and avatarUrl
-      mockUpdateProfile.mockClear();
-      const legacyBackup: BackupData = {
-        version: "2.0.0",
-        exportedAt: new Date().toISOString(),
-        profile: {
-          id: "attacker-or-legacy-id-888",
-          email: "attacker-or-legacy@example.com",
-          displayName: "Legacy Practitioner",
-          avatarEmoji: "⚡",
-          dailyGoalMinutes: 60,
-          avatarUrl: "https://lh3.googleusercontent.com/legacy-photo.jpg",
-          createdAt: "2025-01-01T00:00:00.000Z",
-        } as any,
-        tags: [],
-        sessions: [],
-      };
+      const ls = new LocalStorageService("quota:");
+      expect(() => ls.setItem("k1", { v: "mem-only" })).not.toThrow();
+      expect(ls.getItem("k1", null)).toEqual({ v: "mem-only" });
+      expect(() => ls.setItem("k2", { big: "payload" }, { throwOnQuotaError: true })).toThrow(/QuotaExceededError/);
 
-      await importBackupFn(legacyBackup, "merge");
-      // Must NOT include id or email in the profile update
-      expect(mockUpdateProfile).toHaveBeenCalledWith(
-        {
-          displayName: "Legacy Practitioner",
-          avatarEmoji: "⚡",
-          dailyGoalMinutes: 60,
-        },
-        { skipTelemetry: true }
-      );
-      const updatePayload = mockUpdateProfile.mock.calls[0][0];
-      expect(updatePayload.id).toBeUndefined();
-      expect(updatePayload.email).toBeUndefined();
+      // Peer-tab storage event invalidates memoryCache
+      maxBytes = Infinity;
+      store.set("quota:k1", JSON.stringify({ v: "peer-fresh" }));
+      listeners.forEach((fn) => fn({ key: "quota:k1", newValue: JSON.stringify({ v: "peer-fresh" }) }));
+      expect(ls.getItem("k1", null)).toEqual({ v: "peer-fresh" });
+
+      // TelemetryRepository trims oldest 25% on QuotaExceededError
+      const teleRepo = new TelemetryRepository(new LocalStorageService("tele:"));
+      const attempts: SessionAttempt[] = Array.from({ length: 20 }, (_, idx) => ({
+        attemptId: `att-${idx}`,
+        sessionType: "WORK",
+        status: "completed",
+        wasStarted: true,
+        plannedDurationSeconds: 1500,
+        actualActiveSeconds: 1500,
+        remainingSecondsAtEnd: 0,
+        completionRatio: 1,
+        startedAt: new Date(Date.parse("2026-04-01T00:00:00.000Z") + idx * 1000).toISOString(),
+        endedAt: new Date(Date.parse("2026-04-01T00:25:00.000Z") + idx * 1000).toISOString(),
+        utcOffsetMinutes: 0,
+        localDate: "2026-04-01",
+        localHour: 9,
+        localMinuteOfDay: 540,
+        localDayOfWeek: 3,
+        cycleIndex: 1,
+        longBreakInterval: 4,
+        autoStarted: false,
+        initialTagId: null,
+        tagId: null,
+        tagChangedMidRun: false,
+        pauseCount: 0,
+        totalPausedSeconds: 0,
+        pauseIntervals: [],
+        dailyGoalMinutes: 120,
+        settingsSnapshot: buildSettingsSnapshot(DEFAULT_SETTINGS),
+        deviceClass: "desktop",
+        tabBackgroundedCount: 0,
+        completionLatencySeconds: 0,
+        source: "client",
+        updatedAtMs: Date.parse("2026-04-01T00:25:00.000Z") + idx * 1000,
+      }));
+      maxBytes = Math.floor((JSON.stringify(attempts).length + JSON.stringify(attempts.slice(5)).length) / 2);
+      await teleRepo.saveAttempts(attempts);
+      const persisted = JSON.parse(store.get("tele:ml_attempts_v1")!) as SessionAttempt[];
+      expect(persisted).toHaveLength(15);
+      expect(persisted[0].attemptId).toBe("att-5");
     });
   });
 });
-

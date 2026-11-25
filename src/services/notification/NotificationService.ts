@@ -1,4 +1,3 @@
-import { SessionType } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
@@ -21,16 +20,6 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
-function arrayBufferToBase64Url(buffer: ArrayBuffer | null): string {
-  if (!buffer) return '';
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 function uint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -46,6 +35,7 @@ export interface PushRegisterPayload {
   auth: string;
   userAgent?: string;
   isMobile?: boolean;
+  origin?: string;
 }
 
 export class NotificationService {
@@ -53,8 +43,14 @@ export class NotificationService {
   private cachedRegistration: ServiceWorkerRegistration | null = null;
   private lastNotifiedSessionId: string | null = null;
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
+  private lastRegisteredEndpoint: string | null = null;
+  private syncEpoch = 0;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
+  private pushResyncListeners = new Set<() => void>();
+  private controllerChangeHandler: (() => void) | null = null;
+  private swMessageHandler: ((event: MessageEvent) => void) | null = null;
+  private visibilityChangeHandler: (() => void) | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -64,7 +60,10 @@ export class NotificationService {
           this.cachedRegistration = reg;
           return reg;
         })
-        .catch(() => null);
+        .catch(() => {
+          this.swRegistrationPromise = null;
+          return null;
+        });
 
       navigator.serviceWorker.ready
         .then((reg) => {
@@ -72,25 +71,66 @@ export class NotificationService {
         })
         .catch(() => {});
 
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        navigator.serviceWorker.getRegistration().then((reg) => {
-          if (reg) {
-            this.cachedRegistration = reg;
+      const notifyResync = () => {
+        for (const listener of this.pushResyncListeners) {
+          try {
+            listener();
+          } catch {
+            // Ignore listener errors
           }
-        }).catch(() => {});
-      });
+        }
+      };
+
+      this.controllerChangeHandler = () => {
+        navigator.serviceWorker
+          .getRegistration()
+          .then((reg) => {
+            if (reg) this.cachedRegistration = reg;
+            notifyResync();
+          })
+          .catch(() => {});
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', this.controllerChangeHandler);
+
+      this.swMessageHandler = (event: MessageEvent) => {
+        if (event.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') {
+          notifyResync();
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', this.swMessageHandler);
 
       if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', () => {
+        this.visibilityChangeHandler = () => {
           if (document.visibilityState === 'visible' && this.cachedRegistration) {
             this.cachedRegistration.update().catch(() => {});
           }
-        });
+        };
+        document.addEventListener('visibilitychange', this.visibilityChangeHandler);
       }
     }
   }
 
+  destroy(): void {
+    const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    if (sw && typeof sw.removeEventListener === 'function') {
+      if (this.controllerChangeHandler) {
+        sw.removeEventListener('controllerchange', this.controllerChangeHandler);
+      }
+      if (this.swMessageHandler) {
+        sw.removeEventListener('message', this.swMessageHandler);
+      }
+    }
+    this.controllerChangeHandler = null;
+    this.swMessageHandler = null;
+
+    if (typeof document !== 'undefined' && this.visibilityChangeHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
+    }
+    this.visibilityChangeHandler = null;
+  }
+
   private setPushStatus(status: PushSubscriptionStatus): void {
+    if (this.pushStatus === status) return;
     this.pushStatus = status;
     for (const listener of this.pushStatusListeners) {
       try {
@@ -99,6 +139,15 @@ export class NotificationService {
         // Ignore listener errors
       }
     }
+  }
+
+  resetPushStatus(status: PushSubscriptionStatus = 'unsubscribed'): void {
+    this.syncEpoch++;
+    this.pushSyncInFlight = null;
+    if (status !== 'active') {
+      this.lastRegisteredEndpoint = null;
+    }
+    this.setPushStatus(status);
   }
 
   getPushStatus(): PushSubscriptionStatus {
@@ -112,44 +161,31 @@ export class NotificationService {
     };
   }
 
+  subscribePushResyncRequested(listener: () => void): () => void {
+    this.pushResyncListeners.add(listener);
+    return () => {
+      this.pushResyncListeners.delete(listener);
+    };
+  }
+
   isSupported(): boolean {
     return typeof window !== 'undefined' && 'Notification' in window;
   }
 
   isPushSupported(): boolean {
-    return (
-      this.isSupported() &&
-      'serviceWorker' in navigator &&
-      'PushManager' in window
-    );
+    if (!this.isSupported()) return false;
+    return 'pushManager' in window || ('serviceWorker' in navigator && 'PushManager' in window);
   }
 
   getPermissionState(): NotificationPermissionStatus {
-    if (!this.isSupported()) return 'unsupported';
-    return Notification.permission;
+    return this.isSupported() ? Notification.permission : 'unsupported';
   }
 
   async requestPermission(): Promise<boolean> {
     if (!this.isSupported()) return false;
     try {
-      if (Notification.permission === 'granted') {
-        return true;
-      }
-      let result: NotificationPermission;
-      try {
-        // Modern standard: Notification.requestPermission returns a Promise
-        result = await Notification.requestPermission();
-      } catch {
-        // Fallback for older browsers (e.g. legacy Safari <= 15)
-        result = await new Promise<NotificationPermission>((resolve) => {
-          try {
-            Notification.requestPermission((p) => resolve(p));
-          } catch {
-            resolve(Notification.permission);
-          }
-        });
-      }
-      return result === 'granted';
+      if (Notification.permission === 'granted') return true;
+      return (await Notification.requestPermission()) === 'granted';
     } catch {
       return false;
     }
@@ -159,47 +195,15 @@ export class NotificationService {
     return this.getPermissionState() === 'granted';
   }
 
-  /**
-   * Helper to dispatch messages to the active Service Worker or controller with fallback.
-   */
-  private sendWorkerMessage(message: unknown): void {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-
-    const syncWorker =
-      this.cachedRegistration?.active || navigator.serviceWorker?.controller;
-
-    if (syncWorker) {
-      try {
-        syncWorker.postMessage(message);
-        return;
-      } catch {
-        // Fallback to async retrieval below
-      }
-    }
-
-    this.getActiveRegistration().then((reg) => {
-      const worker = reg?.active || navigator.serviceWorker?.controller;
-      if (worker) {
-        try {
-          worker.postMessage(message);
-        } catch {
-          // Ignore
-        }
-      }
-    });
+  private getWindowPushManager(): PushManager | null {
+    if (typeof window === 'undefined') return null;
+    return (window as unknown as { pushManager?: PushManager }).pushManager ?? null;
   }
 
-  setAuthToken(_token: string | null): void {
-    // No-op: Auth tokens are no longer exposed to Service Worker memory
-  }
+  private async getActiveRegistration(timeoutMs = 2500): Promise<ServiceWorkerRegistration | null> {
+    if (this.cachedRegistration?.active) return this.cachedRegistration;
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
 
-  private async getActiveRegistration(): Promise<ServiceWorkerRegistration | null> {
-    if (this.cachedRegistration?.active) {
-      return this.cachedRegistration;
-    }
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
-      return null;
-    }
     try {
       const existing = await navigator.serviceWorker.getRegistration();
       if (existing?.active) {
@@ -207,23 +211,20 @@ export class NotificationService {
         return existing;
       }
 
-      if (this.swRegistrationPromise) {
-        const reg = await this.swRegistrationPromise;
-        if (reg?.active) {
-          this.cachedRegistration = reg;
-          return reg;
-        }
-      } else {
-        const reg = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
-        if (reg?.active) {
-          this.cachedRegistration = reg;
-          return reg;
-        }
+      const regPromise =
+        this.swRegistrationPromise ??
+        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => null);
+      const reg = await regPromise;
+      if (reg?.active) {
+        this.cachedRegistration = reg;
+        return reg;
       }
+
+      if (timeoutMs <= 0) return null;
 
       const readyReg = await Promise.race([
         navigator.serviceWorker.ready,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
       ]);
       if (readyReg?.active) {
         this.cachedRegistration = readyReg;
@@ -235,14 +236,35 @@ export class NotificationService {
     }
   }
 
+  private async getPushManager(): Promise<PushManager | null> {
+    const windowPushManager = this.getWindowPushManager();
+    const reg = await this.getActiveRegistration(windowPushManager ? 1000 : 2500);
+    return reg?.pushManager ?? windowPushManager;
+  }
+
   async getPushSubscriptionState(): Promise<PushSubscription | null> {
     if (!this.isPushSupported()) return null;
     try {
-      const reg = await this.getActiveRegistration();
-      if (!reg?.pushManager) return null;
-      return await reg.pushManager.getSubscription();
+      const pushManager = await this.getPushManager();
+      return pushManager ? await pushManager.getSubscription() : null;
     } catch {
       return null;
+    }
+  }
+
+  async hasSubscriptionChanged(): Promise<boolean> {
+    if (!this.isPushSupported() || !this.hasPermission()) return false;
+    try {
+      const sub = await this.getPushSubscriptionState();
+      if (!sub?.endpoint) {
+        return this.lastRegisteredEndpoint !== null || this.pushStatus === 'active';
+      }
+      if (typeof sub.expirationTime === 'number' && sub.expirationTime <= Date.now()) {
+        return true;
+      }
+      return this.lastRegisteredEndpoint !== null && sub.endpoint !== this.lastRegisteredEndpoint;
+    } catch {
+      return false;
     }
   }
 
@@ -255,70 +277,74 @@ export class NotificationService {
     deviceId: string;
     registerFn: (payload: PushRegisterPayload) => Promise<unknown>;
   }): Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> {
-    if (!this.isPushSupported()) {
-      this.setPushStatus('unsupported');
-      return { ok: false, status: 'unsupported', reason: 'PushManager unsupported' };
-    }
-    if (!this.hasPermission()) {
-      this.setPushStatus('permission_denied');
-      return { ok: false, status: 'permission_denied', reason: 'Notification permission not granted' };
-    }
+    const fail = (status: PushSubscriptionStatus, reason: string) => {
+      this.setPushStatus(status);
+      return { ok: false, status, reason };
+    };
+
+    if (!this.isPushSupported()) return fail('unsupported', 'PushManager unsupported');
+    if (!this.hasPermission()) return fail('permission_denied', 'Notification permission not granted');
     const trimmedKey = vapidPublicKey?.trim();
-    if (!trimmedKey) {
-      this.setPushStatus('unconfigured');
-      return { ok: false, status: 'unconfigured', reason: 'VAPID public key unavailable' };
-    }
+    if (!trimmedKey) return fail('unconfigured', 'VAPID public key unavailable');
 
-    if (this.pushSyncInFlight) {
-      return this.pushSyncInFlight;
-    }
+    if (this.pushSyncInFlight) return this.pushSyncInFlight;
 
-    const run = async (): Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> => {
+    const epoch = ++this.syncEpoch;
+    const isSuperseded = () => epoch !== this.syncEpoch;
+    const supersededResult = () => ({
+      ok: false,
+      status: this.pushStatus,
+      reason: 'Superseded by unsubscribe or reset',
+    });
+
+    let currentPromise: Promise<{
+      ok: boolean;
+      status: PushSubscriptionStatus;
+      reason?: string;
+    }> | null = null;
+    currentPromise = (async (): Promise<{
+      ok: boolean;
+      status: PushSubscriptionStatus;
+      reason?: string;
+    }> => {
       try {
-        const reg = await this.getActiveRegistration();
-        if (!reg?.pushManager) {
-          this.setPushStatus('unsupported');
-          return { ok: false, status: 'unsupported', reason: 'Service Worker unavailable' };
-        }
+        const pushManager = await this.getPushManager();
+        if (isSuperseded()) return supersededResult();
+        if (!pushManager) return fail('unsupported', 'PushManager unavailable');
 
         const expectedKeyBytes = urlBase64ToUint8Array(trimmedKey);
-        let subscription = await reg.pushManager.getSubscription();
+        let subscription = await pushManager.getSubscription();
 
-        // If VAPID public key rotated or differs, cleanly replace the stale subscription
-        if (subscription?.options?.applicationServerKey) {
-          const currentKeyBytes = new Uint8Array(subscription.options.applicationServerKey);
-          if (!uint8ArraysEqual(currentKeyBytes, expectedKeyBytes)) {
-            try {
-              await subscription.unsubscribe();
-            } catch {
-              // Ignore unsubscribe failure and attempt fresh subscribe
-            }
-            subscription = null;
-          }
+        const isExpired =
+          typeof subscription?.expirationTime === 'number' &&
+          subscription.expirationTime <= Date.now();
+        const isKeyMismatch =
+          Boolean(subscription?.options?.applicationServerKey) &&
+          !uint8ArraysEqual(
+            new Uint8Array(subscription!.options.applicationServerKey!),
+            expectedKeyBytes
+          );
+
+        if (subscription && (isExpired || isKeyMismatch)) {
+          await subscription.unsubscribe().catch(() => {});
+          subscription = null;
         }
 
         if (!subscription) {
-          subscription = await reg.pushManager.subscribe({
+          subscription = await pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: expectedKeyBytes as BufferSource,
           });
         }
 
+        if (isSuperseded()) return supersededResult();
+
         const subJson = typeof subscription.toJSON === 'function' ? subscription.toJSON() : {};
-        const p256dh =
-          subJson.keys?.p256dh ||
-          (typeof subscription.getKey === 'function'
-            ? arrayBufferToBase64Url(subscription.getKey('p256dh'))
-            : '');
-        const auth =
-          subJson.keys?.auth ||
-          (typeof subscription.getKey === 'function'
-            ? arrayBufferToBase64Url(subscription.getKey('auth'))
-            : '');
+        const p256dh = subJson.keys?.p256dh || '';
+        const auth = subJson.keys?.auth || '';
 
         if (!subscription.endpoint || !p256dh || !auth) {
-          this.setPushStatus('error');
-          return { ok: false, status: 'error', reason: 'Incomplete push subscription keys' };
+          return fail('error', 'Incomplete push subscription keys');
         }
 
         await registerFn({
@@ -328,164 +354,102 @@ export class NotificationService {
           auth,
           userAgent: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 256) : undefined,
           isMobile: isMobileDevice(),
+          origin: typeof window !== 'undefined' ? window.location?.origin : undefined,
         });
 
+        if (isSuperseded()) return supersededResult();
+
+        this.lastRegisteredEndpoint = subscription.endpoint;
         this.setPushStatus('active');
         return { ok: true, status: 'active' };
       } catch (err) {
+        if (isSuperseded()) return supersededResult();
         const msg = err instanceof Error ? err.message : 'Push subscription failed';
         console.warn('[Push] Subscription sync failed:', msg);
-        this.setPushStatus('error');
-        return { ok: false, status: 'error', reason: msg };
+        return fail('error', msg);
       } finally {
-        this.pushSyncInFlight = null;
+        if (this.pushSyncInFlight === currentPromise) {
+          this.pushSyncInFlight = null;
+        }
       }
-    };
+    })();
 
-    this.pushSyncInFlight = run();
-    return this.pushSyncInFlight;
+    this.pushSyncInFlight = currentPromise;
+    return currentPromise;
   }
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
+    this.resetPushStatus('unsubscribed');
+
     if (unregisterFn) {
+      await unregisterFn().catch(() => {});
+    }
+
+    const managers: PushManager[] = [];
+    const reg = await this.getActiveRegistration(2000).catch(() => null);
+    if (reg?.pushManager) managers.push(reg.pushManager);
+
+    const winPm = this.getWindowPushManager();
+    if (winPm && !managers.includes(winPm)) managers.push(winPm);
+
+    for (const pm of managers) {
       try {
-        await unregisterFn();
+        const sub = await pm.getSubscription();
+        if (sub) await sub.unsubscribe();
       } catch {
-        // Ignore backend unregister errors
+        // Ignore browser unsubscribe errors
       }
     }
-    try {
-      const sub = await this.getPushSubscriptionState();
-      if (sub) {
-        await sub.unsubscribe();
-      }
-    } catch {
-      // Ignore browser unsubscribe errors
-    }
-    this.setPushStatus('unsubscribed');
-  }
-
-  /**
-   * Closes any previous Pomodor notifications in the notification center so they never bunch up.
-   */
-  clearActiveNotifications(): void {
-    this.sendWorkerMessage({ type: 'CLEAR_NOTIFICATIONS' });
-
-    if (this.cachedRegistration && typeof this.cachedRegistration.getNotifications === 'function') {
-      this.cachedRegistration
-        .getNotifications()
-        .then((list) => {
-          for (const n of list) {
-            n.close();
-          }
-        })
-        .catch(() => {});
-    }
-  }
-
-  private markSessionNotifiedInWorker(sessionId?: string | null): void {
-    if (!sessionId) return;
-    this.sendWorkerMessage({
-      type: 'MARK_SESSION_NOTIFIED',
-      sessionId,
-    });
   }
 
   async notify(
     title: string,
     body: string,
     isManualTest: boolean = false,
-    sessionRunId?: string | null
+    sessionRunId?: string | null,
+    notifOpts?: { silent?: boolean }
   ): Promise<boolean> {
     if (!this.hasPermission()) return false;
 
+    const silent = Boolean(notifOpts?.silent);
     if (!isManualTest && sessionRunId && this.lastNotifiedSessionId === sessionRunId) {
       return true;
     }
-    if (sessionRunId) {
-      this.lastNotifiedSessionId = sessionRunId;
-    }
 
-    // Cancel any pending scheduled timer notification in the Service Worker
-    this.cancelScheduledNotification();
-
-    try {
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate([250, 100, 250]);
-      }
-    } catch {
-      // Ignore vibration errors
-    }
-
-    const mobile = isMobileDevice();
     const notifTag = isManualTest
       ? `pomodor-test-${Date.now()}`
       : sessionRunId
-      ? `pomodor-session-${sessionRunId}`
-      : `pomodor-alert-${Date.now()}`;
+        ? `pomodor-session-${sessionRunId}`
+        : `pomodor-alert-${Date.now()}`;
 
     const options: NotificationOptions = {
       body,
       icon: '/icon-192.png',
       badge: '/badge-72.png',
       tag: notifTag,
-      timestamp: Date.now(),
-      renotify: true,
-      silent: false,
-      vibrate: [250, 100, 250],
-      ...(mobile ? {} : { requireInteraction: true }),
-    } as NotificationOptions;
+      silent,
+    };
 
-    // 1. Direct ServiceWorkerRegistration dispatch (standard for PWA & mobile)
     try {
       const reg = this.cachedRegistration?.active
         ? this.cachedRegistration
         : await this.getActiveRegistration();
-      if (reg && reg.active && typeof reg.showNotification === 'function') {
-        if (!isManualTest && sessionRunId && typeof reg.getNotifications === 'function') {
-          try {
-            const existingSameTag = await reg.getNotifications({ tag: notifTag });
-            if (existingSameTag.length > 0) {
-              this.markSessionNotifiedInWorker(sessionRunId);
-              return true;
-            }
-          } catch {
-            // Ignore getNotifications check failure
-          }
-        }
-
-        // Clean up older Pomodor notifications BEFORE posting the new one so Android's
-        // wearable bridge never gets interrupted by a trailing notif.close().
-        if (typeof reg.getNotifications === 'function') {
-          try {
-            const existing = await reg.getNotifications();
-            for (const n of existing) {
-              if (n.tag !== notifTag) {
-                n.close();
-              }
-            }
-          } catch {
-            // Ignore cleanup errors
-          }
-        }
-
-        // Mark notified in SW BEFORE awaiting showNotification to avoid push/page races
-        this.markSessionNotifiedInWorker(sessionRunId);
+      if (reg?.active && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, options);
+        if (sessionRunId) this.lastNotifiedSessionId = sessionRunId;
         return true;
       }
     } catch (err) {
       console.warn('reg.showNotification failed, trying Window Notification:', err);
     }
 
-    // 2. Window Notification constructor fallback
     try {
       if (typeof Notification === 'function') {
         const notif = new Notification(title, {
           body,
           icon: '/icon-192.png',
           tag: notifTag,
-          silent: false,
+          silent,
         });
         notif.onclick = () => {
           try {
@@ -495,64 +459,14 @@ export class NotificationService {
             // Ignore
           }
         };
-        this.markSessionNotifiedInWorker(sessionRunId);
+        if (sessionRunId) this.lastNotifiedSessionId = sessionRunId;
         return true;
       }
     } catch (err) {
-      console.warn('new Notification failed, trying ServiceWorker postMessage:', err);
+      console.warn('new Notification failed:', err);
     }
 
-    // 3. Service Worker message dispatch fallback
-    this.sendWorkerMessage({
-      type: 'SHOW_NOTIFICATION',
-      title,
-      body,
-      sessionId: sessionRunId || null,
-      isManualTest,
-      isMobile: mobile,
-    });
-    return true;
-  }
-
-  /**
-   * Schedules a backup notification in the Service Worker at the exact targetEndTime
-   * so the phone Home Screen or lock screen receives the alert even if the browser throttles the page.
-   */
-  scheduleTimerNotification(
-    targetEndTimeMs: number,
-    sessionType: SessionType,
-    enabled: boolean,
-    sessionRunId?: string | null
-  ): void {
-    if (!enabled || !this.hasPermission()) {
-      this.cancelScheduledNotification();
-      return;
-    }
-
-    const title =
-      sessionType === 'WORK'
-        ? 'Pomodor — Focus session complete'
-        : 'Pomodor — Break session complete';
-    const body =
-      sessionType === 'WORK'
-        ? 'Your focus timer has finished. Time for a break.'
-        : 'Your break timer has finished. Time for a focus session.';
-
-    this.sendWorkerMessage({
-      type: 'SCHEDULE_TIMER_NOTIFICATION',
-      targetEndTime: targetEndTimeMs,
-      title,
-      body,
-      sessionId: sessionRunId || null,
-      sessionType,
-      isMobile: isMobileDevice(),
-    });
-  }
-
-  cancelScheduledNotification(): void {
-    this.sendWorkerMessage({
-      type: 'CANCEL_TIMER_NOTIFICATION',
-    });
+    return false;
   }
 }
 

@@ -1,12 +1,54 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Coffee, Plus, Minus } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useData } from '../../context/DataContext';
 import { CoffeeTagSelector } from './CoffeeTagSelector';
 import { toDateKey } from '../../utils/dates';
 import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
+import { useTodayKey } from '../../hooks/useTodayKey';
+
+export type CoffeeShortcutAction = 'add' | 'remove' | null;
+
+export interface CoffeeShortcutKeyEventLike {
+  key: string;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  target: EventTarget | null;
+}
+
+export function resolveCoffeeShortcutAction(
+  e: CoffeeShortcutKeyEventLike,
+  hasOpenOverlay: boolean
+): CoffeeShortcutAction {
+  if (e.metaKey || e.ctrlKey || e.altKey) {
+    return null;
+  }
+
+  const target = e.target as Partial<HTMLElement> | null;
+  const tagName = typeof target?.tagName === 'string' ? target.tagName.toUpperCase() : '';
+  if (
+    target &&
+    (['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName) || Boolean(target.isContentEditable))
+  ) {
+    return null;
+  }
+
+  if (hasOpenOverlay) {
+    return null;
+  }
+
+  if (e.key === '+' || e.key === '=') {
+    return 'add';
+  }
+  if (e.key === '-') {
+    return 'remove';
+  }
+
+  return null;
+}
 
 export const CoffeeWorkspace: React.FC = () => {
-  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags, activeTagId } = useApp();
+  const { coffeeCups, addCoffeeCup, removeCoffeeCup, activeTags, tags, activeTagId } = useData();
   const [selectedTagId, setSelectedTagId] = useState<string | null>(activeTagId);
 
   // Mimic the timer's tag selector: coffee tag observes the timer tag, but not vice versa
@@ -21,7 +63,7 @@ export const CoffeeWorkspace: React.FC = () => {
     }
   }, [activeTags, selectedTagId, activeTagId]);
 
-  const todayKey = toDateKey(new Date());
+  const todayKey = useTodayKey();
 
   // Filter cups for today and sort chronologically ascending
   const cupsForDate = useMemo(() => {
@@ -63,8 +105,12 @@ export const CoffeeWorkspace: React.FC = () => {
   }, [cupsForDate, tags]);
 
   const handleAdd = useCallback(async () => {
-    await addCoffeeCup(selectedTagId, todayKey);
-  }, [addCoffeeCup, selectedTagId, todayKey]);
+    try {
+      await addCoffeeCup(selectedTagId, toDateKey(new Date()));
+    } catch (err) {
+      console.warn('Failed to add coffee cup:', err);
+    }
+  }, [addCoffeeCup, selectedTagId]);
 
   // Find cups logged for today matching the currently selected tag (or untagged if selectedTagId is null)
   const cupsOfSelectedTag = useMemo(() => {
@@ -79,21 +125,24 @@ export const CoffeeWorkspace: React.FC = () => {
     const targetCup = cupsOfSelectedTag[cupsOfSelectedTag.length - 1];
     if (!targetCup) return;
 
-    await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
+    try {
+      await removeCoffeeCup(todayKey, targetCup.tagId, targetCup.id);
+    } catch (err) {
+      console.warn('Failed to remove coffee cup:', err);
+    }
   }, [canRemove, cupsOfSelectedTag, removeCoffeeCup, todayKey]);
 
   // Keyboard shortcut listener (+ / = to add cup, - to remove cup)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input or textarea
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
-        return;
-      }
-
-      if (e.key === '+' || e.key === '=') {
+      const hasOpenOverlay = Boolean(
+        document.querySelector('[role="dialog"], [role="listbox"]')
+      );
+      const action = resolveCoffeeShortcutAction(e, hasOpenOverlay);
+      if (action === 'add') {
         e.preventDefault();
         handleAdd();
-      } else if (e.key === '-') {
+      } else if (action === 'remove') {
         e.preventDefault();
         handleRemove();
       }
@@ -171,7 +220,7 @@ export const CoffeeWorkspace: React.FC = () => {
         <button
           onClick={handleAdd}
           className="flex items-center justify-center w-20 h-20 rounded-full text-white shadow-elevation-2 hover:shadow-elevation-3 transition-all duration-200 active:scale-95 group relative shrink-0"
-          style={{ backgroundColor: currentTagColor }}
+          style={{ backgroundColor: sanitizeHexColor(currentTagColor, '#8D6E63') }}
           aria-label={`Add cup of coffee with tag ${currentTagName}`}
           title={`Add cup (${currentTagName})`}
         >
@@ -221,7 +270,7 @@ export const CoffeeWorkspace: React.FC = () => {
               const isSelected = selectedTagId === item.tagId;
               return (
                 <button
-                  key={item.name}
+                  key={item.tagId ?? 'untagged'}
                   onClick={() => setSelectedTagId(item.tagId)}
                   className={`flex items-center gap-2 md:gap-1.5 min-h-[40px] md:min-h-0 px-3.5 py-1.5 md:px-2.5 md:py-1 rounded-full text-xs font-semibold transition-all border ${
                     isSelected

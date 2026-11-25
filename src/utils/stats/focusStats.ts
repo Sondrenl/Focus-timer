@@ -1,4 +1,5 @@
 import { Tag } from '../../types/tag';
+import { sanitizeHexColor } from '../colors';
 import { toDateKey, WEEKDAY_NAMES, MONTH_NAMES } from '../dates';
 import { formatDurationHoursMins } from '../formatters';
 import {
@@ -11,28 +12,42 @@ import {
 } from './types';
 
 /**
- * Filters all sessions and WORK sessions within the given period bounds,
- * excluding dev sample/seed sessions when appropriate.
+ * Returns the effective local attribution timestamp for a session.
+ * A positive-duration session completing at exact local midnight (00:00:00.000)
+ * had all of its elapsed time on the preceding calendar day (ending at 24:00),
+ * so shifting its attribution by -1ms (23:59:59.999 of Day D-1) attributes it
+ * to the day it actually occurred and prevents collapsing to 0s overlap.
+ */
+export function getEffectiveSessionDate(
+  completedAt: string,
+  durationSeconds: number
+): Date | null {
+  if (!completedAt) return null;
+  const endDate = new Date(completedAt);
+  if (Number.isNaN(endDate.getTime())) return null;
+  if (
+    durationSeconds > 0 &&
+    endDate.getHours() === 0 &&
+    endDate.getMinutes() === 0 &&
+    endDate.getSeconds() === 0 &&
+    endDate.getMilliseconds() === 0
+  ) {
+    return new Date(endDate.getTime() - 1);
+  }
+  return endDate;
+}
+
+/**
+ * Filters all sessions and WORK sessions within the given period bounds.
  */
 export function filterPeriodSessions<T extends StatSession>(
   sessions: T[],
   startDate: Date,
-  endDate: Date,
-  shouldExcludeSample: boolean
+  endDate: Date
 ): { periodAllSessions: T[]; filteredSessions: T[] } {
   const periodAllSessions = sessions.filter((s) => {
-    if (
-      shouldExcludeSample &&
-      (s.id.startsWith('seed-session-') ||
-        s.id.startsWith('sample-session-') ||
-        s.id.startsWith('sample-') ||
-        s.id.startsWith('seed-'))
-    ) {
-      return false;
-    }
-    if (!s.completedAt) return false;
-    const d = new Date(s.completedAt);
-    if (isNaN(d.getTime())) return false;
+    const d = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+    if (!d) return false;
     return d >= startDate && d <= endDate;
   });
 
@@ -42,21 +57,19 @@ export function filterPeriodSessions<T extends StatSession>(
 }
 
 /**
- * Computes total focus seconds, focus hours (rounded to 1 decimal), and work session count.
+ * Computes total focus seconds and work session count.
  */
 export function computeFocusTotals(filteredSessions: StatSession[]): {
   totalFocusSeconds: number;
-  totalFocusHours: number;
   totalWorkCount: number;
 } {
   const totalFocusSeconds = filteredSessions.reduce(
     (acc, s) => acc + (s.durationSeconds > 0 ? s.durationSeconds : 0),
     0
   );
-  const totalFocusHours = Number((totalFocusSeconds / 3600).toFixed(1));
   const totalWorkCount = filteredSessions.length;
 
-  return { totalFocusSeconds, totalFocusHours, totalWorkCount };
+  return { totalFocusSeconds, totalWorkCount };
 }
 
 /**
@@ -83,9 +96,13 @@ export function computeTagDistribution(
     .map(([tagId, data]) => {
       const foundTag = tagMap.get(tagId);
       const name = tagId === 'unassigned' ? 'Unassigned' : foundTag ? foundTag.name : 'Unknown Tag';
-      const color = tagId === 'unassigned' ? '#9E9E9E' : foundTag ? foundTag.color : '#BDBDBD';
+      const color =
+        tagId === 'unassigned'
+          ? '#9E9E9E'
+          : foundTag
+          ? sanitizeHexColor(foundTag.color, '#BDBDBD')
+          : '#BDBDBD';
       const isArchived = foundTag ? foundTag.isArchived : false;
-      const hours = Number((data.seconds / 3600).toFixed(1));
       const percentage =
         totalFocusSeconds > 0 ? Math.round((data.seconds / totalFocusSeconds) * 100) : 0;
 
@@ -95,7 +112,6 @@ export function computeTagDistribution(
         color,
         isArchived,
         totalSeconds: data.seconds,
-        hours,
         percentage,
         sessionCount: data.count,
       };
@@ -111,9 +127,26 @@ export function computeActivityBars(
   periodType: TimePeriodType,
   referenceDate: Date,
   startDate: Date,
-  sanitizedCustomRange: CustomDateRange
+  sanitizedCustomRange: CustomDateRange,
+  overlapCandidates?: StatSession[]
 ): ActivityBarStat[] {
   if (periodType === 'day') {
+    const y = referenceDate.getFullYear();
+    const m = referenceDate.getMonth();
+    const d = referenceDate.getDate();
+    const dayStartMs = new Date(y, m, d, 0, 0, 0, 0).getTime();
+    const dayEndMs = new Date(y, m, d + 1, 0, 0, 0, 0).getTime();
+
+    const hourWindows = Array.from({ length: 24 }, (_, h) => {
+      const winStart = new Date(y, m, d, h, 0, 0, 0).getTime();
+      const winEnd = new Date(y, m, d, h + 1, 0, 0, 0).getTime();
+      return {
+        winStart,
+        winEnd,
+        maxSec: Math.max(0, Math.round((winEnd - winStart) / 1000)),
+      };
+    });
+
     const hoursArray = Array.from({ length: 24 }, (_, i) => ({
       hour: i,
       seconds: 0,
@@ -121,11 +154,41 @@ export function computeActivityBars(
     }));
 
     filteredSessions.forEach((s) => {
-      const d = new Date(s.completedAt);
-      const h = d.getHours();
-      if (hoursArray[h]) {
-        hoursArray[h].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
-        hoursArray[h].count += 1;
+      const endDate = new Date(s.completedAt);
+      if (Number.isNaN(endDate.getTime())) return;
+      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+      const anchorDate = getEffectiveSessionDate(s.completedAt, dur) ?? endDate;
+      const endH = anchorDate.getHours();
+      if (hoursArray[endH]) {
+        hoursArray[endH].count += 1;
+      }
+    });
+
+    const candidates = overlapCandidates ?? filteredSessions;
+    candidates.forEach((s) => {
+      if (s.sessionType !== 'WORK') return;
+      const endDate = new Date(s.completedAt);
+      if (Number.isNaN(endDate.getTime())) return;
+      const dur = s.durationSeconds > 0 ? s.durationSeconds : 0;
+      if (dur <= 0) return;
+
+      const endMs = endDate.getTime();
+      const startMs = endMs - dur * 1000;
+      if (endMs <= dayStartMs || startMs >= dayEndMs) return;
+
+      // Attribute exact overlap within the viewed day's local [00:00, 24:00] window,
+      // including pre-midnight minutes of sessions completing after midnight on Day D+1.
+      for (let h = 0; h < 24; h++) {
+        const { winStart, winEnd, maxSec } = hourWindows[h];
+        if (maxSec <= 0) continue;
+        const overlapStart = Math.max(startMs, winStart);
+        const overlapEnd = Math.min(endMs, winEnd);
+        if (overlapEnd > overlapStart) {
+          hoursArray[h].seconds = Math.min(
+            maxSec,
+            hoursArray[h].seconds + Math.round((overlapEnd - overlapStart) / 1000)
+          );
+        }
       }
     });
 
@@ -133,7 +196,6 @@ export function computeActivityBars(
       key: `hour-${item.hour}`,
       label: `${item.hour.toString().padStart(2, '0')}:00`,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -152,7 +214,9 @@ export function computeActivityBars(
     });
 
     filteredSessions.forEach((s) => {
-      const key = toDateKey(s.completedAt);
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const key = toDateKey(effectiveDate);
       const target = days.find((d) => d.dateKey === key);
       if (target) {
         target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -165,7 +229,6 @@ export function computeActivityBars(
       label: item.label,
       subLabel: `${item.date.getDate()}`,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -188,7 +251,9 @@ export function computeActivityBars(
     });
 
     filteredSessions.forEach((s) => {
-      const key = toDateKey(s.completedAt);
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const key = toDateKey(effectiveDate);
       const target = monthDays.find((d) => d.dateKey === key);
       if (target) {
         target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -201,7 +266,6 @@ export function computeActivityBars(
       label: `${item.dayNum}`,
       subLabel: monthShort,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -215,7 +279,9 @@ export function computeActivityBars(
     }));
 
     filteredSessions.forEach((s) => {
-      const m = new Date(s.completedAt).getMonth();
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const m = effectiveDate.getMonth();
       if (months[m]) {
         months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
         months[m].count += 1;
@@ -226,14 +292,17 @@ export function computeActivityBars(
       key: `month-${item.monthIdx}`,
       label: item.label,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
 
   if (periodType === 'all') {
     const sessionYears = Array.from(
-      new Set(filteredSessions.map((s) => new Date(s.completedAt).getFullYear()))
+      new Set(
+        filteredSessions
+          .map((s) => getEffectiveSessionDate(s.completedAt, s.durationSeconds)?.getFullYear())
+          .filter((y): y is number => typeof y === 'number')
+      )
     ).sort((a, b) => a - b);
 
     if (sessionYears.length <= 1) {
@@ -247,7 +316,9 @@ export function computeActivityBars(
       }));
 
       filteredSessions.forEach((s) => {
-        const m = new Date(s.completedAt).getMonth();
+        const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+        if (!effectiveDate) return;
+        const m = effectiveDate.getMonth();
         if (months[m]) {
           months[m].seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
           months[m].count += 1;
@@ -259,7 +330,6 @@ export function computeActivityBars(
         label: item.label,
         subLabel: item.subLabel,
         totalSeconds: item.seconds,
-        hours: Number((item.seconds / 3600).toFixed(1)),
         sessionCount: item.count,
       }));
     }
@@ -276,7 +346,9 @@ export function computeActivityBars(
     }
 
     filteredSessions.forEach((s) => {
-      const y = new Date(s.completedAt).getFullYear();
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
+      const y = effectiveDate.getFullYear();
       const target = yearStats.find((item) => item.year === y);
       if (target) {
         target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
@@ -288,7 +360,6 @@ export function computeActivityBars(
       key: `year-${item.year}`,
       label: `${item.year}`,
       totalSeconds: item.seconds,
-      hours: Number((item.seconds / 3600).toFixed(1)),
       sessionCount: item.count,
     }));
   }
@@ -298,7 +369,8 @@ export function computeActivityBars(
   const [eY, eM, eD] = sanitizedCustomRange.end.split('-').map(Number);
   const sUtc = Date.UTC(sY, sM - 1, sD);
   const eUtc = Date.UTC(eY, eM - 1, eD);
-  const dayDiff = Math.max(1, Math.round((eUtc - sUtc) / 86400000) + 1);
+  const rawDayDiff = Number.isFinite(eUtc - sUtc) ? Math.round((eUtc - sUtc) / 86400000) + 1 : 1;
+  const dayDiff = Math.max(1, Math.min(3660, rawDayDiff));
 
   const dayList = Array.from({ length: dayDiff }, (_, i) => {
     const d = new Date(startDate);
@@ -312,10 +384,13 @@ export function computeActivityBars(
       count: 0,
     };
   });
+  const dayMap = new Map(dayList.map((item) => [item.dateKey, item]));
 
   filteredSessions.forEach((s) => {
-    const key = toDateKey(s.completedAt);
-    const target = dayList.find((d) => d.dateKey === key);
+    const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+    if (!effectiveDate) return;
+    const key = toDateKey(effectiveDate);
+    const target = dayMap.get(key);
     if (target) {
       target.seconds += s.durationSeconds > 0 ? s.durationSeconds : 0;
       target.count += 1;
@@ -327,7 +402,6 @@ export function computeActivityBars(
     label: String(item.dayNum),
     subLabel: item.monthShort,
     totalSeconds: item.seconds,
-    hours: Number((item.seconds / 3600).toFixed(1)),
     sessionCount: item.count,
   }));
 }
@@ -342,7 +416,10 @@ export function computeProductiveMetric(
   referenceDate: Date,
   isCurrentPeriod: boolean
 ): ProductiveMetric {
-  if (filteredSessions.length === 0) {
+  const hasDayBarData =
+    periodType === 'day' && activityBars.some((bar) => bar.totalSeconds > 0);
+
+  if (filteredSessions.length === 0 && !hasDayBarData) {
     return {
       title: 'Peak Productivity',
       value: 'N/A',
@@ -352,32 +429,35 @@ export function computeProductiveMetric(
   }
 
   if (periodType === 'day') {
-    const hourCounts = new Array(24).fill(0);
-    filteredSessions.forEach((s) => {
-      const h = new Date(s.completedAt).getHours();
-      hourCounts[h] = Math.min(
-        3600,
-        hourCounts[h] + (s.durationSeconds > 0 ? s.durationSeconds : 0)
-      );
-    });
+    const dayBars =
+      activityBars.length === 24
+        ? activityBars
+        : computeActivityBars(
+            filteredSessions,
+            'day',
+            referenceDate,
+            referenceDate,
+            { start: '', end: '' }
+          );
+
     let maxH = 0;
     let maxSec = -1;
-    hourCounts.forEach((sec, h) => {
-      if (sec > maxSec) {
-        maxSec = sec;
-        maxH = h;
+    dayBars.forEach((bar, idx) => {
+      if (bar.totalSeconds > maxSec) {
+        maxSec = bar.totalSeconds;
+        maxH = idx;
       }
     });
-    const clampedSec = Math.min(3600, Math.max(0, maxSec));
+    const peakSec = Math.max(0, maxSec);
     const nextH = (maxH + 1) % 24;
     return {
       title: 'Peak Focus Hour',
       value:
-        maxSec > 0
+        peakSec > 0
           ? `${maxH.toString().padStart(2, '0')}:00 – ${nextH.toString().padStart(2, '0')}:00`
           : 'N/A',
-      subtext: maxSec > 0 ? `${formatDurationHoursMins(clampedSec)} focused` : 'No sessions logged',
-      hasData: maxSec > 0,
+      subtext: peakSec > 0 ? `${formatDurationHoursMins(peakSec)} focused` : 'No sessions logged',
+      hasData: peakSec > 0,
     };
   }
 
@@ -386,7 +466,8 @@ export function computeProductiveMetric(
     const weekdaySecs = new Array(7).fill(0);
     const weekdayDateSets: Set<string>[] = Array.from({ length: 7 }, () => new Set<string>());
     filteredSessions.forEach((s) => {
-      const d = new Date(s.completedAt);
+      const d = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!d) return;
       const dayIdx = d.getDay();
       weekdaySecs[dayIdx] += s.durationSeconds > 0 ? s.durationSeconds : 0;
       weekdayDateSets[dayIdx].add(toDateKey(d));

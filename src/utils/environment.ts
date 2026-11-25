@@ -10,7 +10,7 @@ export function isProduction(): boolean {
   if (import.meta.env.VITE_APP_ENV === 'preview') return false;
 
   // 2. Hostname runtime detection
-  const hostname = window.location.hostname;
+  const hostname = window.location.hostname.toLowerCase();
 
   // Local development
   if (
@@ -29,7 +29,15 @@ export function isProduction(): boolean {
     return hostname === 'focus-timer.sondrelassen.workers.dev';
   }
 
-  if (import.meta.env.PROD && !hostname.includes('preview') && !hostname.includes('stage') && !hostname.includes('dev')) {
+  // Check subdomain/domain labels excluding the TLD so custom .dev production domains
+  // (e.g. "pomodor.dev") are treated as production while "dev.pomodor.dev" is not.
+  const labels = hostname.split('.').slice(0, -1);
+  const nonProdTokens = new Set(['dev', 'preview', 'stage', 'staging']);
+  const hasNonProdLabel = labels.some((label) =>
+    label.split('-').some((token) => nonProdTokens.has(token))
+  );
+
+  if (import.meta.env.PROD && !hasNonProdLabel) {
     return true;
   }
   return false;
@@ -37,14 +45,6 @@ export function isProduction(): boolean {
 
 export function isPreviewOrDev(): boolean {
   return !isProduction();
-}
-
-export function getEnvironmentType(): 'production' | 'preview' | 'development' {
-  if (typeof window === 'undefined') return 'production';
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return 'development';
-  if (isProduction()) return 'production';
-  return 'preview';
 }
 
 /**

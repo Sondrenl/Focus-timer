@@ -1,285 +1,185 @@
 /**
- * SoundService provides synthesized audio feedback using both HTML5 Audio (primed
- * for reliable background tab playback) and Web Audio API oscillators.
- * - In modern desktop and mobile browsers, Web Audio `AudioContext.resume()` is deferred
- *   when called in a background/hidden tab until the user focuses the tab.
- * - An HTML5 `<audio>` element with a synthesized chime WAV primed on user interaction
- *   bypasses this restriction and plays immediately even when the tab is in the background.
- * - Does NOT loop audio continuously, preventing mobile OSes (e.g. Android Chrome) from
- *   displaying unwanted persistent media notification widgets.
+ * SoundService plays a simple completion chime using the native Web Audio API.
+ * Resilient to Safari 'interrupted' state, OS sleep/wake, Bluetooth output switches,
+ * hung resume() promises, zombie 'running' contexts with frozen currentTime, and audio errors.
  */
-
-function createWavBlobUrl(samples: Float32Array, sampleRate: number): string {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-
-  function writeString(offset: number, str: string) {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  }
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + samples.length * 2, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // Mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // Byte rate
-  view.setUint16(32, 2, true); // Block align
-  view.setUint16(34, 16, true); // Bits per sample
-  writeString(36, 'data');
-  view.setUint32(40, samples.length * 2, true);
-
-  let offset = 44;
-  for (let i = 0; i < samples.length; i++, offset += 2) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-
-  const blob = new Blob([buffer], { type: 'audio/wav' });
-  return URL.createObjectURL(blob);
-}
-
-function generateChimeWav(): string {
-  const sampleRate = 44100;
-  const durationSec = 1.65;
-  const numSamples = Math.floor(sampleRate * durationSec);
-  const samples = new Float32Array(numSamples);
-  const notes = [523.25, 659.25, 783.99]; // Major triad: C5 - E5 - G5
-
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let val = 0;
-    for (let idx = 0; idx < notes.length; idx++) {
-      const noteStart = idx * 0.14;
-      const dt = t - noteStart;
-      if (dt >= 0 && dt <= 1.25) {
-        let env = 0;
-        if (dt <= 0.02) {
-          env = (dt / 0.02) * 0.4;
-        } else {
-          env = 0.4 * Math.pow(0.00025, (dt - 0.02) / 1.18);
-        }
-        val += Math.sin(2 * Math.PI * notes[idx] * dt) * env;
-      }
-    }
-    samples[i] = val;
-  }
-  return createWavBlobUrl(samples, sampleRate);
-}
+const STALE_RESUME_THRESHOLD_MS = 1500;
+const RESUME_TIMEOUT_MS = 1200;
+const ZOMBIE_CLOCK_PROBE_MS = 120;
+const SCHEDULE_LOOKAHEAD_SEC = 0.015;
 
 export class SoundService {
   private audioCtx: AudioContext | null = null;
-  private chimeWavUrl: string | null = null;
-  private chimeAudio: HTMLAudioElement | null = null;
-  private isPlayingChime: boolean = false;
-  private chimeTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private activeNodes: Set<{ osc: OscillatorNode; gain: GainNode }> = new Set();
+  private playGeneration = 0;
+  private needsHealthCheck = false;
+  private lastObservedCurrentTime: number | null = null;
+  private resumeInFlight: Promise<boolean> | null = null;
 
-  constructor() {
-    if (typeof window !== 'undefined') {
-      try {
-        this.chimeWavUrl = generateChimeWav();
-        if (typeof Audio !== 'undefined') {
-          this.chimeAudio = new Audio(this.chimeWavUrl);
-          this.chimeAudio.preload = 'auto';
-          this.chimeAudio.addEventListener('ended', () => {
-            this.isPlayingChime = false;
-            if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-              try {
-                navigator.mediaSession.playbackState = 'none';
-              } catch {
-                // Ignore
-              }
-            }
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to pre-generate chime WAV:', err);
+  private attachStateListener(ctx: AudioContext): void {
+    try {
+      if (typeof ctx.addEventListener === 'function') {
+        ctx.addEventListener('statechange', () => {
+          const state = ctx.state as string;
+          if (state === 'interrupted' || state === 'suspended' || state === 'closed') {
+            this.needsHealthCheck = true;
+          }
+        });
       }
-
-      // Explicitly clear any stale mediaSession playback state in mobile browsers
-      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-        try {
-          navigator.mediaSession.playbackState = 'none';
-        } catch {
-          // Ignore
-        }
-      }
-
-      // Prepare and prime audio on user interactions so completion chimes play reliably in the background
-      const unlockOnGesture = () => {
-        this.prepareForPlayback();
-      };
-      window.addEventListener('pointerdown', unlockOnGesture, { passive: true });
-      window.addEventListener('touchstart', unlockOnGesture, { passive: true });
-      window.addEventListener('touchend', unlockOnGesture, { passive: true });
-      window.addEventListener('click', unlockOnGesture, { passive: true });
-      window.addEventListener('keydown', unlockOnGesture, { passive: true });
+    } catch {
+      // Ignore environments with minimal mock AudioContext
     }
   }
 
-  /**
-   * Initializes or resumes the AudioContext
-   */
-  private getAudioContext(): AudioContext | null {
+  private createFreshContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
-
-    if (!this.audioCtx) {
+    try {
       const AudioContextClass =
-        window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioContextClass) {
-        this.audioCtx = new AudioContextClass();
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return null;
+      const fresh = new AudioContextClass();
+      this.audioCtx = fresh;
+      this.needsHealthCheck = false;
+      this.lastObservedCurrentTime = null;
+      this.resumeInFlight = null;
+      this.attachStateListener(fresh);
+      return fresh;
+    } catch {
+      this.audioCtx = null;
+      return null;
+    }
+  }
+
+  private recycleContext(): AudioContext | null {
+    const old = this.audioCtx;
+    this.stopActiveChime();
+    this.audioCtx = null;
+    this.resumeInFlight = null;
+    this.needsHealthCheck = false;
+    this.lastObservedCurrentTime = null;
+
+    if (old && old.state !== 'closed') {
+      try {
+        const closeResult = old.close?.();
+        if (closeResult && typeof closeResult.catch === 'function') {
+          closeResult.catch(() => {});
+        }
+      } catch {
+        // Ignore close errors
       }
     }
 
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => {});
+    return this.createFreshContext();
+  }
+
+  private getAudioContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
+
+    if (this.audioCtx && this.audioCtx.state === 'closed') {
+      this.activeNodes.clear();
+      this.audioCtx = null;
+      this.resumeInFlight = null;
+      this.needsHealthCheck = false;
+      this.lastObservedCurrentTime = null;
+    }
+
+    if (!this.audioCtx) {
+      return this.createFreshContext();
     }
 
     return this.audioCtx;
   }
 
-  /**
-   * Primes the HTML5 audio element within a user gesture so modern browsers permit
-   * asynchronous audio playback while the tab is hidden / in the background.
-   * Does NOT pause or alter volume if a chime is actively playing.
-   */
-  primeAudio(): void {
-    if (!this.chimeAudio) return;
-    if (this.isPlayingChime) return;
+  private isContextPaused(ctx: AudioContext): boolean {
+    const state = ctx.state as string;
+    return state === 'suspended' || state === 'interrupted';
+  }
 
+  private safeResume(ctx: AudioContext, timeoutMs: number = RESUME_TIMEOUT_MS): Promise<boolean> {
+    if (ctx.state === 'running') return Promise.resolve(true);
+    if (ctx.state === 'closed') return Promise.resolve(false);
+    if (this.resumeInFlight) return this.resumeInFlight;
+
+    let rawResume: Promise<void>;
     try {
-      this.chimeAudio.volume = 0.001;
-      const p = this.chimeAudio.play();
-      if (p !== undefined) {
-        p.then(() => {
-          // Double check that chime didn't start playing while prime promise was in flight
-          if (!this.isPlayingChime && this.chimeAudio) {
-            this.chimeAudio.pause();
-            this.chimeAudio.currentTime = 0;
-          }
-        }).catch(() => {
-          // Priming error ignored
-        });
-      }
+      rawResume = ctx.resume();
     } catch {
-      // Ignored
+      return Promise.resolve(false);
     }
+
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    const resumeAttempt = Promise.resolve(rawResume)
+      .then(() => ctx.state === 'running')
+      .catch(() => false);
+
+    const timeout = new Promise<boolean>((resolve) => {
+      timerId = setTimeout(() => resolve(false), timeoutMs);
+    });
+
+    const raced = Promise.race([resumeAttempt, timeout]).then((resumed) => {
+      if (timerId !== null) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+      if (this.resumeInFlight === raced) {
+        this.resumeInFlight = null;
+      }
+      return resumed;
+    });
+
+    this.resumeInFlight = raced;
+    return raced;
   }
 
   /**
-   * Arms both Web Audio and HTML5 Audio for playback.
-   * Call during user gestures (such as clicking Start Timer or interacting with controls).
+   * Flags the current AudioContext for a clock-advancement health check after OS sleep/wake,
+   * tab return, or audio output route switches.
    */
-  prepareForPlayback(): void {
-    const ctx = this.getAudioContext();
-    if (ctx && ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+  markStaleForRecovery(): void {
+    if (this.audioCtx) {
+      this.needsHealthCheck = true;
+      this.lastObservedCurrentTime =
+        typeof this.audioCtx.currentTime === 'number' ? this.audioCtx.currentTime : null;
     }
-    this.primeAudio();
   }
 
-  /**
-   * Explicitly suspends audio context when the app or tab is being unloaded.
-   */
-  stopAudio(): void {
-    this.isPlayingChime = false;
-    if (this.chimeTimeoutId) {
-      clearTimeout(this.chimeTimeoutId);
-      this.chimeTimeoutId = null;
-    }
-    if (this.chimeAudio) {
+  private stopActiveChime(): void {
+    for (const entry of this.activeNodes) {
       try {
-        this.chimeAudio.pause();
+        entry.osc.onended = null;
+        entry.osc.stop();
       } catch {
-        // Ignore
+        // Ignore if oscillator has already stopped
       }
-    }
-    if (this.audioCtx && this.audioCtx.state === 'running') {
-      this.audioCtx.suspend().catch(() => {});
-    }
-  }
-
-  /**
-   * Plays a gentle, pleasant triple-tone chime (Major triad: C5 - E5 - G5).
-   * For user gestures and foreground playback, Web Audio is reliably used to prevent
-   * mobile iOS/Android muting or race condition cutoffs.
-   * In background tabs, primed HTML5 Audio is used for immediate background playback.
-   * @param volume Volume scalar between 0.0 and 1.0
-   */
-  playChime(volume: number = 0.8): void {
-    const clampedVol = Math.max(0, Math.min(1, volume));
-    if (clampedVol === 0) return;
-
-    // 1. For user interactions / foreground playback, Web Audio provides unblocked sound
-    // that respects volume on iOS/Android without being affected by HTML5 media restrictions.
-    const isForeground = typeof document === 'undefined' || document.visibilityState !== 'hidden';
-    const ctx = this.getAudioContext();
-
-    if (isForeground && ctx) {
-      this.playWebAudioChime(clampedVol);
-      return;
-    }
-
-    // 2. In background tabs (where Web Audio resume is deferred), use primed HTML5 Audio
-    if (this.chimeAudio) {
       try {
-        this.isPlayingChime = true;
-        if (this.chimeTimeoutId) clearTimeout(this.chimeTimeoutId);
-        this.chimeTimeoutId = setTimeout(() => {
-          this.isPlayingChime = false;
-        }, 2000);
-
-        this.chimeAudio.pause();
-        this.chimeAudio.currentTime = 0;
-        this.chimeAudio.volume = clampedVol;
-
-        const playPromise = this.chimeAudio.play();
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              // HTML5 audio started playing successfully
-            })
-            .catch((err) => {
-              this.isPlayingChime = false;
-              console.warn('HTML5 chime play failed, falling back to Web Audio:', err);
-              this.playWebAudioChime(clampedVol);
-            });
-          return;
-        }
-      } catch (err) {
-        this.isPlayingChime = false;
-        console.warn('HTML5 chime play error, falling back to Web Audio:', err);
-        this.playWebAudioChime(clampedVol);
-        return;
+        entry.osc.disconnect?.();
+      } catch {
+        // Ignore disconnect errors
+      }
+      try {
+        entry.gain.disconnect?.();
+      } catch {
+        // Ignore disconnect errors
       }
     }
-
-    // Fallback to Web Audio synthesis
-    this.playWebAudioChime(clampedVol);
+    this.activeNodes.clear();
   }
 
-  /**
-   * Dedicated test chime player ensuring immediate playback on user interaction
-   */
-  playTestChime(volume?: number): void {
-    this.prepareForPlayback();
-    this.playChime(volume ?? 0.8);
-  }
+  private scheduleTriad(ctx: AudioContext, clampedVol: number): void {
+    try {
+      this.stopActiveChime();
 
-  private playWebAudioChime(clampedVol: number): void {
-    const ctx = this.getAudioContext();
-    if (!ctx) return;
-
-    const scheduleNotes = () => {
       const notes = [523.25, 659.25, 783.99];
-      const now = ctx.currentTime;
+      const baseTime =
+        (typeof ctx.currentTime === 'number' && Number.isFinite(ctx.currentTime)
+          ? ctx.currentTime
+          : 0) + SCHEDULE_LOOKAHEAD_SEC;
+      // Floor peak gain strictly > 0 so exponentialRampToValueAtTime never throws RangeError
+      const peakGain = Math.max(0.001, 0.4 * clampedVol);
 
       notes.forEach((freq, idx) => {
-        const noteStartTime = now + idx * 0.14;
+        const noteStartTime = baseTime + idx * 0.14;
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
 
@@ -287,30 +187,168 @@ export class SoundService {
         osc.frequency.setValueAtTime(freq, noteStartTime);
 
         gain.gain.setValueAtTime(0.0001, noteStartTime);
-        gain.gain.exponentialRampToValueAtTime(0.4 * clampedVol, noteStartTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(peakGain, noteStartTime + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.0001, noteStartTime + 1.2);
 
         osc.connect(gain);
         gain.connect(ctx.destination);
 
+        const entry = { osc, gain };
+        this.activeNodes.add(entry);
+        osc.onended = () => {
+          this.activeNodes.delete(entry);
+          try {
+            osc.disconnect?.();
+          } catch {
+            // Ignore disconnect errors
+          }
+          try {
+            gain.disconnect?.();
+          } catch {
+            // Ignore disconnect errors
+          }
+        };
+
         osc.start(noteStartTime);
         osc.stop(noteStartTime + 1.3);
       });
-    };
 
-    if (ctx.state === 'suspended') {
-      ctx.resume().then(scheduleNotes).catch(scheduleNotes);
-    } else {
-      scheduleNotes();
+      this.lastObservedCurrentTime = ctx.currentTime;
+      this.needsHealthCheck = false;
+    } catch {
+      // Never let Web Audio failures crash timer transitions
     }
   }
 
   /**
-   * Plays the completion chime for break completion
+   * Initializes or resumes the native AudioContext during a user gesture
+   * (such as starting a timer, toggling mute, or clicking Test Chime).
+   * If a previously wedged context fails to resume in time, recycles it cleanly.
    */
-  playBreakComplete(volume: number = 0.8): void {
-    this.playChime(volume);
+  prepareForPlayback(): void {
+    const ctx = this.getAudioContext();
+    if (!ctx) return;
+
+    if (this.isContextPaused(ctx)) {
+      void this.safeResume(ctx, RESUME_TIMEOUT_MS).then((resumed) => {
+        if (!resumed && this.audioCtx === ctx && this.isContextPaused(ctx)) {
+          const fresh = this.recycleContext();
+          if (fresh && this.isContextPaused(fresh)) {
+            void this.safeResume(fresh, RESUME_TIMEOUT_MS);
+          }
+        }
+      });
+    } else if (ctx.state === 'running' && this.needsHealthCheck) {
+      const t0 = ctx.currentTime;
+      setTimeout(() => {
+        if (this.audioCtx === ctx && ctx.state === 'running' && ctx.currentTime === t0) {
+          const fresh = this.recycleContext();
+          if (fresh && this.isContextPaused(fresh)) {
+            void this.safeResume(fresh, RESUME_TIMEOUT_MS);
+          }
+        } else if (this.audioCtx === ctx) {
+          this.needsHealthCheck = false;
+        }
+      }, ZOMBIE_CLOCK_PROBE_MS);
+    }
+  }
+
+  /**
+   * Plays a gentle triple-tone completion chime (C5 - E5 - G5) via Web Audio API.
+   * @param volume Volume scalar between 0.0 and 1.0
+   */
+  playChime(volume: number = 0.8): void {
+    const generation = ++this.playGeneration;
+
+    if (typeof volume !== 'number' || !Number.isFinite(volume)) {
+      return;
+    }
+    const clampedVol = Math.max(0, Math.min(1, volume));
+    if (clampedVol === 0) {
+      this.stopActiveChime();
+      return;
+    }
+
+    const ctx = this.getAudioContext();
+    if (!ctx) return;
+
+    if (this.isContextPaused(ctx)) {
+      const requestedAt = Date.now();
+      void this.safeResume(ctx, STALE_RESUME_THRESHOLD_MS).then((resumed) => {
+        if (generation !== this.playGeneration) return;
+        if (Date.now() - requestedAt > STALE_RESUME_THRESHOLD_MS) return;
+
+        if (resumed && this.audioCtx === ctx && ctx.state === 'running') {
+          this.scheduleTriad(ctx, clampedVol);
+          return;
+        }
+
+        // Wedged context (sleep/wake/Bluetooth route change): attempt one clean recreate
+        if (this.audioCtx === ctx) {
+          const fresh = this.recycleContext();
+          if (!fresh) return;
+          if (fresh.state === 'running') {
+            this.scheduleTriad(fresh, clampedVol);
+          } else if (this.isContextPaused(fresh)) {
+            void this.safeResume(fresh, 500).then((freshOk) => {
+              if (
+                freshOk &&
+                generation === this.playGeneration &&
+                this.audioCtx === fresh &&
+                fresh.state === 'running' &&
+                Date.now() - requestedAt <= STALE_RESUME_THRESHOLD_MS
+              ) {
+                this.scheduleTriad(fresh, clampedVol);
+              }
+            });
+          }
+        }
+      });
+    } else if (ctx.state === 'running') {
+      // If wake/route-change flagged a health check and clock hasn't moved since markStaleForRecovery,
+      // briefly probe whether CoreAudio/WASAPI froze ctx.currentTime before scheduling.
+      if (
+        this.needsHealthCheck &&
+        this.lastObservedCurrentTime !== null &&
+        ctx.currentTime === this.lastObservedCurrentTime
+      ) {
+        const t0 = ctx.currentTime;
+        const requestedAt = Date.now();
+        setTimeout(() => {
+          if (generation !== this.playGeneration) return;
+          if (this.audioCtx !== ctx) return;
+
+          if (ctx.state === 'running' && ctx.currentTime > t0) {
+            this.scheduleTriad(ctx, clampedVol);
+            return;
+          }
+
+          // Zombie 'running' context with frozen clock: close & recreate
+          const fresh = this.recycleContext();
+          if (!fresh) return;
+          if (fresh.state === 'running') {
+            this.scheduleTriad(fresh, clampedVol);
+          } else if (this.isContextPaused(fresh)) {
+            void this.safeResume(fresh, 500).then((freshOk) => {
+              if (
+                freshOk &&
+                generation === this.playGeneration &&
+                this.audioCtx === fresh &&
+                fresh.state === 'running' &&
+                Date.now() - requestedAt <= STALE_RESUME_THRESHOLD_MS
+              ) {
+                this.scheduleTriad(fresh, clampedVol);
+              }
+            });
+          }
+        }, ZOMBIE_CLOCK_PROBE_MS);
+        return;
+      }
+
+      this.scheduleTriad(ctx, clampedVol);
+    }
   }
 }
 
 export const soundService = new SoundService();
+

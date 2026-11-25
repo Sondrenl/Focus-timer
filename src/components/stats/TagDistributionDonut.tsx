@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { TagStat } from '../../hooks/useStatistics';
 import { formatDurationHoursMins } from '../../utils/formatters';
+import { sanitizeHexColor } from '../../utils/colors';
 import { clsx } from 'clsx';
 
 interface TagDistributionDonutProps {
@@ -188,6 +189,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
           {slicesWithOffsets.map((slice) => {
             const isItemActive = activeTagId === slice.tagId;
             const isAnyActive = Boolean(activeTagId);
+            const safeSliceColor = sanitizeHexColor(slice.color);
 
             return (
               <circle
@@ -196,7 +198,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 cy={center}
                 r={radius}
                 fill="none"
-                stroke={slice.color}
+                stroke={safeSliceColor}
                 strokeWidth={strokeWidth}
                 strokeDasharray={slice.strokeDasharray}
                 strokeDashoffset={slice.strokeDashoffset}
@@ -218,7 +220,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
               cy={center}
               r={radius}
               fill="none"
-              stroke={activeSlice.color}
+              stroke={sanitizeHexColor(activeSlice.color)}
               strokeWidth={strokeWidth + 4}
               strokeDasharray={activeSlice.strokeDasharray}
               strokeDashoffset={activeSlice.strokeDashoffset}
@@ -266,14 +268,24 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
         {activeSlices.map((item) => {
           const isItemActive = activeTagId === item.tagId;
           const isAnyActive = Boolean(activeTagId);
+          const safeItemColor = sanitizeHexColor(item.color);
 
           return (
             <div
               key={item.tagId}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedTagId === item.tagId}
               onMouseEnter={() => setHoveredTagId(item.tagId)}
               onClick={() => setSelectedTagId((prev) => (prev === item.tagId ? null : item.tagId))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedTagId((prev) => (prev === item.tagId ? null : item.tagId));
+                }
+              }}
               className={clsx(
-                'flex items-center justify-between p-2 rounded-2xl transition-all duration-150 cursor-pointer select-none',
+                'flex items-center justify-between p-2 rounded-2xl transition-all duration-150 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-md-primary',
                 isItemActive
                   ? 'bg-md-surface-container-high ring-1 ring-md-primary/30 shadow-xs'
                   : isAnyActive
@@ -285,7 +297,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 <span
                   className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs transition-transform duration-150"
                   style={{
-                    backgroundColor: item.color,
+                    backgroundColor: safeItemColor,
                     transform: isItemActive ? 'scale(1.2)' : 'scale(1)',
                   }}
                 />
@@ -305,7 +317,7 @@ export const TagDistributionDonut: React.FC<TagDistributionDonutProps> = ({
                 </span>
                 <span
                   className="w-10 text-right font-extrabold"
-                  style={{ color: item.color }}
+                  style={{ color: safeItemColor }}
                 >
                   {item.percentage === 0 && item.totalSeconds > 0 ? '<1%' : `${item.percentage}%`}
                 </span>

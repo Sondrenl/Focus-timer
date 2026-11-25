@@ -2,7 +2,6 @@ import { Tag } from './tag';
 import { CompletedSession } from './session';
 import { UserSettings } from './settings';
 import { CoffeeCup } from './coffee';
-import { MlTelemetryExport } from './telemetry';
 
 /**
  * User Profile data model for focus tracking, goals, and optional cloud sync
@@ -30,11 +29,6 @@ export const DEFAULT_PROFILE: UserProfile = {
   dailyGoalMinutes: 120,
   createdAt: new Date().toISOString(),
 };
-
-/** Available avatar emojis for quick selection */
-export const AVATAR_EMOJI_OPTIONS = [
-  '🎯', '🍅', '⚡', '🚀', '🧠', '☕', '🦉', '🌿', '🔥', '💻', '📚', '🌟'
-];
 
 /**
  * Cloud authentication and sync state
@@ -67,5 +61,4 @@ export interface BackupData {
   tags: Tag[];
   sessions: CompletedSession[];
   coffeeCups?: CoffeeCup[];
-  mlTelemetry?: MlTelemetryExport;
 }

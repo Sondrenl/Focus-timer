@@ -1,5 +1,6 @@
 import { toDateKey } from '../dates';
 import { formatDurationHoursMins } from '../formatters';
+import { getEffectiveSessionDate } from '../stats/focusStats';
 import { InsightContext, RawInsight } from './types';
 
 /**
@@ -229,9 +230,11 @@ export function generateCoffeeInsights(
     sessions.forEach((s) => {
       const validTid = resolveValidTagId(s.tagId);
       if (!validTid || !s.completedAt || s.durationSeconds <= 0) return;
+      const effectiveDate = getEffectiveSessionDate(s.completedAt, s.durationSeconds);
+      if (!effectiveDate) return;
       tagFocusSecondsMap.set(validTid, (tagFocusSecondsMap.get(validTid) || 0) + s.durationSeconds);
       const dates = tagDatesMap.get(validTid) || new Set<string>();
-      dates.add(toDateKey(s.completedAt));
+      dates.add(toDateKey(effectiveDate));
       tagDatesMap.set(validTid, dates);
     });
 

@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '../context/AppContext';
-import { isProduction } from '../utils/environment';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useData } from '../context/DataContext';
 import { toDateKey } from '../utils/dates';
+import { useTodayKey } from './useTodayKey';
 import {
   generateAllPeriodInsights,
   selectTieredInsight,
@@ -40,7 +40,7 @@ export type {
 };
 
 export function useStatistics() {
-  const { sessions, tags, coffeeCups, isEffectiveAuthenticated } = useApp();
+  const { sessions, tags, coffeeCups } = useData();
 
   const [periodType, setPeriodType] = useState<TimePeriodType>('week');
   const [referenceDate, setReferenceDate] = useState<Date>(() => new Date());
@@ -56,7 +56,20 @@ export function useStatistics() {
     };
   });
 
-  const todayKey = toDateKey(new Date());
+  const todayKey = useTodayKey();
+  const prevTodayKeyRef = useRef(todayKey);
+
+  // If the user is viewing the current day/week/month/year when local midnight passes,
+  // automatically advance referenceDate so stats roll over live overnight.
+  useEffect(() => {
+    const prevTodayKey = prevTodayKeyRef.current;
+    if (prevTodayKey === todayKey) return;
+    prevTodayKeyRef.current = todayKey;
+
+    if (checkIsCurrentPeriod(periodType, referenceDate, prevTodayKey)) {
+      setReferenceDate(new Date());
+    }
+  }, [todayKey, periodType, referenceDate]);
 
   const goToPrev = () => {
     setReferenceDate((prev) => getAdjacentReferenceDate(prev, periodType, 'prev'));
@@ -87,25 +100,29 @@ export function useStatistics() {
       customRange
     );
 
-    const shouldExcludeSample = isProduction() || isEffectiveAuthenticated;
     const { periodAllSessions, filteredSessions } = filterPeriodSessions(
       sessions,
       startDate,
-      endDate,
-      shouldExcludeSample
+      endDate
     );
 
-    const { totalFocusSeconds, totalFocusHours, totalWorkCount } =
+    const { totalFocusSeconds, totalWorkCount } =
       computeFocusTotals(filteredSessions);
 
     const tagDistribution = computeTagDistribution(filteredSessions, tags, totalFocusSeconds);
+
+    const dayOverlapCandidates =
+      periodType === 'day'
+        ? sessions.filter((s) => s.sessionType === 'WORK')
+        : undefined;
 
     const activityBars = computeActivityBars(
       filteredSessions,
       periodType,
       referenceDate,
       startDate,
-      sanitizedCustomRange
+      sanitizedCustomRange,
+      dayOverlapCandidates
     );
 
     const productiveMetric = computeProductiveMetric(
@@ -119,7 +136,6 @@ export function useStatistics() {
     const {
       filteredCoffee,
       totalCoffeeCups,
-      coffeeElapsedDays,
       coffeeDailyAverage,
       coffeePeakMetric,
     } = computeCoffeeStats({
@@ -139,7 +155,6 @@ export function useStatistics() {
       tags,
       periodType,
       totalFocusSeconds,
-      totalCoffeeCups,
       allSessions: periodAllSessions,
     });
 
@@ -150,11 +165,9 @@ export function useStatistics() {
     return {
       periodLabel,
       totalFocusSeconds,
-      totalFocusHours,
       totalWorkCount,
       totalCoffeeCups,
       coffeeDailyAverage,
-      coffeeElapsedDays,
       coffeePeakMetric,
       tagDistribution,
       activityBars,
@@ -172,16 +185,11 @@ export function useStatistics() {
     customRange,
     isCurrentPeriod,
     todayKey,
-    isEffectiveAuthenticated,
   ]);
 
   const topInsight = useMemo(() => {
     return selectTieredInsight(stats.candidateInsights);
   }, [stats.insightsSignature]);
-
-  const insights = useMemo(() => {
-    return topInsight ? [topInsight] : [];
-  }, [topInsight]);
 
   return {
     periodType,
@@ -195,17 +203,14 @@ export function useStatistics() {
     canGoNext,
     isCurrentPeriod,
     totalFocusSeconds: stats.totalFocusSeconds,
-    totalFocusHours: stats.totalFocusHours,
     totalWorkCount: stats.totalWorkCount,
     totalCoffeeCups: stats.totalCoffeeCups,
     coffeeDailyAverage: stats.coffeeDailyAverage,
-    coffeeElapsedDays: stats.coffeeElapsedDays,
     coffeePeakMetric: stats.coffeePeakMetric,
     tagDistribution: stats.tagDistribution,
     activityBars: stats.activityBars,
     productiveMetric: stats.productiveMetric,
     filteredSessions: stats.filteredSessions,
-    insights,
     topInsight,
   };
 }

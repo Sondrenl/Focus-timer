@@ -96,7 +96,8 @@ npm run build
 | Key | Action |
 | :--- | :--- |
 | `Space` | Start / Pause timer |
-| `S` | Skip to next interval |
+| `←` | Previous interval |
+| `→` | Skip to next interval |
 | `R` | Reset current interval |
 
 *(Shortcuts are automatically disabled on mobile and touch devices)*

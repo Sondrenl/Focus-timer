@@ -26,15 +26,20 @@ export function getAdjacentReferenceDate(
   } else if (periodType === 'week') {
     d.setDate(d.getDate() + delta * 7);
   } else if (periodType === 'month') {
-    // Setting day to 1 prevents 31st overflow (e.g. March 31 -> Feb 31 -> March 3)
+    const origDay = d.getDate();
     const targetMonth = d.getMonth() + delta;
     d.setDate(1);
     d.setMonth(targetMonth);
+    const maxDaysInTarget = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(origDay, maxDaysInTarget));
   } else if (periodType === 'year') {
-    // Setting day to 1 prevents leap-year Feb 29 overflow
+    const origDay = d.getDate();
+    const origMonth = d.getMonth();
     const targetYear = d.getFullYear() + delta;
     d.setDate(1);
     d.setFullYear(targetYear);
+    const maxDaysInTarget = new Date(targetYear, origMonth + 1, 0).getDate();
+    d.setDate(Math.min(origDay, maxDaysInTarget));
   }
 
   return d;
@@ -110,8 +115,10 @@ export function computePeriodBounds(
   let endDate: Date;
   let periodLabel = '';
 
-  let sCustomKey = customRange.start;
-  let eCustomKey = customRange.end;
+  const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const todayFallback = toDateKey(new Date());
+  let sCustomKey = DATE_KEY_RE.test(customRange.start) ? customRange.start : todayFallback;
+  let eCustomKey = DATE_KEY_RE.test(customRange.end) ? customRange.end : todayFallback;
   if (sCustomKey > eCustomKey) {
     const tmp = sCustomKey;
     sCustomKey = eCustomKey;

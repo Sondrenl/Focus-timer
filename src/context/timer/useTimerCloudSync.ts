@@ -1,22 +1,33 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { SessionType, TimerStatus, RemoteTimerState, PeerPresence } from '../../types/timer';
+import { SessionType, TimerStatus, RemoteTimerState } from '../../types/timer';
 import { UserSettings } from '../../types/settings';
-import { CoffeeCup } from '../../types/coffee';
-import type { useApp } from '../AppContext';
-import { AuthService } from '../../services/auth/AuthService';
-import { broadcastTimerState } from '../../services/timer/TimerBroadcast';
 import { wakeLockService } from '../../services/screen/WakeLockService';
 import { useConvexTimer } from '../../services/convex/useConvexTimer';
-import { IS_MOBILE } from './timerPersistence';
-import { getLogicalDayKey } from '../../utils/newDayCheck';
-import { evaluateDeviceAlert } from '../../utils/arbitration';
+import { getLogicalDayKey, setLastResetDayKey, INACTIVITY_THRESHOLD_MS } from '../../utils/newDayCheck';
 import { telemetryTracker } from '../services';
 
-interface UseTimerCloudSyncParams {
-  isAuthenticated: boolean;
-  isConvexAuthAuthenticated?: boolean;
-  isConvexAuthLoading?: boolean;
+export interface CompletedSessionFallback {
+  tagId: string | null;
+  sessionType: SessionType;
+  durationSeconds: number;
+  completedAt: string;
+  timerRunId?: string | null;
+}
+
+export interface TimerSnapshot {
+  sessionType?: SessionType;
+  status: TimerStatus;
+  currentCycle?: number;
+  totalSeconds?: number;
+  remainingSeconds: number;
+  targetEndTime: number | null;
+  timerRunId: string | null;
+  activeTagId?: string | null;
+}
+
+export interface TimerSharedRefs {
   isAuthenticatedRef: React.MutableRefObject<boolean>;
+  isConvexConnectedRef: React.MutableRefObject<boolean>;
   sessionTypeRef: React.MutableRefObject<SessionType>;
   statusRef: React.MutableRefObject<TimerStatus>;
   currentCycleRef: React.MutableRefObject<number>;
@@ -27,30 +38,31 @@ interface UseTimerCloudSyncParams {
   localUpdatedAtRef: React.MutableRefObject<number>;
   lastLocalActionWallMsRef: React.MutableRefObject<number>;
   lastTickWallMsRef: React.MutableRefObject<number>;
+  activeTagIdRef: React.MutableRefObject<string | null>;
   prevActiveTagIdRef: React.MutableRefObject<string | null>;
-  peerPresenceRef: React.MutableRefObject<PeerPresence>;
+  serverClockOffsetMsRef: React.MutableRefObject<number>;
   settingsRef: React.MutableRefObject<UserSettings>;
-  profileRef?: React.MutableRefObject<{ dailyGoalMinutes: number }>;
-  coffeeCupsRef?: React.MutableRefObject<CoffeeCup[]>;
+  profileRef: React.MutableRefObject<{ dailyGoalMinutes: number }>;
   handleCompleteRef: React.MutableRefObject<(silent?: boolean) => void>;
-  setSessionType: React.Dispatch<React.SetStateAction<SessionType>>;
-  setStatus: React.Dispatch<React.SetStateAction<TimerStatus>>;
-  setCurrentCycle: React.Dispatch<React.SetStateAction<number>>;
-  setTotalSeconds: React.Dispatch<React.SetStateAction<number>>;
-  setRemainingSeconds: React.Dispatch<React.SetStateAction<number>>;
-  setTargetEndTime: React.Dispatch<React.SetStateAction<number | null>>;
-  setActiveTagId?: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
-  getDurationForType: (type: SessionType) => number;
-  dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
-  sound: ReturnType<typeof useApp>['sound'];
-  notifications: ReturnType<typeof useApp>['notifications'];
-  authService: AuthService;
 }
 
 export interface ResetTimerOptions {
   onlyIfNotRunning?: boolean;
+  onlyIfIdle?: boolean;
   expectedTimerRunId?: string;
   expectedUpdatedAtMs?: number;
+}
+
+interface UseTimerCloudSyncParams {
+  isAuthenticated: boolean;
+  isConvexAuthReady?: boolean;
+  isConvexConnected?: boolean;
+  refs: TimerSharedRefs;
+  getServerAlignedNowMs: () => number;
+  commitTimerSnapshot: (snapshot: TimerSnapshot) => void;
+  getDurationForType: (type: SessionType) => number;
+  dispatchCompletionAlert: (completedSessionType: SessionType, runId?: string | null) => void;
+  triggerCompletionConfetti?: () => void;
 }
 
 function toRemoteTimerState(raw: {
@@ -63,7 +75,10 @@ function toRemoteTimerState(raw: {
   activeTagId?: string | null;
   tagId?: string | null;
   timerRunId?: string | null;
+  lastCompletedTimerRunId?: string | null;
+  serverAutoStartStreak?: number;
   updatedAtMs: number;
+  serverNowMs?: number;
 }): RemoteTimerState {
   return {
     sessionType: raw.sessionType,
@@ -74,46 +89,25 @@ function toRemoteTimerState(raw: {
     currentCycle: raw.currentCycle,
     activeTagId: (raw.activeTagId !== undefined ? raw.activeTagId : raw.tagId) ?? null,
     timerRunId: raw.timerRunId ?? null,
+    lastCompletedTimerRunId: raw.lastCompletedTimerRunId ?? null,
+    serverAutoStartStreak: raw.serverAutoStartStreak,
     updatedAtMs: raw.updatedAtMs,
+    serverNowMs: raw.serverNowMs,
   };
 }
 
 export const useTimerCloudSync = ({
   isAuthenticated,
-  isConvexAuthAuthenticated = true,
-  isConvexAuthLoading = false,
-  isAuthenticatedRef,
-  sessionTypeRef,
-  statusRef,
-  currentCycleRef,
-  totalSecondsRef,
-  remainingSecondsRef,
-  targetEndTimeRef,
-  timerRunIdRef,
-  localUpdatedAtRef,
-  lastLocalActionWallMsRef,
-  lastTickWallMsRef,
-  prevActiveTagIdRef,
-  peerPresenceRef,
-  settingsRef,
-  profileRef,
-  coffeeCupsRef,
-  handleCompleteRef,
-  setSessionType,
-  setStatus,
-  setCurrentCycle,
-  setTotalSeconds,
-  setRemainingSeconds,
-  setTargetEndTime,
-  setActiveTagId,
+  isConvexAuthReady = isAuthenticated,
+  isConvexConnected = true,
+  refs,
+  getServerAlignedNowMs,
+  commitTimerSnapshot,
   getDurationForType,
   dispatchCompletionAlert,
-  sound,
-  notifications,
-  authService,
+  triggerCompletionConfetti,
 }: UseTimerCloudSyncParams) => {
-  const isConvexQueryAuthReady =
-    !isAuthenticated || !isConvexAuthLoading || Boolean(isConvexAuthAuthenticated);
+  const isConvexQueryAuthReady = !isAuthenticated || Boolean(isConvexAuthReady);
 
   const { isConvexConfigured, remoteTimer, mutations: convexTimerMutations } =
     useConvexTimer(isAuthenticated, isConvexQueryAuthReady);
@@ -123,152 +117,165 @@ export const useTimerCloudSync = ({
   const remoteTimerRef = useRef(remoteTimer);
   remoteTimerRef.current = remoteTimer;
 
-  const hasResolvedRemoteTimerRef = useRef<boolean>(false);
-  hasResolvedRemoteTimerRef.current = Boolean(
+  const hasResolvedRemoteTimer = Boolean(
     isConvexConfigured &&
       isAuthenticated &&
-      remoteTimer !== undefined &&
-      (remoteTimer !== null || isConvexQueryAuthReady)
+      isConvexQueryAuthReady &&
+      remoteTimer !== undefined
   );
+  const hasResolvedRemoteTimerRef = useRef<boolean>(false);
+  hasResolvedRemoteTimerRef.current = hasResolvedRemoteTimer;
 
   const isInitialMountDoneRef = useRef<boolean>(false);
+  const hasReconciledSignInRef = useRef<boolean>(false);
+  const prevConnectedRef = useRef<boolean>(isConvexConnected);
   const finalizedStaleRunIdsRef = useRef<Set<string>>(new Set());
-  const lastReportedPresenceRef = useRef<{
-    isMobile: boolean;
-    isVisible: boolean;
-    time: number;
-  } | null>(null);
+  const acknowledgedRunIdsRef = useRef<Set<string>>(new Set());
 
-  // Forward-declared ref so mutation reconciliation callbacks can invoke applyRemoteState
-  const applyRemoteStateRef = useRef<(remote: RemoteTimerState) => void>(() => {});
+  const isOnlineAndConnected = useCallback((): boolean => {
+    return Boolean(
+      isConvexConfigured &&
+        refs.isAuthenticatedRef.current &&
+        refs.isConvexConnectedRef.current
+    );
+  }, [isConvexConfigured, refs]);
 
-  // Helper to broadcast and push local timer state changes safely without race conditions
-  const publishLocalTimerState = useCallback(
-    (payload: RemoteTimerState, isUserAction = false, resetOptions?: ResetTimerOptions) => {
-      localUpdatedAtRef.current = payload.updatedAtMs;
-      if (isUserAction) {
-        lastLocalActionWallMsRef.current = Date.now();
-      }
-
-      broadcastTimerState(payload);
-
-      if (isConvexConfigured && isAuthenticatedRef.current) {
-        if (payload.status === 'RUNNING') {
-          convexTimerMutationsRef.current
-            .startTimer({
-              sessionType: payload.sessionType,
-              durationSeconds: payload.totalSeconds,
-              remainingSeconds: payload.remainingSeconds,
-              totalSeconds: payload.totalSeconds,
-              currentCycle: payload.currentCycle,
-              tagId: payload.activeTagId || undefined,
-              timerRunId: payload.timerRunId || `run-${Date.now()}`,
-            })
-            .catch(console.warn);
-        } else if (payload.status === 'PAUSED') {
-          convexTimerMutationsRef.current
-            .pauseTimer({
-              remainingSeconds: payload.remainingSeconds,
-              tagId: payload.activeTagId || undefined,
-            })
-            .catch(console.warn);
-        } else if (payload.status === 'IDLE') {
-          convexTimerMutationsRef.current
-            .resetTimer({
-              sessionType: payload.sessionType,
-              durationSeconds: payload.totalSeconds,
-              currentCycle: payload.currentCycle,
-              tagId: payload.activeTagId || undefined,
-              onlyIfNotRunning: resetOptions?.onlyIfNotRunning,
-              expectedTimerRunId: resetOptions?.expectedTimerRunId,
-              expectedUpdatedAtMs: resetOptions?.expectedUpdatedAtMs,
-            })
-            .then((res: any) => {
-              if (
-                resetOptions &&
-                res &&
-                typeof res === 'object' &&
-                typeof res.updatedAtMs === 'number' &&
-                (res.status === 'RUNNING' ||
-                  (resetOptions.expectedUpdatedAtMs !== undefined &&
-                    res.updatedAtMs > resetOptions.expectedUpdatedAtMs))
-              ) {
-                localUpdatedAtRef.current = res.updatedAtMs;
-                applyRemoteStateRef.current(toRemoteTimerState(res));
-              }
-            })
-            .catch(console.warn);
-        }
-      }
+  const recordServerClockSample = useCallback(
+    (serverNowMs?: number) => {
+      if (typeof serverNowMs !== 'number' || !Number.isFinite(serverNowMs)) return;
+      const rawOffset = serverNowMs - Date.now();
+      if (Math.abs(rawOffset) > 12 * 60 * 60 * 1000) return;
+      const prev = refs.serverClockOffsetMsRef.current;
+      refs.serverClockOffsetMsRef.current =
+        prev === 0 || Math.abs(rawOffset - prev) > 2000
+          ? rawOffset
+          : Math.round(prev * 0.7 + rawOffset * 0.3);
     },
-    [isConvexConfigured, localUpdatedAtRef, lastLocalActionWallMsRef, isAuthenticatedRef]
+    [refs]
   );
 
-  const publishTimerCompletion = useCallback(
-    (payload: RemoteTimerState, completedTimerRunId?: string | null) => {
-      localUpdatedAtRef.current = payload.updatedAtMs;
-      broadcastTimerState(payload);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      refs.serverClockOffsetMsRef.current = 0;
+      hasReconciledSignInRef.current = false;
+      acknowledgedRunIdsRef.current.clear();
+    }
+  }, [isAuthenticated, refs]);
 
-      if (isConvexConfigured && isAuthenticatedRef.current) {
+  const applyRemoteStateRef = useRef<(remote: RemoteTimerState, forceApply?: boolean) => void>(
+    () => {}
+  );
+
+  const reconcileMutationResponse = useCallback(
+    (res: any, dispatchActionWallMs: number) => {
+      if (!res || typeof res !== 'object') return;
+      recordServerClockSample(res.serverNowMs);
+      if (
+        res.applied === false &&
+        typeof res.updatedAtMs === 'number' &&
+        refs.lastLocalActionWallMsRef.current === dispatchActionWallMs
+      ) {
+        refs.localUpdatedAtRef.current = res.updatedAtMs;
+        applyRemoteStateRef.current(toRemoteTimerState(res), true);
+      } else if (typeof res.updatedAtMs === 'number') {
+        refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, res.updatedAtMs);
+      }
+    },
+    [recordServerClockSample, refs]
+  );
+
+  const publishLocalTimerState = useCallback(
+    (payload: RemoteTimerState, isUserAction = false, resetOptions?: ResetTimerOptions) => {
+      refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, payload.updatedAtMs);
+      if (isUserAction) {
+        refs.lastLocalActionWallMsRef.current = Date.now();
+      }
+      const dispatchActionWallMs = refs.lastLocalActionWallMsRef.current;
+
+      if (!isOnlineAndConnected()) {
+        return;
+      }
+
+      let mutationPromise: Promise<any> | null = null;
+      if (payload.status === 'RUNNING') {
+        mutationPromise = convexTimerMutationsRef.current.startTimer({
+          sessionType: payload.sessionType,
+          durationSeconds: Math.max(1, Math.round(payload.totalSeconds)),
+          remainingSeconds: Math.max(1, Math.round(payload.remainingSeconds)),
+          totalSeconds: Math.max(1, Math.round(payload.totalSeconds)),
+          currentCycle: Math.max(1, Math.round(payload.currentCycle)),
+          tagId: payload.activeTagId || undefined,
+          timerRunId: payload.timerRunId || `run-${Date.now()}`,
+          clientActionAtMs: payload.updatedAtMs,
+          clientTargetEndTimeMs: payload.targetEndTime ?? undefined,
+        });
+      } else if (payload.status === 'PAUSED') {
+        mutationPromise = convexTimerMutationsRef.current.pauseTimer({
+          remainingSeconds: Math.max(0, Math.round(payload.remainingSeconds)),
+          tagId: payload.activeTagId || undefined,
+          expectedTimerRunId: payload.timerRunId || undefined,
+        });
+      } else if (payload.status === 'IDLE') {
+        mutationPromise = convexTimerMutationsRef.current.resetTimer({
+          sessionType: payload.sessionType,
+          durationSeconds: Math.max(1, Math.round(payload.totalSeconds)),
+          currentCycle: Math.max(1, Math.round(payload.currentCycle)),
+          tagId: payload.activeTagId || undefined,
+          onlyIfNotRunning: resetOptions?.onlyIfNotRunning,
+          onlyIfIdle: resetOptions?.onlyIfIdle,
+          expectedTimerRunId: resetOptions?.expectedTimerRunId,
+          expectedUpdatedAtMs: resetOptions?.expectedUpdatedAtMs,
+          clientActionAtMs: payload.updatedAtMs,
+        });
+      }
+
+      if (mutationPromise) {
+        mutationPromise
+          .then((res) => reconcileMutationResponse(res, dispatchActionWallMs))
+          .catch(console.warn);
+      }
+    },
+    [isOnlineAndConnected, refs, reconcileMutationResponse]
+  );
+
+  const publishTagUpdate = useCallback(
+    (nextTagId: string | null) => {
+      const nowAligned = getServerAlignedNowMs();
+      refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, nowAligned);
+      refs.lastLocalActionWallMsRef.current = Date.now();
+
+      if (!isOnlineAndConnected()) {
+        return;
+      }
+
+      const currentStatus = refs.statusRef.current;
+      if (currentStatus !== 'COMPLETED') {
         convexTimerMutationsRef.current
-          .completeTimer({
-            completedTimerRunId: completedTimerRunId || undefined,
-            nextSessionType: payload.sessionType,
-            nextDurationSeconds: payload.totalSeconds,
-            nextCurrentCycle: payload.currentCycle,
-            autoStartNext: payload.status === 'RUNNING',
-            nextTimerRunId: payload.timerRunId || undefined,
-            tagId: payload.activeTagId || undefined,
+          .updateTag({
+            tagId: nextTagId || undefined,
+            expectedStatus: currentStatus,
+            expectedTimerRunId:
+              currentStatus === 'RUNNING' || currentStatus === 'PAUSED'
+                ? refs.timerRunIdRef.current || undefined
+                : undefined,
           })
           .then((res: any) => {
-            if (res && typeof res === 'object' && typeof res.updatedAtMs === 'number') {
-              const diverged =
-                (res.status === 'RUNNING' && res.timerRunId !== payload.timerRunId) ||
-                (payload.status === 'RUNNING' && res.status !== 'RUNNING');
-              if (diverged) {
-                if (
-                  payload.status === 'RUNNING' &&
-                  payload.timerRunId &&
-                  res.timerRunId !== payload.timerRunId
-                ) {
-                  void telemetryTracker.discardInProgressAttempt(payload.timerRunId);
-                }
-                localUpdatedAtRef.current = res.updatedAtMs;
-                applyRemoteStateRef.current(toRemoteTimerState(res));
+            if (res && typeof res === 'object') {
+              recordServerClockSample(res.serverNowMs);
+              if (typeof res.updatedAtMs === 'number') {
+                refs.localUpdatedAtRef.current = Math.max(
+                  refs.localUpdatedAtRef.current,
+                  res.updatedAtMs
+                );
               }
             }
           })
           .catch(console.warn);
       }
     },
-    [isConvexConfigured, localUpdatedAtRef, isAuthenticatedRef]
+    [isOnlineAndConnected, getServerAlignedNowMs, refs, recordServerClockSample]
   );
 
-  const reportPresence = useCallback(
-    (isVisible: boolean) => {
-      if (!isConvexConfigured || !isAuthenticatedRef.current) return;
-      const now = Date.now();
-      const last = lastReportedPresenceRef.current;
-      if (
-        last &&
-        last.isMobile === IS_MOBILE &&
-        last.isVisible === isVisible &&
-        now - last.time < 60000
-      ) {
-        return;
-      }
-      lastReportedPresenceRef.current = { isMobile: IS_MOBILE, isVisible, time: now };
-      convexTimerMutationsRef.current
-        .updatePresence({
-          isMobile: IS_MOBILE,
-          isVisible,
-        })
-        .catch(() => {});
-    },
-    [isConvexConfigured, isAuthenticatedRef]
-  );
-
-  // Mark initial mount hydration complete after first render cycle so initial tag setup doesn't push IDLE over remote timer
   useEffect(() => {
     const timer = setTimeout(() => {
       isInitialMountDoneRef.current = true;
@@ -276,33 +283,18 @@ export const useTimerCloudSync = ({
     return () => clearTimeout(timer);
   }, []);
 
-  // Register device presence eagerly when authenticated so peers detect each other immediately
   useEffect(() => {
-    if (isConvexConfigured && isAuthenticated) {
-      reportPresence(typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true);
-    }
-  }, [isConvexConfigured, isAuthenticated, reportPresence]);
-
-  // Report device unload when the browser tab or app is closed
-  useEffect(() => {
-    const handlePageHide = (e: PageTransitionEvent) => {
-      wakeLockService.release();
-      if (e.persisted) return;
-      reportPresence(false);
-    };
-
+    const handlePageHide = () => wakeLockService.release();
     window.addEventListener('pagehide', handlePageHide);
-    return () => {
-      window.removeEventListener('pagehide', handlePageHide);
-    };
-  }, [reportPresence]);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, []);
 
-  // Method to apply authoritative remote timer state
   const applyRemoteState = useCallback(
-    (remote: RemoteTimerState) => {
-      const nowMs = Date.now();
-      const MAX_FUTURE_DRIFT_MS = 10 * 60_000; // Allow up to 10m clock skew before NTP resyncs on wake
-      const MAX_PAST_AGE_MS = 7 * 24 * 60 * 60 * 1000; // Max 7 days
+    (remote: RemoteTimerState, forceApply = false) => {
+      const wallNowMs = Date.now();
+      const nowMs = getServerAlignedNowMs();
+      const MAX_FUTURE_DRIFT_MS = 10 * 60_000;
+      const MAX_PAST_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
       if (
         typeof remote.updatedAtMs !== 'number' ||
@@ -314,234 +306,234 @@ export const useTimerCloudSync = ({
         return;
       }
 
-      const hasRecentLocalAction = nowMs - lastLocalActionWallMsRef.current < 1500;
-      const isNewer = remote.updatedAtMs > localUpdatedAtRef.current;
+      const isServerCompletionOfCurrentRun = Boolean(
+        refs.timerRunIdRef.current &&
+          remote.lastCompletedTimerRunId === refs.timerRunIdRef.current
+      );
 
-      // Only reject remote state if the user directly clicked a button on THIS device
-      // in the last 1.5s AND the remote snapshot is older than that button click.
-      if (hasRecentLocalAction && !isNewer) {
+      if (forceApply || isServerCompletionOfCurrentRun) {
+        refs.lastLocalActionWallMsRef.current = 0;
+      } else if (
+        wallNowMs - refs.lastLocalActionWallMsRef.current < 1500 &&
+        remote.updatedAtMs <= refs.localUpdatedAtRef.current
+      ) {
         return;
       }
 
-      const now = authService.getServerNow();
-
-      // Trigger completion alert when remote signals completion or advances to next interval at end time
-      // Never fire alerts if completion happened >60s ago (e.g. waking up from OS Doze/sleep).
+      const now = getServerAlignedNowMs();
       const STALE_ALERT_CUTOFF_MS = 60_000;
-      const targetPassedRecently =
-        targetEndTimeRef.current !== null &&
-        now >= targetEndTimeRef.current - 5000 &&
-        now - targetEndTimeRef.current <= STALE_ALERT_CUTOFF_MS;
-      const remoteCompletedRecently =
-        remote.status === 'COMPLETED' &&
-        nowMs - remote.updatedAtMs <= STALE_ALERT_CUTOFF_MS;
+      const targetNearOrJustPassed =
+        refs.targetEndTimeRef.current !== null &&
+        refs.targetEndTimeRef.current - now <= 15_000 &&
+        now - refs.targetEndTimeRef.current <= STALE_ALERT_CUTOFF_MS;
+      const remoteUpdatedRecently = Math.abs(now - remote.updatedAtMs) <= STALE_ALERT_CUTOFF_MS;
+      const remoteCompletedRecently = remote.status === 'COMPLETED' && remoteUpdatedRecently;
+      const runAdvanced =
+        remote.sessionType !== refs.sessionTypeRef.current ||
+        (Boolean(refs.timerRunIdRef.current) &&
+          remote.lastCompletedTimerRunId === refs.timerRunIdRef.current);
+      const remoteCompletedToIdle =
+        remote.status === 'IDLE' && runAdvanced && targetNearOrJustPassed && remoteUpdatedRecently;
+      const remoteAutoStartedNextInterval =
+        remote.status === 'RUNNING' &&
+        Boolean(remote.timerRunId) &&
+        remote.timerRunId !== refs.timerRunIdRef.current &&
+        runAdvanced &&
+        targetNearOrJustPassed &&
+        remoteUpdatedRecently;
+
+      const prevRunId = refs.timerRunIdRef.current;
+      const prevSessionType = refs.sessionTypeRef.current;
 
       if (
-        statusRef.current === 'RUNNING' &&
-        (remoteCompletedRecently ||
-          (remote.status === 'IDLE' &&
-            remote.sessionType !== sessionTypeRef.current &&
-            targetPassedRecently))
+        refs.statusRef.current === 'RUNNING' &&
+        (remoteCompletedRecently || remoteCompletedToIdle || remoteAutoStartedNextInterval)
       ) {
-        const completedType = sessionTypeRef.current;
-        const completedRunId =
-          timerRunIdRef.current || remote.timerRunId || `${completedType.toLowerCase()}-${now}`;
-        dispatchCompletionAlert(completedType, completedRunId);
+        const completedRunId = remoteAutoStartedNextInterval
+          ? prevRunId || `${prevSessionType.toLowerCase()}-${now}`
+          : prevRunId || remote.timerRunId || `${prevSessionType.toLowerCase()}-${now}`;
+        dispatchCompletionAlert(prevSessionType, completedRunId);
+        if (
+          triggerCompletionConfetti &&
+          (typeof document === 'undefined' || document.visibilityState === 'visible')
+        ) {
+          triggerCompletionConfetti();
+        }
+        if (prevRunId) {
+          void telemetryTracker.onSessionFinalized({
+            attemptId: prevRunId,
+            outcome: 'completed',
+            sessionType: prevSessionType,
+            plannedDurationSeconds: refs.totalSecondsRef.current,
+            remainingSecondsAtEnd: 0,
+            cycleIndex: refs.currentCycleRef.current,
+            tagId: refs.activeTagIdRef.current,
+            settings: refs.settingsRef.current,
+            dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes ?? 120,
+            wasStarted: true,
+            targetEndTimeMs: refs.targetEndTimeRef.current,
+          });
+        }
+      } else if (
+        prevRunId &&
+        (remote.status === 'IDLE' ||
+          remote.status !== refs.statusRef.current ||
+          (remote.timerRunId && remote.timerRunId !== prevRunId))
+      ) {
+        telemetryTracker.invalidateDraftCache();
       }
 
-      localUpdatedAtRef.current = Math.max(localUpdatedAtRef.current, remote.updatedAtMs);
+      refs.localUpdatedAtRef.current = forceApply
+        ? remote.updatedAtMs
+        : Math.max(refs.localUpdatedAtRef.current, remote.updatedAtMs);
+
+      const resetStaleRemoteTimer = (
+        isFromPreviousDay: boolean,
+        remainingSecondsAtEnd: number,
+        targetEndTimeMs: number | null,
+        viaPublishLocal: boolean
+      ) => {
+        const resolvedSessionType: SessionType = isFromPreviousDay ? 'WORK' : remote.sessionType;
+        const resolvedCycle = isFromPreviousDay ? 1 : (remote.currentCycle || 1);
+        const dur = getDurationForType(resolvedSessionType);
+        const staleRunId = remote.timerRunId || null;
+
+        if (staleRunId && !finalizedStaleRunIdsRef.current.has(staleRunId)) {
+          finalizedStaleRunIdsRef.current.add(staleRunId);
+          void telemetryTracker.onSessionFinalized({
+            attemptId: staleRunId,
+            outcome: 'abandoned_stale',
+            sessionType: remote.sessionType,
+            plannedDurationSeconds: remote.totalSeconds || dur,
+            remainingSecondsAtEnd,
+            cycleIndex: remote.currentCycle || 1,
+            tagId: remote.activeTagId ?? null,
+            settings: refs.settingsRef.current,
+            dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes ?? 120,
+            wasStarted: true,
+            targetEndTimeMs,
+          });
+        }
+
+        commitTimerSnapshot({
+          sessionType: resolvedSessionType,
+          status: 'IDLE',
+          currentCycle: resolvedCycle,
+          totalSeconds: dur,
+          remainingSeconds: dur,
+          targetEndTime: null,
+          timerRunId: null,
+          activeTagId: remote.activeTagId,
+        });
+        void wakeLockService.release();
+
+        if (isFromPreviousDay) {
+          setLastResetDayKey(getLogicalDayKey(wallNowMs));
+        }
+
+        if (viaPublishLocal) {
+          publishLocalTimerState(
+            {
+              sessionType: resolvedSessionType,
+              status: 'IDLE',
+              remainingSeconds: dur,
+              totalSeconds: dur,
+              targetEndTime: null,
+              currentCycle: resolvedCycle,
+              activeTagId: remote.activeTagId ?? null,
+              timerRunId: null,
+              updatedAtMs: nowMs,
+            },
+            false,
+            { onlyIfNotRunning: true, expectedUpdatedAtMs: remote.updatedAtMs }
+          );
+        } else if (isOnlineAndConnected()) {
+          convexTimerMutationsRef.current
+            .resetTimer({
+              sessionType: resolvedSessionType,
+              durationSeconds: dur,
+              currentCycle: resolvedCycle,
+              tagId: remote.activeTagId || undefined,
+              ...(remote.timerRunId
+                ? { expectedTimerRunId: remote.timerRunId }
+                : { onlyIfNotRunning: true, expectedUpdatedAtMs: remote.updatedAtMs }),
+            })
+            .catch(() => {});
+        }
+      };
 
       if (remote.status === 'RUNNING' && remote.targetEndTime) {
         const diffMs = remote.targetEndTime - now;
-        const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+        const rawDiffSec = Math.max(0, Math.ceil(diffMs / 1000));
+        const diffSec =
+          remote.totalSeconds > 0 ? Math.min(remote.totalSeconds, rawDiffSec) : rawDiffSec;
 
-        if (diffSec > 0) {
-          wakeLockService.acquire();
-
-          sessionTypeRef.current = remote.sessionType;
-          currentCycleRef.current = remote.currentCycle || 1;
-          totalSecondsRef.current = remote.totalSeconds;
-          remainingSecondsRef.current = diffSec;
-          statusRef.current = 'RUNNING';
-          setSessionType(remote.sessionType);
-          setCurrentCycle(remote.currentCycle || 1);
-          setTotalSeconds(remote.totalSeconds);
-          timerRunIdRef.current = remote.timerRunId || null;
-          if (remote.activeTagId !== undefined && setActiveTagId) {
-            prevActiveTagIdRef.current = remote.activeTagId;
-            setActiveTagId(remote.activeTagId, { skipTelemetry: true });
-          }
-
-          targetEndTimeRef.current = remote.targetEndTime;
-          setTargetEndTime(remote.targetEndTime);
-          setRemainingSeconds(diffSec);
-          setStatus('RUNNING');
-          lastTickWallMsRef.current = Date.now();
-
-          if (settingsRef.current.notificationsEnabled && notifications.hasPermission()) {
-            const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-            const shouldAlert = evaluateDeviceAlert({
-              isMobile: IS_MOBILE,
-              isVisible,
-              peer: peerPresenceRef.current,
-              type: remote.sessionType,
-            });
-            notifications.scheduleTimerNotification(
-              Date.now() + diffSec * 1000,
-              remote.sessionType,
-              shouldAlert,
-              remote.timerRunId
-            );
-          } else {
-            notifications.cancelScheduledNotification();
-          }
-        } else {
-          if (diffMs < -900000) {
-            const dur = getDurationForType(remote.sessionType);
-            const cycle = remote.currentCycle || 1;
-            const staleRunId = remote.timerRunId || null;
-
-            if (staleRunId && !finalizedStaleRunIdsRef.current.has(staleRunId)) {
-              finalizedStaleRunIdsRef.current.add(staleRunId);
-              void telemetryTracker.onSessionFinalized({
-                attemptId: staleRunId,
-                outcome: 'abandoned_stale',
-                sessionType: remote.sessionType,
-                plannedDurationSeconds: remote.totalSeconds || dur,
-                remainingSecondsAtEnd: 0,
-                cycleIndex: cycle,
-                tagId: remote.activeTagId ?? null,
-                settings: settingsRef.current,
-                dailyGoalMinutes: profileRef?.current.dailyGoalMinutes ?? 120,
-                coffeeCups: coffeeCupsRef?.current ?? [],
-                wasStarted: true,
-                targetEndTimeMs: remote.targetEndTime,
-              });
-            }
-
-            sessionTypeRef.current = remote.sessionType;
-            currentCycleRef.current = cycle;
-            totalSecondsRef.current = dur;
-            remainingSecondsRef.current = dur;
-            statusRef.current = 'IDLE';
-            setSessionType(remote.sessionType);
-            setCurrentCycle(cycle);
-            setTotalSeconds(dur);
-            setRemainingSeconds(dur);
-            setStatus('IDLE');
-            targetEndTimeRef.current = null;
-            setTargetEndTime(null);
-            timerRunIdRef.current = null;
-            if (remote.activeTagId !== undefined && setActiveTagId) {
-              prevActiveTagIdRef.current = remote.activeTagId;
-              setActiveTagId(remote.activeTagId, { skipTelemetry: true });
-            }
-            notifications.cancelScheduledNotification();
-            wakeLockService.release();
-
-            // Self-heal: authoritatively reset Convex state only if this exact stale run is still active
-            convexTimerMutationsRef.current
-              .resetTimer({
-                sessionType: remote.sessionType,
-                durationSeconds: dur,
-                currentCycle: cycle,
-                tagId: remote.activeTagId || undefined,
-                expectedTimerRunId: remote.timerRunId || undefined,
-              })
-              .catch(() => {});
-            return;
-          }
-
-          // Align local refs with the remote running session before invoking completion transition
-          sessionTypeRef.current = remote.sessionType;
-          currentCycleRef.current = remote.currentCycle || 1;
-          totalSecondsRef.current = remote.totalSeconds;
-          remainingSecondsRef.current = 0;
-          targetEndTimeRef.current = remote.targetEndTime;
-          timerRunIdRef.current = remote.timerRunId || null;
-          if (remote.activeTagId !== undefined && setActiveTagId) {
-            prevActiveTagIdRef.current = remote.activeTagId;
-            setActiveTagId(remote.activeTagId, { skipTelemetry: true });
-          }
-
-          const expiredLongAgo = diffMs < -60000;
-          handleCompleteRef.current(expiredLongAgo);
-        }
-      } else if (remote.status === 'PAUSED') {
-        const PAUSED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-        if (nowMs - remote.updatedAtMs > PAUSED_TTL_MS) {
-          const dur = getDurationForType(remote.sessionType);
-          const cycle = remote.currentCycle || 1;
-          const staleRunId = remote.timerRunId || null;
-
-          if (staleRunId && !finalizedStaleRunIdsRef.current.has(staleRunId)) {
-            finalizedStaleRunIdsRef.current.add(staleRunId);
-            void telemetryTracker.onSessionFinalized({
-              attemptId: staleRunId,
-              outcome: 'abandoned_stale',
-              sessionType: remote.sessionType,
-              plannedDurationSeconds: remote.totalSeconds || dur,
-              remainingSecondsAtEnd: remote.remainingSeconds,
-              cycleIndex: cycle,
-              tagId: remote.activeTagId ?? null,
-              settings: settingsRef.current,
-              dailyGoalMinutes: profileRef?.current.dailyGoalMinutes ?? 120,
-              coffeeCups: coffeeCupsRef?.current ?? [],
-              wasStarted: true,
-              targetEndTimeMs: null,
-            });
-          }
-
-          sessionTypeRef.current = remote.sessionType;
-          currentCycleRef.current = cycle;
-          totalSecondsRef.current = dur;
-          remainingSecondsRef.current = dur;
-          statusRef.current = 'IDLE';
-          setSessionType(remote.sessionType);
-          setCurrentCycle(cycle);
-          setTotalSeconds(dur);
-          setRemainingSeconds(dur);
-          setStatus('IDLE');
-          targetEndTimeRef.current = null;
-          setTargetEndTime(null);
-          timerRunIdRef.current = null;
-          wakeLockService.release();
-
-          convexTimerMutationsRef.current
-            .resetTimer({
-              sessionType: remote.sessionType,
-              durationSeconds: dur,
-              currentCycle: cycle,
-              tagId: remote.activeTagId || undefined,
-              onlyIfNotRunning: true,
-            })
-            .catch(() => {});
+        if (diffMs < -900000) {
+          const isFromPreviousDay =
+            getLogicalDayKey(remote.targetEndTime) !== getLogicalDayKey(now) &&
+            now - remote.targetEndTime >= INACTIVITY_THRESHOLD_MS;
+          resetStaleRemoteTimer(isFromPreviousDay, 0, remote.targetEndTime, false);
           return;
         }
 
-        sessionTypeRef.current = remote.sessionType;
-        currentCycleRef.current = remote.currentCycle || 1;
-        totalSecondsRef.current = remote.totalSeconds;
-        remainingSecondsRef.current = remote.remainingSeconds;
-        statusRef.current = 'PAUSED';
-        setSessionType(remote.sessionType);
-        setCurrentCycle(remote.currentCycle || 1);
-        setTotalSeconds(remote.totalSeconds);
-        timerRunIdRef.current = remote.timerRunId || null;
-        if (remote.activeTagId !== undefined && setActiveTagId) {
-          prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId, { skipTelemetry: true });
+        if (refs.settingsRef.current.keepAwake !== false) {
+          void wakeLockService.acquire();
+        }
+        commitTimerSnapshot({
+          sessionType: remote.sessionType,
+          status: 'RUNNING',
+          currentCycle: remote.currentCycle || 1,
+          totalSeconds: remote.totalSeconds,
+          remainingSeconds: diffSec,
+          targetEndTime: remote.targetEndTime,
+          timerRunId: remote.timerRunId || null,
+          activeTagId: remote.activeTagId,
+        });
+        if (remoteAutoStartedNextInterval && remote.timerRunId && diffSec > 0) {
+          void telemetryTracker.onSessionStarted({
+            attemptId: remote.timerRunId,
+            sessionType: remote.sessionType,
+            plannedDurationSeconds: remote.totalSeconds,
+            cycleIndex: remote.currentCycle || 1,
+            tagId: remote.activeTagId ?? null,
+            autoStarted: true,
+            settings: refs.settingsRef.current,
+            dailyGoalMinutes: refs.profileRef.current.dailyGoalMinutes ?? 120,
+            targetEndTimeMs: remote.targetEndTime,
+            nowMs: now,
+          });
+        }
+        refs.lastTickWallMsRef.current = Date.now();
+      } else if (remote.status === 'PAUSED') {
+        const PAUSED_TTL_MS = 24 * 60 * 60 * 1000;
+        const isPausedFromPreviousDay =
+          getLogicalDayKey(remote.updatedAtMs) !== getLogicalDayKey(wallNowMs) &&
+          nowMs - remote.updatedAtMs >= INACTIVITY_THRESHOLD_MS;
+        if (isPausedFromPreviousDay || nowMs - remote.updatedAtMs > PAUSED_TTL_MS) {
+          resetStaleRemoteTimer(isPausedFromPreviousDay, remote.remainingSeconds, null, true);
+          return;
         }
 
-        wakeLockService.release();
-        notifications.cancelScheduledNotification();
-        targetEndTimeRef.current = null;
-        setTargetEndTime(null);
-        setRemainingSeconds(remote.remainingSeconds);
-        setStatus('PAUSED');
+        const clampedPausedRemaining =
+          remote.totalSeconds > 0
+            ? Math.min(remote.totalSeconds, Math.max(0, remote.remainingSeconds))
+            : Math.max(0, remote.remainingSeconds);
+
+        commitTimerSnapshot({
+          sessionType: remote.sessionType,
+          status: 'PAUSED',
+          currentCycle: remote.currentCycle || 1,
+          totalSeconds: remote.totalSeconds,
+          remainingSeconds: clampedPausedRemaining,
+          targetEndTime: null,
+          timerRunId: remote.timerRunId || null,
+          activeTagId: remote.activeTagId,
+        });
+        void wakeLockService.release();
       } else {
         const isFromPreviousDay =
-          getLogicalDayKey(remote.updatedAtMs) !== getLogicalDayKey(nowMs);
+          getLogicalDayKey(remote.updatedAtMs) !== getLogicalDayKey(wallNowMs) &&
+          nowMs - remote.updatedAtMs >= INACTIVITY_THRESHOLD_MS;
         const resolvedSessionType = isFromPreviousDay ? 'WORK' : remote.sessionType;
         const resolvedCycle = isFromPreviousDay ? 1 : (remote.currentCycle || 1);
         const nextStatus: TimerStatus =
@@ -549,89 +541,175 @@ export const useTimerCloudSync = ({
         const dur = isFromPreviousDay
           ? getDurationForType('WORK')
           : remote.remainingSeconds && remote.remainingSeconds > 0
-          ? remote.remainingSeconds
-          : remote.status === 'COMPLETED' && remote.totalSeconds && remote.totalSeconds > 0
-          ? remote.totalSeconds
-          : getDurationForType(remote.sessionType);
+            ? remote.remainingSeconds
+            : remote.status === 'COMPLETED' && remote.totalSeconds && remote.totalSeconds > 0
+              ? remote.totalSeconds
+              : getDurationForType(remote.sessionType);
         const tot = isFromPreviousDay
           ? dur
           : remote.totalSeconds && remote.totalSeconds > 0
-          ? remote.totalSeconds
-          : dur;
+            ? remote.totalSeconds
+            : dur;
 
-        sessionTypeRef.current = resolvedSessionType;
-        currentCycleRef.current = resolvedCycle;
-        totalSecondsRef.current = tot;
-        remainingSecondsRef.current = dur;
-        statusRef.current = nextStatus;
-        setSessionType(resolvedSessionType);
-        setCurrentCycle(resolvedCycle);
-        setTotalSeconds(tot);
-        timerRunIdRef.current = remote.timerRunId || null;
-        if (remote.activeTagId !== undefined && setActiveTagId) {
-          prevActiveTagIdRef.current = remote.activeTagId;
-          setActiveTagId(remote.activeTagId, { skipTelemetry: true });
+        commitTimerSnapshot({
+          sessionType: resolvedSessionType,
+          status: nextStatus,
+          currentCycle: resolvedCycle,
+          totalSeconds: tot,
+          remainingSeconds: dur,
+          targetEndTime: null,
+          timerRunId: remote.timerRunId || null,
+          activeTagId: remote.activeTagId,
+        });
+        void wakeLockService.release();
+
+        if (isFromPreviousDay) {
+          setLastResetDayKey(getLogicalDayKey(wallNowMs));
+          if (
+            remote.sessionType !== 'WORK' ||
+            (remote.currentCycle || 1) !== 1 ||
+            remote.remainingSeconds !== dur ||
+            remote.totalSeconds !== dur
+          ) {
+            publishLocalTimerState(
+              {
+                sessionType: 'WORK',
+                status: 'IDLE',
+                remainingSeconds: dur,
+                totalSeconds: dur,
+                targetEndTime: null,
+                currentCycle: 1,
+                activeTagId: remote.activeTagId ?? null,
+                timerRunId: null,
+                updatedAtMs: nowMs,
+              },
+              false,
+              { onlyIfIdle: true, expectedUpdatedAtMs: remote.updatedAtMs }
+            );
+          }
         }
-
-        wakeLockService.release();
-        notifications.cancelScheduledNotification();
-        targetEndTimeRef.current = null;
-        setTargetEndTime(null);
-        setRemainingSeconds(dur);
-        setStatus(nextStatus);
       }
     },
     [
-      authService,
-      setActiveTagId,
-      sound,
-      notifications,
+      isOnlineAndConnected,
+      getServerAlignedNowMs,
+      commitTimerSnapshot,
       getDurationForType,
       dispatchCompletionAlert,
-      lastLocalActionWallMsRef,
-      localUpdatedAtRef,
-      statusRef,
-      sessionTypeRef,
-      targetEndTimeRef,
-      timerRunIdRef,
-      currentCycleRef,
-      totalSecondsRef,
-      remainingSecondsRef,
-      prevActiveTagIdRef,
-      lastTickWallMsRef,
-      settingsRef,
-      profileRef,
-      coffeeCupsRef,
-      handleCompleteRef,
-      setSessionType,
-      setCurrentCycle,
-      setTotalSeconds,
-      setTargetEndTime,
-      setRemainingSeconds,
-      setStatus,
+      triggerCompletionConfetti,
+      publishLocalTimerState,
+      refs,
     ]
   );
 
   applyRemoteStateRef.current = applyRemoteState;
 
-  // Adopt live Convex WebSocket timer updates instantly
+  const promoteLocalActiveTimerIfNewer = useCallback(
+    (remote: typeof remoteTimer) => {
+      if (!isOnlineAndConnected() || refs.statusRef.current !== 'RUNNING') return false;
+
+      const nowAligned = getServerAlignedNowMs();
+      const targetEnd = refs.targetEndTimeRef.current;
+      if (!targetEnd || targetEnd <= nowAligned) return false;
+
+      const remoteIsEmptyOrOlderIdle =
+        remote === null ||
+        (remote !== undefined &&
+          remote.status === 'IDLE' &&
+          refs.localUpdatedAtRef.current > remote.updatedAtMs);
+
+      if (!remoteIsEmptyOrOlderIdle) return false;
+
+      const remainingSec = Math.max(
+        1,
+        Math.min(refs.totalSecondsRef.current, Math.ceil((targetEnd - nowAligned) / 1000))
+      );
+      publishLocalTimerState(
+        {
+          sessionType: refs.sessionTypeRef.current,
+          status: 'RUNNING',
+          remainingSeconds: remainingSec,
+          totalSeconds: refs.totalSecondsRef.current,
+          targetEndTime: targetEnd,
+          currentCycle: refs.currentCycleRef.current,
+          activeTagId: refs.activeTagIdRef.current,
+          timerRunId: refs.timerRunIdRef.current || `run-${nowAligned}`,
+          updatedAtMs: Math.max(refs.localUpdatedAtRef.current, nowAligned),
+        },
+        false
+      );
+      return true;
+    },
+    [isOnlineAndConnected, refs, getServerAlignedNowMs, publishLocalTimerState]
+  );
+
+  const acknowledgeRemoteRunIfActive = useCallback(
+    (remote: NonNullable<typeof remoteTimer>) => {
+      if (
+        remote.status === 'RUNNING' &&
+        remote.timerRunId &&
+        (remote.serverAutoStartStreak ?? 0) > 0 &&
+        isOnlineAndConnected() &&
+        !acknowledgedRunIdsRef.current.has(remote.timerRunId) &&
+        (typeof document === 'undefined' || document.visibilityState === 'visible')
+      ) {
+        const runId = remote.timerRunId;
+        acknowledgedRunIdsRef.current.add(runId);
+        convexTimerMutationsRef.current
+          .acknowledgeActive({ timerRunId: runId })
+          .then((res: any) => {
+            if (res && typeof res === 'object') recordServerClockSample(res.serverNowMs);
+          })
+          .catch(() => {
+            acknowledgedRunIdsRef.current.delete(runId);
+          });
+      }
+    },
+    [isOnlineAndConnected, recordServerClockSample]
+  );
+
   useEffect(() => {
-    if (!isConvexConfigured || !remoteTimer) return;
-    if (remoteTimer.peerPresence) {
-      peerPresenceRef.current = remoteTimer.peerPresence;
-    }
-    const now = Date.now();
-    const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
-    const isNewer = remoteTimer.updatedAtMs > localUpdatedAtRef.current;
+    if (!isConvexConfigured || !hasResolvedRemoteTimer) return;
 
-    // Adopt remote state unconditionally if no recent local action on this device,
-    // or if the remote state timestamp is newer than our local state.
-    if (!hasRecentLocalAction || isNewer) {
-      applyRemoteStateRef.current(toRemoteTimerState(remoteTimer));
+    if (!hasReconciledSignInRef.current) {
+      hasReconciledSignInRef.current = true;
+      if (promoteLocalActiveTimerIfNewer(remoteTimer)) return;
     }
-  }, [remoteTimer, isConvexConfigured, peerPresenceRef, lastLocalActionWallMsRef, localUpdatedAtRef]);
 
-  // Re-evaluate and re-apply remote timer state on wake, focus, or network recovery if local state diverged
+    if (!remoteTimer) return;
+
+    const hasRecentLocalAction = Date.now() - refs.lastLocalActionWallMsRef.current < 1500;
+    const isNewer = remoteTimer.updatedAtMs > refs.localUpdatedAtRef.current;
+    const isServerCompletionOfCurrentRun = Boolean(
+      refs.timerRunIdRef.current &&
+        remoteTimer.lastCompletedTimerRunId === refs.timerRunIdRef.current
+    );
+
+    if (!hasRecentLocalAction || isNewer || isServerCompletionOfCurrentRun) {
+      applyRemoteStateRef.current(toRemoteTimerState(remoteTimer), isServerCompletionOfCurrentRun);
+    }
+
+    acknowledgeRemoteRunIfActive(remoteTimer);
+  }, [
+    remoteTimer,
+    hasResolvedRemoteTimer,
+    isConvexConfigured,
+    refs,
+    promoteLocalActiveTimerIfNewer,
+    acknowledgeRemoteRunIfActive,
+  ]);
+
+  useEffect(() => {
+    const wasConnected = prevConnectedRef.current;
+    prevConnectedRef.current = isConvexConnected;
+    if (!wasConnected && isConvexConnected && hasResolvedRemoteTimer) {
+      const latestRemote = remoteTimerRef.current;
+      if (!promoteLocalActiveTimerIfNewer(latestRemote) && latestRemote) {
+        applyRemoteStateRef.current(toRemoteTimerState(latestRemote));
+      }
+    }
+  }, [isConvexConnected, hasResolvedRemoteTimer, promoteLocalActiveTimerIfNewer]);
+
   useEffect(() => {
     if (!isConvexConfigured) return;
 
@@ -639,20 +717,28 @@ export const useTimerCloudSync = ({
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const latestRemote = remoteTimerRef.current;
       if (!latestRemote) return;
+      if (Date.now() - refs.lastLocalActionWallMsRef.current < 1500) return;
 
-      const now = Date.now();
-      const hasRecentLocalAction = now - lastLocalActionWallMsRef.current < 1500;
-      if (hasRecentLocalAction) return;
-
-      const isNewer = latestRemote.updatedAtMs > localUpdatedAtRef.current;
+      const nowAligned = getServerAlignedNowMs();
+      const isNewer = latestRemote.updatedAtMs > refs.localUpdatedAtRef.current;
+      const isSameOrUnhydrated =
+        refs.localUpdatedAtRef.current === 0 ||
+        latestRemote.updatedAtMs >= refs.localUpdatedAtRef.current;
       const missedRunningRemote =
         latestRemote.status === 'RUNNING' &&
-        (statusRef.current !== 'RUNNING' ||
-          (latestRemote.timerRunId ?? null) !== timerRunIdRef.current);
+        typeof latestRemote.targetEndTime === 'number' &&
+        latestRemote.targetEndTime > nowAligned &&
+        isSameOrUnhydrated &&
+        (refs.statusRef.current !== 'RUNNING' ||
+          (latestRemote.timerRunId ?? null) !== refs.timerRunIdRef.current);
 
       if (isNewer || missedRunningRemote) {
-        applyRemoteStateRef.current(toRemoteTimerState(latestRemote));
+        const snapshot = toRemoteTimerState(latestRemote);
+        delete snapshot.serverNowMs;
+        applyRemoteStateRef.current(snapshot);
       }
+
+      acknowledgeRemoteRunIfActive(latestRemote);
     };
 
     document.addEventListener('visibilitychange', handleWakeResync);
@@ -666,14 +752,15 @@ export const useTimerCloudSync = ({
       window.removeEventListener('focus', handleWakeResync);
       window.removeEventListener('online', handleWakeResync);
     };
-  }, [isConvexConfigured, lastLocalActionWallMsRef, localUpdatedAtRef, statusRef, timerRunIdRef]);
+  }, [isConvexConfigured, refs, getServerAlignedNowMs, acknowledgeRemoteRunIfActive]);
 
   return {
+    isOnlineAndConnected,
     publishLocalTimerState,
-    publishTimerCompletion,
-    reportPresence,
+    publishTagUpdate,
     applyRemoteState,
     isInitialMountDoneRef,
+    hasResolvedRemoteTimer,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,
     isConvexConfigured,

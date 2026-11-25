@@ -6,10 +6,14 @@ import { clsx } from 'clsx';
 
 interface YearActivityViewProps {
   activityBars: ActivityBarStat[];
+  isCurrentYear?: boolean;
 }
 
-export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars }) => {
-  const currentMonthIdx = useMemo(() => new Date().getMonth(), []);
+export const YearActivityView: React.FC<YearActivityViewProps> = ({
+  activityBars,
+  isCurrentYear = true,
+}) => {
+  const currentMonthIdx = new Date().getMonth();
 
   // Ensure 12 months (Jan to Dec)
   const full12Months = useMemo(() => {
@@ -29,7 +33,6 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
         key: `month-${i}`,
         label: MONTH_NAMES[i].slice(0, 3),
         totalSeconds: 0,
-        hours: 0,
         sessionCount: 0,
       };
     });
@@ -58,13 +61,11 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
       const qMonths = full12Months.slice(mStart, mEnd);
       const totalSec = qMonths.reduce((acc, m) => acc + m.totalSeconds, 0);
       const totalSes = qMonths.reduce((acc, m) => acc + m.sessionCount, 0);
-      const activeMo = qMonths.filter((m) => m.totalSeconds > 0).length;
 
       return {
         ...q,
         totalSeconds: totalSec,
         sessionCount: totalSes,
-        activeMonths: activeMo,
       };
     });
   }, [full12Months]);
@@ -121,7 +122,7 @@ export const YearActivityView: React.FC<YearActivityViewProps> = ({ activityBars
       {/* 12-Month Horizontal Progress Grid (spacious & readable on mobile and desktop) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {full12Months.map((bar, idx) => {
-          const isCurrentMonth = idx === currentMonthIdx;
+          const isCurrentMonth = isCurrentYear && idx === currentMonthIdx;
           const widthPct = maxMonthSeconds > 0 ? Math.round((bar.totalSeconds / maxMonthSeconds) * 100) : 0;
 
           return (

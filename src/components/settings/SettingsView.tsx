@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { useApp } from '../../context/AppContext';
+import React, { useState, useEffect, useRef } from 'react';
+import { useAuthProfile } from '../../context/AuthProfileContext';
 import { Check } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../../types/settings';
 import { TimerDurationSection, FocusedDurationField } from './TimerDurationSection';
 import { AutomationSection } from './AutomationSection';
 import { SoundNotificationSection } from './SoundNotificationSection';
+import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
 /**
  * Sanitizes a decimal string input to allow digits and at most one decimal point
@@ -46,8 +47,17 @@ export const SettingsView: React.FC = () => {
     syncPushSubscription,
     isEffectiveAuthenticated,
     convexSync,
-  } = useApp();
+  } = useAuthProfile();
   const [savedToast, setSavedToast] = useState(false);
+  const savedToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (savedToastTimeoutRef.current !== null) {
+        clearTimeout(savedToastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Focus tracking to prevent draft inputs from snapping back or clobbering while actively typing
   const [focusedField, setFocusedField] = useState<FocusedDurationField>(null);
@@ -117,7 +127,25 @@ export const SettingsView: React.FC = () => {
 
   const showSaved = () => {
     setSavedToast(true);
-    setTimeout(() => setSavedToast(false), 2000);
+    if (savedToastTimeoutRef.current !== null) {
+      clearTimeout(savedToastTimeoutRef.current);
+    }
+    savedToastTimeoutRef.current = setTimeout(() => {
+      savedToastTimeoutRef.current = null;
+      setSavedToast(false);
+    }, 2000);
+  };
+
+  const safeUpdateSettings = (updates: Parameters<typeof updateSettings>[0]) => {
+    void updateSettings(updates).catch((err) => {
+      console.warn('[SettingsView] Failed to save settings:', err);
+    });
+  };
+
+  const safeUpdateProfile = (updates: Parameters<typeof updateProfile>[0]) => {
+    void updateProfile(updates).catch((err) => {
+      console.warn('[SettingsView] Failed to save profile:', err);
+    });
   };
 
   const handleDecimalDurationChange = (
@@ -134,7 +162,7 @@ export const SettingsView: React.FC = () => {
     const parsed = parseFloat(cleaned);
     if (!Number.isNaN(parsed) && parsed > 0) {
       const clamped = Math.round(Math.min(maxVal, Math.max(0.01, parsed)) * 100) / 100;
-      updateSettings({ [key]: clamped });
+      safeUpdateSettings({ [key]: clamped });
       showSaved();
     }
   };
@@ -153,7 +181,7 @@ export const SettingsView: React.FC = () => {
         : Math.round(Math.min(maxVal, Math.max(0.01, parsed)) * 100) / 100;
     setter(String(validNum));
     if (settings[key] !== validNum) {
-      updateSettings({ [key]: validNum });
+      safeUpdateSettings({ [key]: validNum });
       showSaved();
     }
   };
@@ -166,18 +194,18 @@ export const SettingsView: React.FC = () => {
 
     const parsed = parseInt(cleaned, 10);
     if (!Number.isNaN(parsed) && parsed >= 1) {
-      const clamped = Math.min(12, parsed);
-      updateSettings({ longBreakInterval: clamped });
+      const clamped = Math.min(20, parsed);
+      safeUpdateSettings({ longBreakInterval: clamped });
       showSaved();
     }
   };
 
   const handleIntervalInputBlur = () => {
     const parsed = parseInt(intervalInput, 10);
-    const validNum = Number.isNaN(parsed) || parsed < 1 ? settings.longBreakInterval || 4 : Math.min(12, parsed);
+    const validNum = Number.isNaN(parsed) || parsed < 1 ? settings.longBreakInterval || 4 : Math.min(20, parsed);
     setIntervalInput(String(validNum));
     if (settings.longBreakInterval !== validNum) {
-      updateSettings({ longBreakInterval: validNum });
+      safeUpdateSettings({ longBreakInterval: validNum });
       showSaved();
     }
   };
@@ -191,7 +219,7 @@ export const SettingsView: React.FC = () => {
     const parsed = parseInt(cleaned, 10);
     if (!Number.isNaN(parsed) && parsed >= 1) {
       const clamped = Math.min(1440, parsed);
-      updateProfile({ dailyGoalMinutes: clamped });
+      safeUpdateProfile({ dailyGoalMinutes: clamped });
       showSaved();
     }
   };
@@ -201,7 +229,7 @@ export const SettingsView: React.FC = () => {
     const validNum = Number.isNaN(parsed) || parsed < 1 ? profile.dailyGoalMinutes || 120 : Math.min(1440, parsed);
     setDailyGoalInput(String(validNum));
     if (profile.dailyGoalMinutes !== validNum) {
-      updateProfile({ dailyGoalMinutes: validNum });
+      safeUpdateProfile({ dailyGoalMinutes: validNum });
       showSaved();
     }
   };
@@ -212,8 +240,13 @@ export const SettingsView: React.FC = () => {
     setLongBreakInput(String(DEFAULT_SETTINGS.longBreakDurationMinutes));
     setIntervalInput(String(DEFAULT_SETTINGS.longBreakInterval));
     setDailyGoalInput('120');
-    updateSettings(DEFAULT_SETTINGS);
-    updateProfile({ dailyGoalMinutes: 120 });
+    safeUpdateSettings(DEFAULT_SETTINGS);
+    safeUpdateProfile({ dailyGoalMinutes: 120 });
+    void notifications.unsubscribePush(
+      convexSync.isConvexConfigured && isEffectiveAuthenticated
+        ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+        : undefined
+    );
     showSaved();
   };
 
@@ -255,7 +288,7 @@ export const SettingsView: React.FC = () => {
 
       <AutomationSection
         settings={settings}
-        updateSettings={updateSettings}
+        updateSettings={safeUpdateSettings}
         onSaved={showSaved}
       />
 
@@ -268,6 +301,13 @@ export const SettingsView: React.FC = () => {
         pushStatus={pushStatus}
         isPushAuthenticated={convexSync.isConvexConfigured && isEffectiveAuthenticated}
         onSyncPush={syncPushSubscription}
+        onUnsubscribePush={() =>
+          notifications.unsubscribePush(
+            convexSync.isConvexConfigured && isEffectiveAuthenticated
+              ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
+              : undefined
+          )
+        }
         onScheduleTestPush={() => convexSync.mutations.scheduleTestPush({ delayMs: 5000 })}
       />
     </div>

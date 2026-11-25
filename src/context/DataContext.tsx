@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { Tag, CreateTagInput, UpdateTagInput } from '../types/tag';
 import { CompletedSession } from '../types/session';
 import { BackupData } from '../types/user';
@@ -7,16 +7,19 @@ import { useAuthProfile } from './AuthProfileContext';
 import { useTagsData } from '../hooks/data/useTagsData';
 import { useSessionsData } from '../hooks/data/useSessionsData';
 import { useCoffeeData } from '../hooks/data/useCoffeeData';
+import { useCloudMigration } from '../hooks/data/useCloudMigration';
 import { useBackupAndMigration } from '../hooks/data/useBackupAndMigration';
 
+export interface DataResetEvent {
+  id: number;
+  scope: 'sessions-only' | 'factory-reset';
+}
+
 export interface DataContextValue {
-  isDemoEnvironment: boolean;
-  reloadSampleData: () => Promise<void>;
   tags: Tag[];
   activeTags: Tag[];
   activeTagId: string | null;
-  setActiveTagId: (id: string | null, options?: { skipTelemetry?: boolean }) => void;
-  consumeSkipTagTelemetry: () => boolean;
+  setActiveTagId: (id: string | null) => void;
   createTag: (input: CreateTagInput) => Promise<Tag>;
   updateTag: (id: string, updates: UpdateTagInput) => Promise<Tag | null>;
   archiveTag: (id: string) => Promise<Tag | null>;
@@ -24,16 +27,12 @@ export interface DataContextValue {
   deleteTag: (id: string) => Promise<boolean>;
   sessions: CompletedSession[];
   recordSession: (session: Omit<CompletedSession, 'id'> & { id?: string }) => Promise<CompletedSession>;
-  clearSessions: () => Promise<void>;
   coffeeCups: CoffeeCup[];
   addCoffeeCup: (tagId: string | null, date?: string) => Promise<CoffeeCup>;
   removeCoffeeCup: (date?: string, tagId?: string | null, cupId?: string) => Promise<boolean>;
   exportBackup: () => BackupData;
-  importBackup: (
-    data: BackupData,
-    mode: 'merge' | 'replace'
-  ) => Promise<{ sessionsAdded: number; tagsAdded: number; coffeeAdded: number }>;
   resetAllData: (scope: 'sessions-only' | 'factory-reset') => Promise<void>;
+  resetEvent: DataResetEvent | null;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -41,24 +40,35 @@ const DataContext = createContext<DataContextValue | null>(null);
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
     isEffectiveAuthenticated,
+    isConvexAuthReady,
     profile,
     settings,
-    updateProfile,
-    updateSettings,
     resetProfileToDefaults,
     resetSettingsToDefaults,
     convexSync,
   } = useAuthProfile();
 
+  const setActiveTagIdRef = useRef<((id: string | null) => void) | null>(null);
+  const [resetEvent, setResetEvent] = useState<DataResetEvent | null>(null);
+  const handleDataReset = useCallback((scope: 'sessions-only' | 'factory-reset') => {
+    setResetEvent((prev) => ({ id: (prev?.id ?? 0) + 1, scope }));
+  }, []);
+
+  const { isSyncGateActive } = useCloudMigration({
+    isEffectiveAuthenticated,
+    isConvexAuthReady,
+    convexSync,
+    setActiveTagId: (id) => setActiveTagIdRef.current?.(id),
+  });
+
   const {
     sessions,
     setSessions,
-    isDemoEnvironment,
     recordSession,
-    clearSessions,
-    reloadSampleData,
   } = useSessionsData({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    isAdoptionPaused: isSyncGateActive,
     convexSync,
   });
 
@@ -69,6 +79,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     removeCoffeeCup,
   } = useCoffeeData({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    isAdoptionPaused: isSyncGateActive,
     convexSync,
   });
 
@@ -78,7 +90,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     activeTags,
     activeTagId,
     setActiveTagId,
-    consumeSkipTagTelemetry,
     createTag,
     updateTag,
     archiveTag,
@@ -86,39 +97,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     deleteTag,
   } = useTagsData({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
+    isAdoptionPaused: isSyncGateActive,
     convexSync,
     setSessions,
     setCoffeeCups,
   });
 
-  const { exportBackup, importBackup, resetAllData } = useBackupAndMigration({
+  setActiveTagIdRef.current = setActiveTagId;
+
+  const { exportBackup, resetAllData } = useBackupAndMigration({
     isEffectiveAuthenticated,
+    isConvexAuthReady,
     profile,
     settings,
-    updateProfile,
-    updateSettings,
     resetProfileToDefaults,
     resetSettingsToDefaults,
     convexSync,
     tags,
     setTags,
-    activeTagId,
     setActiveTagId,
     sessions,
     setSessions,
     coffeeCups,
     setCoffeeCups,
+    onDataReset: handleDataReset,
   });
 
   const value = useMemo<DataContextValue>(
     () => ({
-      isDemoEnvironment,
-      reloadSampleData,
       tags,
       activeTags,
       activeTagId,
       setActiveTagId,
-      consumeSkipTagTelemetry,
       createTag,
       updateTag,
       archiveTag,
@@ -126,22 +137,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deleteTag,
       sessions,
       recordSession,
-      clearSessions,
       coffeeCups,
       addCoffeeCup,
       removeCoffeeCup,
       exportBackup,
-      importBackup,
       resetAllData,
+      resetEvent,
     }),
     [
-      isDemoEnvironment,
-      reloadSampleData,
       tags,
       activeTags,
       activeTagId,
       setActiveTagId,
-      consumeSkipTagTelemetry,
       createTag,
       updateTag,
       archiveTag,
@@ -149,13 +156,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deleteTag,
       sessions,
       recordSession,
-      clearSessions,
       coffeeCups,
       addCoffeeCup,
       removeCoffeeCup,
       exportBackup,
-      importBackup,
       resetAllData,
+      resetEvent,
     ]
   );
 

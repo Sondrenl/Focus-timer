@@ -1,44 +1,103 @@
 import { UserProfile, AuthState } from '../../types/user';
-import { RemoteTimerState, PeerPresence } from '../../types/timer';
 import { GoogleJwtPayload } from '../../types/auth';
-import { isMobileDevice } from '../../utils/environment';
 
-export type { RemoteTimerState, PeerPresence, GoogleJwtPayload };
-export { isMobileDevice };
-
-export const AUTH_TOKEN_KEY = 'auth_token_v2';
 export const AUTH_USER_KEY = 'auth_user_v2';
-const TOKEN_KEY = AUTH_TOKEN_KEY;
-const USER_KEY = AUTH_USER_KEY;
-const LAST_SYNC_KEY = 'auth_last_synced_at_v1';
+export const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
+
+function escapeAuthNamespace(namespace: string): string {
+  return namespace.replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function isNonEmptyStorageVal(val: string | null): val is string {
+  return Boolean(val && val !== 'null' && val !== '""' && val.trim().length > 0);
+}
 
 export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
   try {
-    const base64Url = token.split('.')[1];
-    if (!base64Url) return null;
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    if (typeof token !== 'string') return null;
+    const parts = token.split('.');
+    if (parts.length !== 3 || !parts[1]) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4 || 4)) % 4), '=');
     const jsonPayload = decodeURIComponent(
-      atob(base64)
+      atob(padded)
         .split('')
         .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
         .join('')
     );
-    return JSON.parse(jsonPayload) as GoogleJwtPayload;
+    const parsed = JSON.parse(jsonPayload);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as GoogleJwtPayload;
   } catch {
     return null;
   }
+}
+
+export function hasStoredConvexAuthSession(namespace?: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const storage = window.localStorage;
+    if (!storage || typeof storage.getItem !== 'function') return false;
+
+    const isJwtUnexpired = (rawJwt: string): boolean => {
+      const payload = parseGoogleJwt(rawJwt);
+      return Boolean(
+        payload &&
+          typeof payload.exp === 'number' &&
+          Number.isFinite(payload.exp) &&
+          payload.exp * 1000 > Date.now() + 30_000
+      );
+    };
+
+    if (namespace) {
+      const escaped = escapeAuthNamespace(namespace);
+      if (isNonEmptyStorageVal(storage.getItem(`__convexAuthRefreshToken_${escaped}`))) {
+        return true;
+      }
+      const jwtVal = storage.getItem(`__convexAuthJWT_${escaped}`);
+      return isNonEmptyStorageVal(jwtVal) && isJwtUnexpired(jwtVal);
+    }
+
+    if (typeof storage.length !== 'number' || typeof storage.key !== 'function') return false;
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (!key) continue;
+      if (key.startsWith('__convexAuthRefreshToken')) {
+        if (isNonEmptyStorageVal(storage.getItem(key))) return true;
+      } else if (key.startsWith('__convexAuthJWT')) {
+        const val = storage.getItem(key);
+        if (isNonEmptyStorageVal(val) && isJwtUnexpired(val)) return true;
+      }
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return false;
 }
 
 export function buildProfileFromJwt(
   payload: GoogleJwtPayload,
   currentProfile: UserProfile
 ): UserProfile {
-  const safeName = typeof payload.name === 'string' && payload.name.trim()
-    ? payload.name.trim().slice(0, 50)
-    : currentProfile.displayName;
-  const safeAvatarUrl = typeof payload.picture === 'string' && payload.picture.startsWith('https://')
-    ? payload.picture
-    : currentProfile.avatarUrl;
+  const hasCustomName =
+    Boolean(currentProfile.displayName) &&
+    currentProfile.displayName.trim() !== '' &&
+    currentProfile.displayName !== 'Focus Practitioner';
+  const safeName = hasCustomName
+    ? currentProfile.displayName.trim().slice(0, 50)
+    : typeof payload.name === 'string' && payload.name.trim()
+      ? payload.name.trim().slice(0, 50)
+      : currentProfile.displayName || 'Focus Practitioner';
+  const safeAvatarUrl =
+    typeof payload.picture === 'string' &&
+    payload.picture.startsWith('https://') &&
+    payload.picture.length <= 2048
+      ? payload.picture
+      : currentProfile.avatarUrl;
 
   return {
     ...currentProfile,
@@ -46,14 +105,12 @@ export function buildProfileFromJwt(
     email: payload.email || currentProfile.email,
     displayName: safeName,
     avatarUrl: safeAvatarUrl,
-    avatarEmoji: '', // Clear emoji when Google picture exists
+    avatarEmoji: currentProfile.avatarEmoji || '',
   };
 }
 
 export class AuthService {
   private static instance: AuthService;
-
-  private constructor() {}
 
   public static getInstance(): AuthService {
     if (!AuthService.instance) {
@@ -62,101 +119,48 @@ export class AuthService {
     return AuthService.instance;
   }
 
-  public getServerNow(): number {
-    return Date.now();
-  }
-
-  public getStoredToken(): string | null {
-    try {
-      return (
-        localStorage.getItem(TOKEN_KEY) ||
-        localStorage.getItem('auth_token_v1')
-      );
-    } catch {
-      return null;
-    }
-  }
-
   public getStoredUser(): UserProfile | null {
     try {
       const data =
-        localStorage.getItem(USER_KEY) ||
-        localStorage.getItem('auth_user_v1');
+        localStorage.getItem(AUTH_USER_KEY) || localStorage.getItem('auth_user_v1');
       return data ? JSON.parse(data) : null;
     } catch {
       return null;
     }
   }
 
-  public getLastSyncedAt(): string | null {
-    try {
-      return localStorage.getItem(LAST_SYNC_KEY);
-    } catch {
-      return null;
-    }
+  public hasConvexAuthSession(namespace?: string): boolean {
+    return hasStoredConvexAuthSession(namespace);
   }
 
-  public isTokenExpired(token?: string | null): boolean {
-    if (!token) return true;
-    const payload = parseGoogleJwt(token);
-    if (!payload || !payload.exp) return false;
-    // Buffer by 30 seconds
-    return Date.now() >= (payload.exp * 1000 - 30000);
-  }
-
-  public hasConvexAuthSession(): boolean {
-    if (typeof window === 'undefined') return false;
+  public saveAuthUser(user: UserProfile): void {
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.startsWith('__convexAuthRefreshToken') || key.startsWith('__convexAuthJWT'))) {
-          const val = localStorage.getItem(key);
-          if (val && val !== 'null' && val !== '""') {
-            return true;
-          }
-        }
-      }
-    } catch {
-      // Ignore
-    }
-    return false;
-  }
-
-  public saveAuthSession(token: string, user: UserProfile): void {
-    try {
-      localStorage.setItem(TOKEN_KEY, token);
-      localStorage.setItem(USER_KEY, JSON.stringify(user));
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
     } catch (e) {
-      console.warn('Could not persist auth to localStorage', e);
+      console.warn('Could not persist auth user to localStorage', e);
     }
   }
 
-  public getInitialAuthState(): AuthState {
-    const token = this.getStoredToken();
+  public getInitialAuthState(convexNamespace?: string): AuthState {
     const user = this.getStoredUser();
-    const hasConvexSession = this.hasConvexAuthSession();
-    const isExpired = !hasConvexSession && this.isTokenExpired(token);
-    const isAuthenticated = Boolean(user && (hasConvexSession || (token && !isExpired)));
+    const hasConvexSession = this.hasConvexAuthSession(convexNamespace);
+    const isAuthenticated = Boolean(hasConvexSession && user);
     return {
       isAuthenticated,
-      user,
-      token: isAuthenticated ? token : null,
+      user: isAuthenticated ? user : null,
+      token: null,
       isSyncing: false,
-      lastSyncedAt: this.getLastSyncedAt(),
+      lastSyncedAt: null,
       syncError: null,
-      isTokenExpired: Boolean(token && isExpired && !hasConvexSession),
+      isTokenExpired: false,
     };
   }
 
   public logout(): void {
     try {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem('auth_token_v1');
-      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(AUTH_USER_KEY);
       localStorage.removeItem('auth_user_v1');
-      localStorage.removeItem(LAST_SYNC_KEY);
 
-      // Disable Google One Tap auto-selection to prevent automatic immediate re-login
       if (typeof window !== 'undefined' && (window as any).google?.accounts?.id?.disableAutoSelect) {
         try {
           (window as any).google.accounts.id.disableAutoSelect();
@@ -165,7 +169,6 @@ export class AuthService {
         }
       }
 
-      // Purge Convex auth refresh tokens from localStorage
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);

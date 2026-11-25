@@ -1,3 +1,11 @@
+export interface StorageSetOptions {
+  /**
+   * When true, rethrows QuotaExceededError after updating the in-memory fallback cache.
+   * Defaults to false so callers that do not implement quota eviction do not crash.
+   */
+  throwOnQuotaError?: boolean;
+}
+
 /**
  * Generic Storage Service abstraction interface.
  * Decouples domain logic from browser localStorage, facilitating future
@@ -15,8 +23,9 @@ export interface IStorageService {
    * Serializes and writes a value into storage
    * @param key Storage destination key
    * @param value Value to persist
+   * @param options Optional write behavior flags
    */
-  setItem<T>(key: string, value: T): void;
+  setItem<T>(key: string, value: T, options?: StorageSetOptions): void;
 
   /**
    * Removes an entry from storage

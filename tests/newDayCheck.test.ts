@@ -52,20 +52,11 @@ describe('New Day Check Utilities', () => {
       expect(getLastSessionCompletedAt(undefined)).toBeNull();
     });
 
-    it('ignores sample and seed sessions', () => {
-      const sessions = [
-        { id: 'sample-session-1', completedAt: '2026-11-07T12:00:00.000Z' },
-        { id: 'seed-session-1', completedAt: '2026-11-07T12:30:00.000Z' },
-      ];
-      expect(getLastSessionCompletedAt(sessions)).toBeNull();
-    });
-
-    it('returns the latest timestamp among real completed sessions', () => {
+    it('returns the latest timestamp among completed sessions', () => {
       const time1 = new Date(2026, 10, 7, 10, 0, 0).toISOString();
       const time2 = new Date(2026, 10, 7, 11, 0, 0).toISOString();
       const sessions = [
         { id: 'real-1', completedAt: time1 },
-        { id: 'sample-session-1', completedAt: new Date(2026, 10, 7, 13, 0, 0).toISOString() },
         { id: 'real-2', completedAt: time2 },
       ];
       expect(getLastSessionCompletedAt(sessions)).toBe(new Date(time2).getTime());
@@ -399,6 +390,115 @@ describe('New Day Check Utilities', () => {
       expect(loaded.status).toBe('RUNNING');
       expect(loaded.currentCycle).toBe(2);
       expect(loaded.remainingSeconds).toBe(600);
+    });
+
+    it('reads prefixed pomodor:sessions_v1 for all-nighter check and resets stale PAUSED timer from previous day', async () => {
+      vi.setSystemTime(new Date(2026, 10, 7, 4, 20, 0));
+
+      const recentSessions = [
+        {
+          id: 'prefixed-all-nighter',
+          sessionType: 'WORK',
+          durationSeconds: 1500,
+          completedAt: new Date(2026, 10, 7, 3, 55, 0).toISOString(),
+        },
+      ];
+      store.set('pomodor:sessions_v1', JSON.stringify(recentSessions));
+      store.set('focus_timer_last_day_reset_v1', '2026-11-06');
+
+      const pausedState = {
+        sessionType: 'WORK',
+        status: 'PAUSED',
+        currentCycle: 3,
+        remainingSeconds: 600,
+        totalSeconds: 1500,
+        targetEndTime: null,
+        timerRunId: 'run-paused',
+        updatedAtMs: new Date(2026, 10, 7, 3, 55, 0).getTime(),
+        activeTagId: null,
+        deviceId: 'dev-1',
+        tabId: 'tab-1',
+        lastActiveAtMs: new Date(2026, 10, 7, 3, 55, 0).getTime(),
+      };
+      store.set('timer_state_v1', JSON.stringify(pausedState));
+
+      const { loadInitialTimerState } = await import('../src/context/timer/timerPersistence');
+      // 1. All-nighter session in pomodor:sessions_v1 prevents reset
+      const preserved = loadInitialTimerState(25);
+      expect(preserved.currentCycle).toBe(3);
+      expect(preserved.status).toBe('PAUSED');
+
+      // 2. When 8 hours pass (12:30 PM), the old PAUSED timer from yesterday is reset to Cycle 1 IDLE
+      vi.setSystemTime(new Date(2026, 10, 7, 12, 30, 0));
+      const resetAfterSleep = loadInitialTimerState(25);
+      expect(resetAfterSleep.currentCycle).toBe(1);
+      expect(resetAfterSleep.status).toBe('IDLE');
+      expect(resetAfterSleep.remainingSeconds).toBe(25 * 60);
+    });
+
+    it('resets multi-day stale before 04:00 AM, clamps backward clock jump, and resets previous-day stale RUNNING', async () => {
+      expect(
+        shouldResetForNewDay({
+          now: new Date(2026, 10, 7, 1, 30, 0),
+          lastSessionTimeMs: new Date(2026, 10, 4, 17, 0, 0).getTime(),
+          lastResetDayKey: '2026-11-04',
+          isTimerRunning: false,
+        })
+      ).toBe(true);
+      expect(
+        shouldResetForNewDay({
+          now: new Date(2026, 10, 7, 1, 30, 0),
+          lastSessionTimeMs: new Date(2026, 10, 6, 22, 0, 0).getTime(),
+          lastResetDayKey: '2026-11-06',
+          isTimerRunning: false,
+        })
+      ).toBe(false);
+
+      const { loadInitialTimerState } = await import('../src/context/timer/timerPersistence');
+      const now = new Date(2026, 10, 7, 10, 0, 0).getTime();
+      vi.setSystemTime(now);
+      store.set('focus_timer_last_day_reset_v1', '2026-11-07');
+      store.set(
+        'timer_state_v1',
+        JSON.stringify({
+          sessionType: 'WORK',
+          status: 'RUNNING',
+          currentCycle: 1,
+          remainingSeconds: 1500,
+          totalSeconds: 1500,
+          targetEndTime: now + 3 * 3600_000,
+          timerRunId: 'clock-jump',
+          updatedAtMs: now - 1000,
+          activeTagId: null,
+          deviceId: 'd1',
+          tabId: 't1',
+          lastActiveAtMs: now,
+        })
+      );
+      expect(loadInitialTimerState(25).remainingSeconds).toBe(1500);
+
+      const yesterday = new Date(2026, 10, 6, 22, 0, 0).getTime();
+      store.set(
+        'timer_state_v1',
+        JSON.stringify({
+          sessionType: 'SHORT_BREAK',
+          status: 'RUNNING',
+          currentCycle: 3,
+          remainingSeconds: 120,
+          totalSeconds: 300,
+          targetEndTime: yesterday,
+          timerRunId: 'stale-run',
+          updatedAtMs: yesterday - 300_000,
+          activeTagId: null,
+          deviceId: 'd1',
+          tabId: 't1',
+          lastActiveAtMs: yesterday,
+        })
+      );
+      const loaded = loadInitialTimerState(25);
+      expect(loaded.status).toBe('IDLE');
+      expect(loaded.sessionType).toBe('WORK');
+      expect(loaded.currentCycle).toBe(1);
     });
   });
 });

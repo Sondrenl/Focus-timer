@@ -1,17 +1,16 @@
 import { SessionType, TimerStatus } from '../../types/timer';
 import { isMobileDevice } from '../../utils/environment';
-import { TAB_ID } from '../../services/timer/TimerBroadcast';
 import {
   shouldResetForNewDay,
   getLogicalDayKey,
   getLastResetDayKey,
   setLastResetDayKey,
   getLastSessionCompletedAtFromStorage,
+  INACTIVITY_THRESHOLD_MS,
 } from '../../utils/newDayCheck';
 
 export const TIMER_STORAGE_KEY = 'timer_state_v1';
 export const DEVICE_ID_KEY = 'focus_timer_device_id_v1';
-export const SESSION_ALIVE_KEY = 'focus_timer_session_alive_v1';
 
 const getOrCreateDeviceId = (): string => {
   if (typeof window === 'undefined') return 'server';
@@ -32,7 +31,6 @@ const getOrCreateDeviceId = (): string => {
 
 export const DEVICE_ID = getOrCreateDeviceId();
 export const IS_MOBILE = isMobileDevice();
-export const DEVICE_SESSION_ID = `${DEVICE_ID}_${TAB_ID}`;
 
 export interface SavedTimerState {
   sessionType: SessionType;
@@ -45,7 +43,6 @@ export interface SavedTimerState {
   updatedAtMs: number;
   activeTagId: string | null;
   deviceId: string;
-  tabId: string;
   lastActiveAtMs: number;
   wasHidden?: boolean;
 }
@@ -63,7 +60,6 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     updatedAtMs: 0,
     activeTagId: null,
     deviceId: DEVICE_ID,
-    tabId: TAB_ID,
     lastActiveAtMs: Date.now(),
     wasHidden: false,
   };
@@ -73,10 +69,6 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
   try {
     const stored = localStorage.getItem(TIMER_STORAGE_KEY);
     if (!stored) {
-      const currentDayKey = getLogicalDayKey(new Date());
-      if (!getLastResetDayKey()) {
-        setLastResetDayKey(currentDayKey);
-      }
       return fallback;
     }
     const parsed = JSON.parse(stored) as SavedTimerState;
@@ -85,16 +77,30 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     if (parsed.status === 'RUNNING' && parsed.targetEndTime) {
       const now = Date.now();
       const diffMs = parsed.targetEndTime - now;
-      const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+      const rawDiffSec = Math.max(0, Math.ceil(diffMs / 1000));
+      const diffSec =
+        parsed.totalSeconds > 0 ? Math.min(parsed.totalSeconds, rawDiffSec) : rawDiffSec;
 
       if (diffSec <= 0) {
         // If session expired more than 15 minutes ago while closed, reset to IDLE without recording stale session
         if (diffMs < -900000) {
+          const isFromPreviousDay =
+            getLogicalDayKey(new Date(parsed.targetEndTime)) !== getLogicalDayKey(new Date(now)) &&
+            now - parsed.targetEndTime >= INACTIVITY_THRESHOLD_MS;
+          if (isFromPreviousDay) {
+            parsed.sessionType = 'WORK';
+            parsed.currentCycle = 1;
+            parsed.totalSeconds = defaultSec;
+            parsed.remainingSeconds = defaultSec;
+            setLastResetDayKey(getLogicalDayKey(new Date(now)));
+          } else {
+            parsed.remainingSeconds = parsed.totalSeconds;
+          }
           parsed.status = 'IDLE';
           parsed.targetEndTime = null;
           parsed.timerRunId = null;
-          parsed.remainingSeconds = parsed.totalSeconds;
           parsed.updatedAtMs = 0;
+          saveTimerState(parsed);
         } else {
           // Expired while closed, preserve state so mount effect can record and alert
           return {
@@ -115,7 +121,14 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
     const lastResetDayKey = getLastResetDayKey();
     const now = new Date();
 
+    const isFreshlyPaused =
+      parsed.status === 'PAUSED' &&
+      typeof parsed.updatedAtMs === 'number' &&
+      parsed.updatedAtMs > 0 &&
+      now.getTime() - parsed.updatedAtMs < INACTIVITY_THRESHOLD_MS;
+
     if (
+      !isFreshlyPaused &&
       shouldResetForNewDay({
         now,
         lastSessionTimeMs,
@@ -146,12 +159,9 @@ export const loadInitialTimerState = (workDurationMinutes: number): SavedTimerSt
   }
 };
 
-export const saveTimerState = (stateToSave: SavedTimerState, markSessionAlive = false): void => {
+export const saveTimerState = (stateToSave: SavedTimerState): void => {
   try {
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stateToSave));
-    if (markSessionAlive) {
-      sessionStorage.setItem(SESSION_ALIVE_KEY, '1');
-    }
   } catch {
     // Storage errors ignored
   }

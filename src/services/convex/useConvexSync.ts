@@ -1,12 +1,15 @@
 import { useCallback, useMemo } from 'react';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery, useMutation, useConvexConnectionState } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
-import { isConvexConfigured, convexClient, getValidAuthToken } from './ConvexClient';
+import { isConvexConfigured } from './ConvexClient';
+import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
-export function useConvexSync(isAuthenticated: boolean) {
-  const shouldQuery = isConvexConfigured && isAuthenticated;
+export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = isAuthenticated) {
+  const shouldQuery = isConvexConfigured && isAuthenticated && isAuthReady;
+  const connectionState = useConvexConnectionState();
+  const isConvexConnected = isConvexConfigured && connectionState.isWebSocketConnected;
 
-  // Only query Convex if Convex URL is configured and user is authenticated
+  // Only query Convex once Convex URL is configured AND WebSocket auth is genuinely ready
   const convexUser = useQuery(
     api.users.current,
     shouldQuery ? {} : 'skip'
@@ -27,6 +30,11 @@ export function useConvexSync(isAuthenticated: boolean) {
     shouldQuery ? {} : 'skip'
   );
 
+  const devicePushStatus = useQuery(
+    api.push.getDeviceSubscriptionStatus,
+    shouldQuery ? { deviceId: DEVICE_ID } : 'skip'
+  );
+
   // Mutations
   const updateProfileMutation = useMutation(api.users.updateProfile);
   const updateSettingsMutation = useMutation(api.users.updateSettings);
@@ -41,95 +49,10 @@ export function useConvexSync(isAuthenticated: boolean) {
   const clearCoffeeMutation = useMutation(api.coffee.clear);
   const importBackupMutation = useMutation(api.migrations.importBackup);
   const upsertAttemptMutation = useMutation(api.telemetry.upsertAttempt);
-  const recordTelemetryEventsMutation = useMutation(api.telemetry.recordEvents);
-  const discardTelemetryAttemptMutation = useMutation(api.telemetry.discardAttempt);
   const clearTelemetryMutation = useMutation(api.telemetry.clear);
   const registerPushSubscriptionMutation = useMutation(api.push.register);
   const unregisterPushSubscriptionMutation = useMutation(api.push.unregister);
   const scheduleTestPushMutation = useMutation(api.push.scheduleTestPush);
-
-  const fetchTelemetryAttempts = useCallback(
-    async (
-      options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
-    ) => {
-      if (!isConvexConfigured || !isAuthenticated) return null;
-      const resolved =
-        typeof options === 'number' ? { limit: options } : options;
-      const limit = resolved.limit ?? 5000;
-      try {
-        return await convexClient.query(api.telemetry.listAttempts, {
-          limit,
-          ...(resolved.startDate ? { startDate: resolved.startDate } : {}),
-          ...(resolved.endDate ? { endDate: resolved.endDate } : {}),
-        });
-      } catch (err) {
-        console.warn('Convex listAttempts query error:', err);
-        return null;
-      }
-    },
-    [isAuthenticated]
-  );
-
-  const fetchTelemetryEvents = useCallback(
-    async (
-      options: number | { limit?: number; startDate?: string; endDate?: string } = 5000
-    ) => {
-      if (!isConvexConfigured || !isAuthenticated) return null;
-      const resolved =
-        typeof options === 'number' ? { limit: options } : options;
-      const limit = resolved.limit ?? 5000;
-      try {
-        return await convexClient.query(api.telemetry.listEvents, {
-          limit,
-          ...(resolved.startDate ? { startDate: resolved.startDate } : {}),
-          ...(resolved.endDate ? { endDate: resolved.endDate } : {}),
-        });
-      } catch (err) {
-        console.warn('Convex listEvents query error:', err);
-        return null;
-      }
-    },
-    [isAuthenticated]
-  );
-
-  const setAuthToken = useCallback((token: string | null) => {
-    if (!isConvexConfigured) return;
-
-    try {
-      if (!token) {
-        try {
-          convexClient.clearAuth();
-        } catch (err) {
-          console.warn('Convex clearAuth error:', err);
-        }
-        convexClient.setAuth(async () => undefined);
-        return;
-      }
-
-      convexClient.setAuth(
-        async (args?: { forceRefreshToken?: boolean }) => {
-          try {
-            return getValidAuthToken(token, args);
-          } catch (err) {
-            console.warn('Error in Convex auth token fetcher:', err);
-            return undefined;
-          }
-        },
-        (isAuthenticatedState: boolean) => {
-          if (!isAuthenticatedState) {
-            console.warn('Convex authentication state: unauthenticated');
-          }
-        },
-        (isRefreshing: boolean) => {
-          if (isRefreshing) {
-            console.info('Convex WebSocket auth token refresh in progress...');
-          }
-        }
-      );
-    } catch (err) {
-      console.warn('Convex setAuth error:', err);
-    }
-  }, []);
 
   const wrapMutation = useCallback(
     <TArgs extends any[], TReturn>(
@@ -163,8 +86,6 @@ export function useConvexSync(isAuthenticated: boolean) {
       clearCoffee: wrapMutation(clearCoffeeMutation, 'clearCoffee'),
       importBackup: wrapMutation(importBackupMutation, 'importBackup'),
       upsertAttempt: wrapMutation(upsertAttemptMutation, 'upsertAttempt'),
-      recordTelemetryEvents: wrapMutation(recordTelemetryEventsMutation, 'recordTelemetryEvents'),
-      discardTelemetryAttempt: wrapMutation(discardTelemetryAttemptMutation, 'discardTelemetryAttempt'),
       clearTelemetry: wrapMutation(clearTelemetryMutation, 'clearTelemetry'),
       registerPushSubscription: wrapMutation(registerPushSubscriptionMutation, 'registerPushSubscription'),
       unregisterPushSubscription: wrapMutation(unregisterPushSubscriptionMutation, 'unregisterPushSubscription'),
@@ -184,8 +105,6 @@ export function useConvexSync(isAuthenticated: boolean) {
       clearCoffeeMutation,
       importBackupMutation,
       upsertAttemptMutation,
-      recordTelemetryEventsMutation,
-      discardTelemetryAttemptMutation,
       clearTelemetryMutation,
       registerPushSubscriptionMutation,
       unregisterPushSubscriptionMutation,
@@ -194,16 +113,25 @@ export function useConvexSync(isAuthenticated: boolean) {
     ]
   );
 
-  return {
-    isConvexConfigured,
-    convexUser,
-    convexCoffee,
-    convexSessions,
-    vapidPublicKey,
-    setAuthToken,
-    fetchTelemetryAttempts,
-    fetchTelemetryEvents,
-    mutations,
-  };
+  return useMemo(
+    () => ({
+      isConvexConfigured,
+      isConvexConnected,
+      convexUser,
+      convexCoffee,
+      convexSessions,
+      vapidPublicKey,
+      devicePushStatus,
+      mutations,
+    }),
+    [
+      isConvexConnected,
+      convexUser,
+      convexCoffee,
+      convexSessions,
+      vapidPublicKey,
+      devicePushStatus,
+      mutations,
+    ]
+  );
 }
-

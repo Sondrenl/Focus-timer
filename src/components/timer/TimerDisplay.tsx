@@ -1,8 +1,8 @@
-import { AuthService } from '../../services/auth/AuthService';
 import React, { useEffect, useRef, useMemo } from 'react';
 import { SessionType, TimerStatus } from '../../types/timer';
 import { formatTime } from '../../utils/formatters';
-import { useApp } from '../../context/AppContext';
+import { getAlphaColor, sanitizeHexColor } from '../../utils/colors';
+import { useData } from '../../context/DataContext';
 import { useTimer } from '../../context/TimerContext';
 
 interface TimerDisplayProps {
@@ -64,17 +64,17 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   sessionType,
   status,
 }) => {
-  const { activeTagId, activeTags } = useApp();
+  const { activeTagId, activeTags } = useData();
   const { targetEndTime } = useTimer();
 
   const currentTag = activeTags.find((t) => t.id === activeTagId);
-  const tagColor = currentTag ? currentTag.color : '#6750A4';
+  const tagColor = sanitizeHexColor(currentTag ? currentTag.color : '#6750A4', '#6750A4');
 
   const sessionMeta = {
     WORK: {
       label: 'Focus',
       color: tagColor,
-      bgRing: `${tagColor}22`, // Subtle pastel background track
+      bgRing: getAlphaColor(tagColor, '22'), // Subtle pastel background track
     },
     SHORT_BREAK: {
       label: 'Short Break',
@@ -84,7 +84,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
     LONG_BREAK: {
       label: 'Long Break',
       color: '#F6AE2D',
-      bgRing: '#F6AE2D22',
+      bgRing: getAlphaColor('#F6AE2D', '22'),
     },
   }[sessionType];
 
@@ -142,7 +142,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
       // Continuous sub-second progress calculation down to the millisecond
       let currentFraction = 0;
       if (status === 'RUNNING' && targetEndTimeRef.current !== null && totalSecondsRef.current > 0) {
-        const remainingMs = Math.max(0, targetEndTimeRef.current - AuthService.getInstance().getServerNow());
+        const remainingMs = Math.max(0, targetEndTimeRef.current - Date.now());
         currentFraction = remainingMs / (totalSecondsRef.current * 1000);
       } else if (totalSecondsRef.current > 0) {
         currentFraction = remainingSecondsRef.current / totalSecondsRef.current;

@@ -9,6 +9,81 @@ interface TimerWorkspaceProps {
   isActiveView?: boolean;
 }
 
+export type TimerShortcutAction = 'toggle' | 'previous' | 'skip' | 'reset' | null;
+
+export interface TimerShortcutKeyEventLike {
+  key: string;
+  code?: string;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  target: EventTarget | null;
+}
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as Partial<HTMLElement>;
+  const tagName = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName) || Boolean(el.isContentEditable);
+}
+
+function isKeyboardFocusedInteractiveTarget(target: EventTarget | null): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as Partial<HTMLElement>;
+  const tagName = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  const isButtonOrLink =
+    tagName === 'BUTTON' ||
+    (tagName === 'A' && typeof el.hasAttribute === 'function' && el.hasAttribute('href'));
+  const interactiveEl = isButtonOrLink
+    ? el
+    : typeof el.closest === 'function'
+      ? el.closest('button, a[href]')
+      : null;
+  if (!interactiveEl || typeof interactiveEl.matches !== 'function') {
+    return false;
+  }
+  try {
+    return interactiveEl.matches(':focus-visible');
+  } catch {
+    return false;
+  }
+}
+
+export function resolveTimerShortcutAction(
+  e: TimerShortcutKeyEventLike,
+  hasOpenOverlay: boolean
+): TimerShortcutAction {
+  if (e.metaKey || e.ctrlKey || e.altKey) {
+    return null;
+  }
+
+  if (isEditableShortcutTarget(e.target)) {
+    return null;
+  }
+
+  if (hasOpenOverlay) {
+    return null;
+  }
+
+  if (e.code === 'Space') {
+    if (isKeyboardFocusedInteractiveTarget(e.target)) {
+      return null;
+    }
+    return 'toggle';
+  }
+  if (e.key === 'ArrowLeft') {
+    return 'previous';
+  }
+  if (e.key === 'ArrowRight') {
+    return 'skip';
+  }
+  if (e.key === 'r' || e.key === 'R') {
+    return 'reset';
+  }
+
+  return null;
+}
+
 export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = true }) => {
   const {
     sessionType,
@@ -29,24 +104,23 @@ export const TimerWorkspace: React.FC<TimerWorkspaceProps> = ({ isActiveView = t
     if (!isActiveView) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input or textarea
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
-        return;
-      }
+      const hasOpenOverlay = Boolean(
+        document.querySelector('[role="dialog"], [role="listbox"]')
+      );
+      const action = resolveTimerShortcutAction(e, hasOpenOverlay);
+      if (!action) return;
 
-      if (e.code === 'Space') {
+      if (action === 'toggle') {
         e.preventDefault();
         toggleStartPause();
-      } else if (e.key === 'ArrowLeft') {
+      } else if (action === 'previous') {
         e.preventDefault();
         previousInterval();
-      } else if (e.key === 'ArrowRight') {
+      } else if (action === 'skip') {
         e.preventDefault();
         skipInterval();
-      } else if (e.key === 'r' || e.key === 'R') {
+      } else if (action === 'reset') {
         resetTimer();
-      } else if (e.key === 's' || e.key === 'S') {
-        skipInterval();
       }
     };
 
