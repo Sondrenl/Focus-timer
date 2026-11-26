@@ -76,4 +76,10 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+import type { ComponentApi as authComponent } from "@convex-dev/auth/_generated/component.js";
+import type { ComponentApi as authGoogleComponent } from "@convex-dev/auth/components/google/_generated/component.js";
+
+export declare const components: {
+  auth: authComponent<"auth">;
+  authGoogle: authGoogleComponent<"authGoogle">;
+};

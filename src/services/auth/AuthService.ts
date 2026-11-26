@@ -1,10 +1,6 @@
 import { UserProfile, AuthState } from '../../types/user';
-import { GoogleJwtPayload } from '../../types/auth';
 
 export const AUTH_USER_KEY = 'auth_user_v2';
-export const GOOGLE_CLIENT_ID =
-  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-  '229654613287-8utvd3fhrcsalh1ol02ev2mlg140kbai.apps.googleusercontent.com';
 
 function escapeAuthNamespace(namespace: string): string {
   return namespace.replace(/[^a-zA-Z0-9]/g, '');
@@ -14,7 +10,7 @@ function isNonEmptyStorageVal(val: string | null): val is string {
   return Boolean(val && val !== 'null' && val !== '""' && val.trim().length > 0);
 }
 
-export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
+function parseJwtPayload(token: string): { exp?: unknown } | null {
   try {
     if (typeof token !== 'string') return null;
     const parts = token.split('.');
@@ -31,7 +27,7 @@ export function parseGoogleJwt(token: string): GoogleJwtPayload | null {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return null;
     }
-    return parsed as GoogleJwtPayload;
+    return parsed as { exp?: unknown };
   } catch {
     return null;
   }
@@ -44,7 +40,7 @@ export function hasStoredConvexAuthSession(namespace?: string): boolean {
     if (!storage || typeof storage.getItem !== 'function') return false;
 
     const isJwtUnexpired = (rawJwt: string): boolean => {
-      const payload = parseGoogleJwt(rawJwt);
+      const payload = parseJwtPayload(rawJwt);
       return Boolean(
         payload &&
           typeof payload.exp === 'number' &&
@@ -77,36 +73,6 @@ export function hasStoredConvexAuthSession(namespace?: string): boolean {
     // Ignore storage access errors
   }
   return false;
-}
-
-export function buildProfileFromJwt(
-  payload: GoogleJwtPayload,
-  currentProfile: UserProfile
-): UserProfile {
-  const hasCustomName =
-    Boolean(currentProfile.displayName) &&
-    currentProfile.displayName.trim() !== '' &&
-    currentProfile.displayName !== 'Focus Practitioner';
-  const safeName = hasCustomName
-    ? currentProfile.displayName.trim().slice(0, 50)
-    : typeof payload.name === 'string' && payload.name.trim()
-      ? payload.name.trim().slice(0, 50)
-      : currentProfile.displayName || 'Focus Practitioner';
-  const safeAvatarUrl =
-    typeof payload.picture === 'string' &&
-    payload.picture.startsWith('https://') &&
-    payload.picture.length <= 2048
-      ? payload.picture
-      : currentProfile.avatarUrl;
-
-  return {
-    ...currentProfile,
-    id: payload.sub || currentProfile.id,
-    email: payload.email || currentProfile.email,
-    displayName: safeName,
-    avatarUrl: safeAvatarUrl,
-    avatarEmoji: currentProfile.avatarEmoji || '',
-  };
 }
 
 export class AuthService {
@@ -160,14 +126,6 @@ export class AuthService {
     try {
       localStorage.removeItem(AUTH_USER_KEY);
       localStorage.removeItem('auth_user_v1');
-
-      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id?.disableAutoSelect) {
-        try {
-          (window as any).google.accounts.id.disableAutoSelect();
-        } catch {
-          // Ignore
-        }
-      }
 
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {

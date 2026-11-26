@@ -1,10 +1,7 @@
 // @vitest-environment edge-runtime
-import { convexTest } from "convex-test";
 import { describe, it, expect } from "vitest";
-import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-
-const modules = import.meta.glob("../convex/**/*.*s");
+import { createConvexTest, createAuthenticatedTestUser } from "./helpers/authTestHelper";
 
 function makeSampleAttempt(overrides: Record<string, unknown> = {}) {
   return {
@@ -52,34 +49,19 @@ function makeSampleAttempt(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ML Telemetry Convex Backend", () => {
-  async function createAuthenticatedTestUser(t: ReturnType<typeof convexTest>) {
-    const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+  it("isolates telemetry per authenticated user and rejects unauthenticated writes", async () => {
+    const t = createConvexTest();
+    expect(await t.query(api.telemetry.listAttempts, {})).toBeNull();
+    await expect(t.mutation(api.telemetry.upsertAttempt, makeSampleAttempt())).rejects.toThrow();
+
+    const { asUser: asUserA } = await createAuthenticatedTestUser(t, {
       email: "telemetry-user@example.com",
       sub: "google-telemetry-sub",
       name: "Telemetry Tester",
     });
-    const asUser = t.withIdentity({
-      subject: `${userId}|session-telemetry`,
-      email: "telemetry-user@example.com",
-      name: "Telemetry Tester",
-    });
-    return { userId, asUser };
-  }
-
-  it("isolates telemetry per authenticated user and rejects unauthenticated writes", async () => {
-    const t = convexTest(schema, modules);
-    expect(await t.query(api.telemetry.listAttempts, {})).toBeNull();
-    await expect(t.mutation(api.telemetry.upsertAttempt, makeSampleAttempt())).rejects.toThrow();
-
-    const { asUser: asUserA } = await createAuthenticatedTestUser(t);
-    const userBId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+    const { asUser: asUserB } = await createAuthenticatedTestUser(t, {
       email: "user-b@example.com",
       sub: "google-user-b-sub",
-      name: "User B",
-    });
-    const asUserB = t.withIdentity({
-      subject: `${userBId}|session-b`,
-      email: "user-b@example.com",
       name: "User B",
     });
 
@@ -94,7 +76,7 @@ describe("ML Telemetry Convex Backend", () => {
   });
 
   it("validates bounds, protects completed attempts, upgrades stale attempts, filters by date, and clears", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await expect(
@@ -152,7 +134,7 @@ describe("ML Telemetry Convex Backend", () => {
   });
 
   it("records server_scheduled fallback on timer completion, upgrades on richer client upsert, and blocks sparser overwrites or source spoofing", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     // 1. Start a timer and complete it server-side with no client telemetry row yet

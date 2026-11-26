@@ -1,10 +1,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { authTables } from "@convex-dev/auth/server";
 import { sessionAttemptDbFields } from "./telemetryValidators";
 
 export default defineSchema({
-  ...authTables,
 
   // 1. User: Profile + Preferences + Embedded Tags (All core state in 1 query)
   users: defineTable({

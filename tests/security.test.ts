@@ -1,29 +1,16 @@
 // @vitest-environment edge-runtime
-import { convexTest } from "convex-test";
 import { describe, it, expect } from "vitest";
-import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-
-const modules = import.meta.glob("../convex/**/*.*s");
+import { createConvexTest, createAuthenticatedTestUser } from "./helpers/authTestHelper";
 
 describe("Security Hardening & Input Validation", () => {
-  async function createAuthenticatedTestUser(t: ReturnType<typeof convexTest>) {
-    const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+  it("sanitizes invalid or malicious tag color values to fallback hex", async () => {
+    const t = createConvexTest();
+    const { asUser } = await createAuthenticatedTestUser(t, {
       email: "secure-user@example.com",
       sub: "google-secure-sub",
       name: "Security Tester",
     });
-    const asUser = t.withIdentity({
-      subject: `${userId}|session-sec`,
-      email: "secure-user@example.com",
-      name: "Security Tester",
-    });
-    return { userId, asUser };
-  }
-
-  it("sanitizes invalid or malicious tag color values to fallback hex", async () => {
-    const t = convexTest(schema, modules);
-    const { asUser } = await createAuthenticatedTestUser(t);
 
     const tag = await asUser.mutation(api.tags.create, {
       name: "Research",
@@ -34,7 +21,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("rejects empty tag names, oversized tag names, and malformed tag IDs", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await expect(
@@ -61,7 +48,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("rejects negative or excessive durationSeconds in sessions.record", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await expect(
@@ -80,7 +67,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("rejects future completedAt timestamps beyond 24h", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     const futureDate = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
@@ -94,7 +81,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("validates date format and enforces daily coffee limits", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await expect(
@@ -120,7 +107,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("prevents cross-table arbitrary document deletion in coffee.removeCup", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // Create a real session
@@ -144,7 +131,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("validates profile and settings bounds", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await expect(
@@ -178,7 +165,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("validates timer input parameters in timer.start and timer.reset", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await expect(
@@ -209,7 +196,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("validates push subscription endpoints against SSRF and non-HTTPS schemes", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     const makeValidPushKeys = (seed: number) => {
@@ -264,7 +251,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("enforces push subscription quota and prunes oldest devices when exceeding quota", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
     const p256Bytes = new Uint8Array(65);
     p256Bytes[0] = 0x04;
@@ -295,7 +282,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("removes another user's push subscription when a different account registers the same endpoint", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId: userAId, asUser: asUserA } = await createAuthenticatedTestUser(t);
     const p256Bytes = new Uint8Array(65);
     p256Bytes[0] = 0x04;
@@ -303,17 +290,9 @@ describe("Security Hardening & Input Validation", () => {
     const validP256dh = btoa(String.fromCharCode(...p256Bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const validAuth = btoa(String.fromCharCode(...new Uint8Array(16).fill(0x66))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-    const userBId = await t.run(async (ctx) => {
-      return await ctx.db.insert("users", {
-        tokenIdentifier: "test-provider|user-b",
-        email: "user-b@example.com",
-        displayName: "User B",
-        dailyGoalMinutes: 120,
-      });
-    });
-    const asUserB = t.withIdentity({
-      subject: `${userBId}|session-b`,
+    const { userId: userBId, asUser: asUserB } = await createAuthenticatedTestUser(t, {
       email: "user-b@example.com",
+      sub: "user-b-sub",
       name: "User B",
     });
 
@@ -346,7 +325,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("rejects oversized backup imports", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     const excessiveTags = Array.from({ length: 101 }, (_, i) => ({
@@ -364,7 +343,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("cleans up abandoned RUNNING timers via cleanupStaleTimers", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId } = await createAuthenticatedTestUser(t);
 
     const now = Date.now();
@@ -397,7 +376,7 @@ describe("Security Hardening & Input Validation", () => {
   });
 
   it("guards query limits against NaN/floats and enforces integer-only profile/setting fields", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // NaN and fractional limits must not crash .take()
