@@ -308,17 +308,21 @@ export class NotificationService {
       this.setPushStatus(status);
       return { ok: false, status, reason };
     };
+    const failPreFlight = (status: PushSubscriptionStatus, reason: string) => {
+      this.resetPushStatus(status);
+      return { ok: false, status, reason };
+    };
 
-    if (!this.isPushSupported()) return fail('unsupported', 'PushManager unsupported');
+    if (!this.isPushSupported()) return failPreFlight('unsupported', 'PushManager unsupported');
     const perm = this.getPermissionState();
     if (perm !== 'granted') {
-      return fail(
+      return failPreFlight(
         perm === 'denied' ? 'permission_denied' : 'unsubscribed',
         'Notification permission not granted'
       );
     }
     const trimmedKey = vapidPublicKey?.trim();
-    if (!trimmedKey) return fail('unconfigured', 'VAPID public key unavailable');
+    if (!trimmedKey) return failPreFlight('unconfigured', 'VAPID public key unavailable');
 
     if (this.pushSyncInFlight) return this.pushSyncInFlight;
 
