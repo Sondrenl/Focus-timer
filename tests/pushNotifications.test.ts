@@ -714,4 +714,145 @@ describe("Web Push Backend & Declarative Push", () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it("rotates push subscriptions via POST /push/rotate with hashed rotationToken, enforces replay protection & CORS, and hides hash from dispatch context", async () => {
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+
+    const sha256Hex = async (raw: string) => {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    };
+
+    const token1 = "rot_" + "a".repeat(40);
+    const token2 = "rot_" + "b".repeat(40);
+    const hash1 = await sha256Hex(token1);
+    const hash2 = await sha256Hex(token2);
+
+    const initialKeys = makeSyntheticSubKeys(0x91);
+    const rotatedKeys = makeSyntheticSubKeys(0x92);
+    const thirdKeys = makeSyntheticSubKeys(0x93);
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "iphone-rotate-1",
+      endpoint: "https://web.push.apple.com/old-endpoint",
+      ...initialKeys,
+      isMobile: true,
+      rotationTokenHash: hash1,
+    });
+
+    // Dispatch context must strip rotationTokenHash
+    const dispatchCtx = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(dispatchCtx.subscriptions).toHaveLength(1);
+    expect("rotationTokenHash" in dispatchCtx.subscriptions[0]).toBe(false);
+
+    // CORS preflight allows known app origin and omits header for evil origin
+    const goodPreflight = await t.fetch("/push/rotate", {
+      method: "OPTIONS",
+      headers: { Origin: "https://focus-timer.sondrelassen.workers.dev" },
+    });
+    expect(goodPreflight.status).toBe(204);
+    expect(goodPreflight.headers.get("access-control-allow-origin")).toBe(
+      "https://focus-timer.sondrelassen.workers.dev"
+    );
+
+    const evilPreflight = await t.fetch("/push/rotate", {
+      method: "OPTIONS",
+      headers: { Origin: "https://evil.example.com" },
+    });
+    expect(evilPreflight.status).toBe(204);
+    expect(evilPreflight.headers.get("access-control-allow-origin")).toBeNull();
+
+    // Rejects wrong rotationToken (401)
+    const wrongTokenRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: "rot_" + "z".repeat(40),
+        endpoint: "https://web.push.apple.com/new-endpoint",
+        ...rotatedKeys,
+      }),
+    });
+    expect(wrongTokenRes.status).toBe(401);
+
+    // Rejects mismatched deviceId (401)
+    const wrongDeviceRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "other-device-id",
+        rotationToken: token1,
+        endpoint: "https://web.push.apple.com/new-endpoint",
+        ...rotatedKeys,
+      }),
+    });
+    expect(wrongDeviceRes.status).toBe(401);
+
+    // Rejects unauthorized push endpoint domain (400)
+    const badEndpointRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        endpoint: "https://evil.example.com/push/123",
+        ...rotatedKeys,
+      }),
+    });
+    expect(badEndpointRes.status).toBe(400);
+
+    // Valid rotation succeeds (200) and rolls rotationTokenHash to hash2
+    const okRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://focus-timer.sondrelassen.workers.dev",
+      },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        nextRotationTokenHash: hash2,
+        endpoint: "https://web.push.apple.com/new-endpoint",
+        ...rotatedKeys,
+      }),
+    });
+    expect(okRes.status).toBe(200);
+    expect(await okRes.json()).toEqual({ rotated: true });
+
+    const afterFirst = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(afterFirst.subscriptions).toHaveLength(1);
+    expect(afterFirst.subscriptions[0].endpoint).toBe("https://web.push.apple.com/new-endpoint");
+    expect(afterFirst.subscriptions[0].p256dh).toBe(rotatedKeys.p256dh);
+
+    // Replaying old token1 now fails (401)
+    const replayRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        endpoint: "https://web.push.apple.com/third-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(replayRes.status).toBe(401);
+
+    // Next rotation with token2 succeeds (200)
+    const secondOkRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token2,
+        endpoint: "https://web.push.apple.com/third-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(secondOkRes.status).toBe(200);
+    const afterSecond = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(afterSecond.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
+  });
 });

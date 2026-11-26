@@ -77,7 +77,7 @@ function validateEndpoint(endpoint: string): void {
   }
 }
 
-function isAllowedAppOrigin(url: URL): boolean {
+export function isAllowedAppOrigin(url: URL): boolean {
   if (url.username !== "" || url.password !== "") return false;
   if (
     url.protocol === "http:" &&
@@ -126,6 +126,15 @@ function validateDeviceId(deviceId: string): void {
   if (!deviceId || deviceId.length > 128 || !/^[a-zA-Z0-9_.-]+$/.test(deviceId)) {
     throw new Error("Invalid deviceId format.");
   }
+}
+
+function validateRotationTokenHash(hash: string | undefined): string | undefined {
+  if (hash === undefined) return undefined;
+  const normalized = hash.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new Error("Invalid rotationTokenHash format.");
+  }
+  return normalized;
 }
 
 function validatePushKey(key: string, name: "p256dh" | "auth"): void {
@@ -195,6 +204,7 @@ export const register = mutation({
     userAgent: v.optional(v.string()),
     isMobile: v.optional(v.boolean()),
     origin: v.optional(v.string()),
+    rotationTokenHash: v.optional(v.string()),
   },
   returns: v.id("push_subscriptions"),
   handler: async (ctx, args) => {
@@ -203,6 +213,7 @@ export const register = mutation({
     validateEndpoint(args.endpoint);
     validatePushKey(args.p256dh, "p256dh");
     validatePushKey(args.auth, "auth");
+    const validatedRotationHash = validateRotationTokenHash(args.rotationTokenHash);
 
     const sanitizedUserAgent = args.userAgent ? args.userAgent.slice(0, 256) : undefined;
     const sanitizedOrigin = sanitizeOrigin(args.origin);
@@ -237,13 +248,15 @@ export const register = mutation({
     if (existing) {
       const nextIsMobile = args.isMobile ?? existing.isMobile;
       const nextOrigin = sanitizedOrigin ?? existing.origin;
+      const nextRotationHash = validatedRotationHash ?? existing.rotationTokenHash;
       const unchanged =
         existing.endpoint === args.endpoint &&
         existing.p256dh === args.p256dh &&
         existing.auth === args.auth &&
         existing.userAgent === sanitizedUserAgent &&
         existing.isMobile === nextIsMobile &&
-        existing.origin === nextOrigin;
+        existing.origin === nextOrigin &&
+        existing.rotationTokenHash === nextRotationHash;
 
       const lastUpdatedMs = Date.parse(existing.updatedAt);
       const needsHeartbeatTouch =
@@ -265,6 +278,7 @@ export const register = mutation({
         userAgent: sanitizedUserAgent,
         isMobile: nextIsMobile,
         origin: nextOrigin,
+        rotationTokenHash: nextRotationHash,
         updatedAt: now,
       });
       return existing._id;
@@ -292,9 +306,65 @@ export const register = mutation({
         userAgent: sanitizedUserAgent,
         isMobile: args.isMobile,
         origin: sanitizedOrigin,
+        rotationTokenHash: validatedRotationHash,
         updatedAt: now,
       });
     }
+  },
+});
+
+export const rotateSubscription = internalMutation({
+  args: {
+    deviceId: v.string(),
+    currentTokenHash: v.string(),
+    nextTokenHash: v.optional(v.string()),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+  },
+  returns: v.object({
+    rotated: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    validateDeviceId(args.deviceId);
+    const currentHash = validateRotationTokenHash(args.currentTokenHash);
+    if (!currentHash) {
+      return { rotated: false };
+    }
+    const nextHash = validateRotationTokenHash(args.nextTokenHash);
+    validateEndpoint(args.endpoint);
+    validatePushKey(args.p256dh, "p256dh");
+    validatePushKey(args.auth, "auth");
+
+    const existing = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_rotation_token_hash", (q) => q.eq("rotationTokenHash", currentHash))
+      .first();
+
+    if (!existing || existing.deviceId !== args.deviceId) {
+      return { rotated: false };
+    }
+
+    const sameEndpointSubs = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_endpoint", (q) => q.eq("endpoint", args.endpoint))
+      .take(50);
+
+    for (const doc of sameEndpointSubs) {
+      if (doc._id !== existing._id) {
+        await ctx.db.delete(doc._id);
+      }
+    }
+
+    await ctx.db.patch(existing._id, {
+      endpoint: args.endpoint,
+      p256dh: args.p256dh,
+      auth: args.auth,
+      rotationTokenHash: nextHash ?? existing.rotationTokenHash,
+      updatedAt: new Date(Date.now()).toISOString(),
+    });
+
+    return { rotated: true };
   },
 });
 
@@ -349,10 +419,12 @@ export const getPushDispatchContext = internalQuery({
     }
 
     const soundEnabled = user.settings?.soundEnabled ?? true;
-    const subscriptions = await ctx.db
+    const rawSubscriptions = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
       .take(MAX_PUSH_DEVICES_PER_USER);
+
+    const subscriptions = rawSubscriptions.map(({ rotationTokenHash: _omit, ...rest }) => rest);
 
     return {
       soundEnabled,

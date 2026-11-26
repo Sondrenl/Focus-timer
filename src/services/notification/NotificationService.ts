@@ -1,4 +1,12 @@
 import { isMobileDevice } from '../../utils/environment';
+import { convexSiteUrl } from '../convex/ConvexClient';
+import {
+  clearPushRotationMeta,
+  generateRotationToken,
+  readPushRotationMeta,
+  sha256Hex,
+  writePushRotationMeta,
+} from './pushRotationStore';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
 export type PushSubscriptionStatus =
@@ -36,6 +44,7 @@ export interface PushRegisterPayload {
   userAgent?: string;
   isMobile?: boolean;
   origin?: string;
+  rotationTokenHash?: string;
 }
 
 export class NotificationService {
@@ -347,6 +356,13 @@ export class NotificationService {
           return fail('error', 'Incomplete push subscription keys');
         }
 
+        const existingMeta = await readPushRotationMeta();
+        const rotationToken =
+          existingMeta && existingMeta.deviceId === deviceId && existingMeta.rotationToken
+            ? existingMeta.rotationToken
+            : generateRotationToken();
+        const rotationTokenHash = rotationToken ? await sha256Hex(rotationToken) : null;
+
         await registerFn({
           deviceId,
           endpoint: subscription.endpoint,
@@ -355,9 +371,18 @@ export class NotificationService {
           userAgent: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 256) : undefined,
           isMobile: isMobileDevice(),
           origin: typeof window !== 'undefined' ? window.location?.origin : undefined,
+          ...(rotationTokenHash ? { rotationTokenHash } : {}),
         });
 
         if (isSuperseded()) return supersededResult();
+
+        if (rotationToken && rotationTokenHash && convexSiteUrl) {
+          await writePushRotationMeta({
+            convexSiteUrl,
+            deviceId,
+            rotationToken,
+          });
+        }
 
         this.lastRegisteredEndpoint = subscription.endpoint;
         this.setPushStatus('active');
@@ -380,6 +405,7 @@ export class NotificationService {
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
     this.resetPushStatus('unsubscribed');
+    await clearPushRotationMeta();
 
     if (unregisterFn) {
       await unregisterFn().catch(() => {});

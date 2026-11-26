@@ -25,6 +25,10 @@ export const isConvexConfigured = Boolean(
   convexUrl && !convexUrl.includes("dummy") && !convexUrl.includes("proud-otter")
 );
 
+export const convexSiteUrl = convexUrl
+  ? convexUrl.replace(/\.convex\.cloud\/?$/, ".convex.site")
+  : "";
+
 // Disable Convex's default unsavedChangesWarning to avoid "Reload site? Changes you made may not be saved" prompts
 export const convexClient = new ConvexReactClient(convexUrl, {
   unsavedChangesWarning: false,

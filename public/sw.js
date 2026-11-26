@@ -1,7 +1,7 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 2.2.0
+// Version: 2.3.0
 // Native Web Push fallback (for browsers without Declarative Web Push),
-// focused-client silence coordination, pushsubscriptionchange recovery, and safe notificationclick focus
+// focused-client silence coordination, background pushsubscriptionchange rotation, and safe notificationclick focus
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -200,16 +200,27 @@ self.addEventListener('push', (event) => {
 self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil(
     (async () => {
-      try {
-        const appServerKey = event.oldSubscription?.options?.applicationServerKey;
-        if (appServerKey && self.registration.pushManager) {
-          await self.registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: appServerKey,
-          });
+      let newSub = event.newSubscription || null;
+      if (!newSub) {
+        try {
+          const appServerKey = event.oldSubscription?.options?.applicationServerKey;
+          if (appServerKey && self.registration.pushManager) {
+            newSub = await self.registration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: appServerKey,
+            });
+          }
+        } catch {
+          // Ignore silent re-subscribe errors; open clients will resync with Convex
         }
-      } catch {
-        // Ignore silent re-subscribe errors; open clients will resync with Convex
+      }
+
+      if (newSub && typeof newSub.toJSON === 'function') {
+        try {
+          await syncRotatedSubscriptionToBackend(newSub);
+        } catch {
+          // Ignore background rotation errors; next app open will resync
+        }
       }
 
       try {
@@ -226,6 +237,138 @@ self.addEventListener('pushsubscriptionchange', (event) => {
     })()
   );
 });
+
+const PUSH_META_DB = 'pomodor_push_meta_v1';
+const PUSH_META_STORE = 'meta';
+const PUSH_META_KEY = 'current';
+
+function openPushMetaDb() {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(PUSH_META_DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(PUSH_META_STORE)) {
+          db.createObjectStore(PUSH_META_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function readPushMeta() {
+  const db = await openPushMetaDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(PUSH_META_STORE, 'readonly');
+      const req = tx.objectStore(PUSH_META_STORE).get(PUSH_META_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+      tx.oncomplete = () => db.close();
+      tx.onabort = () => {
+        db.close();
+        resolve(null);
+      };
+    } catch {
+      db.close();
+      resolve(null);
+    }
+  });
+}
+
+async function writePushMeta(meta) {
+  const db = await openPushMetaDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(PUSH_META_STORE, 'readwrite');
+      tx.objectStore(PUSH_META_STORE).put(meta, PUSH_META_KEY);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        resolve();
+      };
+    } catch {
+      db.close();
+      resolve();
+    }
+  });
+}
+
+function generateSwRotationToken() {
+  if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+    return null;
+  }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function sha256HexSw(raw) {
+  if (typeof crypto === 'undefined' || !crypto.subtle || !crypto.subtle.digest) {
+    return null;
+  }
+  const encoded = new TextEncoder().encode(raw);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function syncRotatedSubscriptionToBackend(subscription) {
+  const subJson = subscription.toJSON();
+  const endpoint = subscription.endpoint || '';
+  const p256dh = (subJson && subJson.keys && subJson.keys.p256dh) || '';
+  const auth = (subJson && subJson.keys && subJson.keys.auth) || '';
+  if (!endpoint || !p256dh || !auth) return;
+
+  const meta = await readPushMeta();
+  if (!meta || !meta.convexSiteUrl || !meta.deviceId || !meta.rotationToken) {
+    return;
+  }
+
+  const nextRotationToken = generateSwRotationToken();
+  const nextRotationTokenHash = nextRotationToken ? await sha256HexSw(nextRotationToken) : null;
+
+  const baseUrl = meta.convexSiteUrl.replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/push/rotate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      deviceId: meta.deviceId,
+      rotationToken: meta.rotationToken,
+      ...(nextRotationTokenHash ? { nextRotationTokenHash } : {}),
+      endpoint,
+      p256dh,
+      auth,
+    }),
+  });
+
+  if (response.ok && nextRotationToken && nextRotationTokenHash) {
+    await writePushMeta({
+      convexSiteUrl: meta.convexSiteUrl,
+      deviceId: meta.deviceId,
+      rotationToken: nextRotationToken,
+    });
+  }
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
