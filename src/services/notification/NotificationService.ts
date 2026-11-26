@@ -55,6 +55,7 @@ export class NotificationService {
   private lastRegisteredEndpoint: string | null = null;
   private syncEpoch = 0;
   private subscribeEpoch = 0;
+  private unsubscribeEpoch = 0;
   private resyncRequestedDuringFlight = false;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
@@ -322,7 +323,8 @@ export class NotificationService {
     if (this.pushSyncInFlight) return this.pushSyncInFlight;
 
     const epoch = ++this.syncEpoch;
-    this.subscribeEpoch++;
+    const mySubscribeEpoch = ++this.subscribeEpoch;
+    const startUnsubscribeEpoch = this.unsubscribeEpoch;
     this.resyncRequestedDuringFlight = false;
     const isSuperseded = () => epoch !== this.syncEpoch;
     const supersededResult = () => ({
@@ -367,14 +369,26 @@ export class NotificationService {
 
         if (isSuperseded()) return supersededResult();
 
+        let createdSubscription = false;
         if (!subscription) {
           subscription = await pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: expectedKeyBytes as BufferSource,
           });
+          createdSubscription = true;
         }
 
-        if (isSuperseded()) return supersededResult();
+        if (isSuperseded()) {
+          if (
+            createdSubscription &&
+            subscription &&
+            this.unsubscribeEpoch !== startUnsubscribeEpoch &&
+            this.subscribeEpoch === mySubscribeEpoch
+          ) {
+            void subscription.unsubscribe().catch(() => {});
+          }
+          return supersededResult();
+        }
 
         const subJson = typeof subscription.toJSON === 'function' ? subscription.toJSON() : {};
         const p256dh = subJson.keys?.p256dh || '';
@@ -408,6 +422,7 @@ export class NotificationService {
 
         if (rotationToken && rotationTokenHash && convexSiteUrl) {
           const latestMeta = await readPushRotationMeta();
+          if (isSuperseded()) return supersededResult();
           const swRotatedConcurrently = Boolean(
             latestMeta &&
               latestMeta.deviceId === deviceId &&
@@ -422,7 +437,6 @@ export class NotificationService {
           const tokenToPersist = swRotatedConcurrently
             ? latestMeta!.rotationToken
             : rotationToken;
-          if (isSuperseded()) return supersededResult();
           await writePushRotationMeta({
             convexSiteUrl,
             deviceId,
@@ -431,7 +445,15 @@ export class NotificationService {
           });
         }
 
-        if (isSuperseded()) return supersededResult();
+        if (isSuperseded()) {
+          if (
+            this.unsubscribeEpoch !== startUnsubscribeEpoch &&
+            this.subscribeEpoch === mySubscribeEpoch
+          ) {
+            void clearPushRotationMeta().catch(() => {});
+          }
+          return supersededResult();
+        }
 
         this.lastRegisteredEndpoint = subscription.endpoint;
         this.setPushStatus('active');
@@ -457,6 +479,7 @@ export class NotificationService {
   }
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
+    this.unsubscribeEpoch++;
     this.resetPushStatus('unsubscribed');
     const unsubSubscribeEpoch = this.subscribeEpoch;
     await clearPushRotationMeta();
