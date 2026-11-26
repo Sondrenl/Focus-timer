@@ -604,4 +604,371 @@ describe("Web Push Backend & Declarative Push", () => {
     const pushJobs = scheduled.filter((job) => job.name.includes("sendTimerCompletionPush"));
     expect(pushJobs).toHaveLength(0);
   });
+
+  it("retries transient 503 errors up to 3 attempts, keeps TTL at 180s, and accepts push.services.mozilla.com", async () => {
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
+
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+    const keys = await makeRealSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "firefox-android-1",
+      endpoint: "https://push.services.mozilla.com/wpush/v2/firefox-tok",
+      ...keys,
+      isMobile: true,
+    });
+
+    let attempts = 0;
+    let seenTtl: string | undefined;
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init) => {
+        attempts += 1;
+        const hdrs = Object.fromEntries(
+          Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [
+            k.toLowerCase(),
+            String(v),
+          ])
+        );
+        seenTtl = hdrs["ttl"];
+        if (attempts < 3) {
+          return new Response("Temporary outage", { status: 503 });
+        }
+        return new Response(null, { status: 201 });
+      });
+
+    try {
+      const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+        userId,
+        sessionType: "WORK",
+        timerRunId: "run-retry-3",
+        completedAtMs: Date.now(),
+      });
+
+      expect(result).toEqual({ sent: 1, pruned: 0 });
+      expect(attempts).toBe(3);
+      expect(seenTtl).toBe("180");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("keeps mobile push audible (silent: false) even when account soundEnabled is false, while silencing desktop push", async () => {
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
+
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+
+    await asUser.mutation(api.users.updateSettings, { soundEnabled: false });
+
+    const mobileKeys = await makeRealSubKeys();
+    const desktopKeys = await makeRealSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "mobile-audible-1",
+      endpoint: "https://web.push.apple.com/mobile-audible-tok",
+      ...mobileKeys,
+      isMobile: true,
+    });
+    await asUser.mutation(api.push.register, {
+      deviceId: "desktop-silent-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/desktop-silent-tok",
+      ...desktopKeys,
+      isMobile: false,
+    });
+
+    const capturedPayloads: Array<{ notification?: { silent?: boolean; tag?: string } }> = [];
+    const originalStringify = JSON.stringify;
+    const stringifySpy = vi.spyOn(JSON, "stringify").mockImplementation((value, ...rest) => {
+      if (
+        value &&
+        typeof value === "object" &&
+        "web_push" in value &&
+        (value as { web_push?: unknown }).web_push === 8030
+      ) {
+        capturedPayloads.push(value as { notification?: { silent?: boolean; tag?: string } });
+      }
+      return originalStringify(value, ...(rest as [never, never]));
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 201 }));
+
+    try {
+      const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+        userId,
+        sessionType: "WORK",
+        timerRunId: "run-mobile-audible",
+        completedAtMs: Date.now(),
+      });
+
+      expect(result).toEqual({ sent: 2, pruned: 0 });
+      expect(capturedPayloads).toHaveLength(2);
+      // Mobile device receives silent: false; desktop device receives silent: true
+      const silentValues = capturedPayloads.map((p) => p.notification?.silent).sort();
+      expect(silentValues).toEqual([false, true]);
+    } finally {
+      stringifySpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("rotates push subscriptions via POST /push/rotate with hashed rotationToken, enforces replay protection & CORS, and hides hash from dispatch context", async () => {
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+
+    const sha256Hex = async (raw: string) => {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    };
+
+    const token1 = "rot_" + "a".repeat(40);
+    const token2 = "rot_" + "b".repeat(40);
+    const hash1 = await sha256Hex(token1);
+    const hash2 = await sha256Hex(token2);
+
+    const initialKeys = makeSyntheticSubKeys(0x91);
+    const rotatedKeys = makeSyntheticSubKeys(0x92);
+    const thirdKeys = makeSyntheticSubKeys(0x93);
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "iphone-rotate-1",
+      endpoint: "https://web.push.apple.com/old-endpoint",
+      ...initialKeys,
+      isMobile: true,
+      rotationTokenHash: hash1,
+    });
+
+    // Dispatch context must strip rotationTokenHash
+    const dispatchCtx = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(dispatchCtx.subscriptions).toHaveLength(1);
+    expect("rotationTokenHash" in dispatchCtx.subscriptions[0]).toBe(false);
+
+    // CORS preflight allows known app origin and omits header for evil origin
+    const goodPreflight = await t.fetch("/push/rotate", {
+      method: "OPTIONS",
+      headers: { Origin: "https://focus-timer.sondrelassen.workers.dev" },
+    });
+    expect(goodPreflight.status).toBe(204);
+    expect(goodPreflight.headers.get("access-control-allow-origin")).toBe(
+      "https://focus-timer.sondrelassen.workers.dev"
+    );
+
+    const evilPreflight = await t.fetch("/push/rotate", {
+      method: "OPTIONS",
+      headers: { Origin: "https://evil.example.com" },
+    });
+    expect(evilPreflight.status).toBe(204);
+    expect(evilPreflight.headers.get("access-control-allow-origin")).toBeNull();
+
+    // Rejects wrong rotationToken (401)
+    const wrongTokenRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: "rot_" + "z".repeat(40),
+        endpoint: "https://web.push.apple.com/new-endpoint",
+        ...rotatedKeys,
+      }),
+    });
+    expect(wrongTokenRes.status).toBe(401);
+
+    // Rejects mismatched deviceId (401)
+    const wrongDeviceRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "other-device-id",
+        rotationToken: token1,
+        endpoint: "https://web.push.apple.com/new-endpoint",
+        ...rotatedKeys,
+      }),
+    });
+    expect(wrongDeviceRes.status).toBe(401);
+
+    // Rejects unauthorized push endpoint domain (400)
+    const badEndpointRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        endpoint: "https://evil.example.com/push/123",
+        ...rotatedKeys,
+      }),
+    });
+    expect(badEndpointRes.status).toBe(400);
+
+    // Rejects non-string or blank nextRotationTokenHash (400) instead of coercing to undefined
+    for (const invalidNextHash of [123, {}, "", "   "]) {
+      const invalidNextHashRes = await t.fetch("/push/rotate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: "iphone-rotate-1",
+          rotationToken: token1,
+          nextRotationTokenHash: invalidNextHash,
+          endpoint: "https://web.push.apple.com/new-endpoint",
+          ...rotatedKeys,
+        }),
+      });
+      expect(invalidNextHashRes.status).toBe(400);
+    }
+
+    // Valid rotation succeeds (200) and rolls rotationTokenHash to hash2
+    const okRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://focus-timer.sondrelassen.workers.dev",
+      },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        nextRotationTokenHash: hash2,
+        endpoint: "https://web.push.apple.com/new-endpoint",
+        ...rotatedKeys,
+      }),
+    });
+    expect(okRes.status).toBe(200);
+    expect(await okRes.json()).toEqual({ rotated: true });
+
+    const afterFirst = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(afterFirst.subscriptions).toHaveLength(1);
+    expect(afterFirst.subscriptions[0].endpoint).toBe("https://web.push.apple.com/new-endpoint");
+    expect(afterFirst.subscriptions[0].p256dh).toBe(rotatedKeys.p256dh);
+    expect("previousRotationTokenHash" in afterFirst.subscriptions[0]).toBe(false);
+
+    // Grace-slot recovery: if SW died before persisting token2, retrying with token1 recovers
+    // and retains hash1 (not orphaned hash2) in previousRotationTokenHash
+    const token3 = "rot_" + "c".repeat(40);
+    const hash3 = await sha256Hex(token3);
+    const graceRecoveryRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        nextRotationTokenHash: hash3,
+        endpoint: "https://web.push.apple.com/third-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(graceRecoveryRes.status).toBe(200);
+    const afterGrace = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(afterGrace.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
+
+    const subAfterGrace = await t.run(async (ctx) => ctx.db.get(afterGrace.subscriptions[0]._id));
+    expect(subAfterGrace?.rotationTokenHash).toBe(hash3);
+    expect(subAfterGrace?.previousRotationTokenHash).toBe(hash1);
+
+    // Orphaned token2 is no longer valid (401)
+    const orphanedTokenRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token2,
+        endpoint: "https://web.push.apple.com/orphaned-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(orphanedTokenRes.status).toBe(401);
+
+    // A second grace-slot recovery with token1 succeeds because hash1 was retained in previousRotationTokenHash
+    const token4 = "rot_" + "d".repeat(40);
+    const hash4 = await sha256Hex(token4);
+    const secondGraceRecoveryRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        nextRotationTokenHash: hash4,
+        endpoint: "https://web.push.apple.com/fourth-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(secondGraceRecoveryRes.status).toBe(200);
+
+    // Once rolled with the active token (token4 -> token5), token1 is evicted from both slots (401)
+    const token5 = "rot_" + "e".repeat(40);
+    const hash5 = await sha256Hex(token5);
+    const activeRollRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token4,
+        nextRotationTokenHash: hash5,
+        endpoint: "https://web.push.apple.com/fifth-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(activeRollRes.status).toBe(200);
+
+    const expiredTokenRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        endpoint: "https://web.push.apple.com/sixth-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(expiredTokenRes.status).toBe(401);
+
+    // Oversized body (> 8KB) returns 413
+    const hugeRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(9000) }),
+    });
+    expect(hugeRes.status).toBe(413);
+
+    // TOCTOU guard: stale deleteSubscriptionById with old endpoint does NOT delete rotated row
+    const subId = afterGrace.subscriptions[0]._id;
+    const staleDelete = await t.mutation(internal.push.deleteSubscriptionById, {
+      id: subId,
+      expectedEndpoint: "https://web.push.apple.com/old-endpoint",
+      expectedP256dh: initialKeys.p256dh,
+    });
+    expect(staleDelete).toBe(false);
+    const stillPresent = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(stillPresent.subscriptions).toHaveLength(1);
+    expect(stillPresent.subscriptions[0].endpoint).toBe("https://web.push.apple.com/fifth-endpoint");
+  });
+
+  it("does not prune healthy subscriptions when VAPID_PUBLIC_KEY is misconfigured", async () => {
+    process.env.VAPID_PRIVATE_KEY = "raw-private-key-value";
+    process.env.VAPID_PUBLIC_KEY = "short-bad-vapid-public-key";
+
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+    const keys = await makeRealSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "healthy-phone-1",
+      endpoint: "https://web.push.apple.com/healthy-tok",
+      ...keys,
+      isMobile: true,
+    });
+
+    const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+      userId,
+      sessionType: "WORK",
+      timerRunId: "run-bad-vapid",
+      completedAtMs: Date.now(),
+    });
+
+    expect(result).toEqual({ sent: 0, pruned: 0 });
+    const after = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(after.subscriptions).toHaveLength(1);
+  });
 });

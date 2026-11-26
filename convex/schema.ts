@@ -75,6 +75,7 @@ export default defineSchema({
     lastCompletedTimerRunId: v.optional(v.string()),
     scheduleNonce: v.optional(v.string()),
     serverAutoStartStreak: v.optional(v.number()),
+    lastResetDayKey: v.optional(v.string()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
   })
@@ -118,10 +119,14 @@ export default defineSchema({
     userAgent: v.optional(v.string()),
     isMobile: v.optional(v.boolean()),
     origin: v.optional(v.string()),
+    rotationTokenHash: v.optional(v.string()),
+    previousRotationTokenHash: v.optional(v.string()),
     updatedAt: v.string(),
   })
     .index("by_user_device", ["userId", "deviceId"])
-    .index("by_endpoint", ["endpoint"]),
+    .index("by_endpoint", ["endpoint"])
+    .index("by_rotation_token_hash", ["rotationTokenHash"])
+    .index("by_previous_rotation_token_hash", ["previousRotationTokenHash"]),
 
   // 6. Passive ML Telemetry: Run-level session attempts
   session_attempts: defineTable({

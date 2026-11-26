@@ -1,8 +1,5 @@
 import { ConvexReactClient } from "convex/react";
-import { hasStoredConvexAuthSession } from "../auth/AuthService";
 import { isProduction } from "../../utils/environment";
-
-export { hasStoredConvexAuthSession };
 
 export const PROD_CONVEX_URL = "https://acrobatic-oyster-97.convex.cloud";
 export const DEV_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";
@@ -24,6 +21,10 @@ export const convexUrl =
 export const isConvexConfigured = Boolean(
   convexUrl && !convexUrl.includes("dummy") && !convexUrl.includes("proud-otter")
 );
+
+export const convexSiteUrl = convexUrl
+  ? convexUrl.replace(/\.convex\.cloud\/?$/, ".convex.site")
+  : "";
 
 // Disable Convex's default unsavedChangesWarning to avoid "Reload site? Changes you made may not be saved" prompts
 export const convexClient = new ConvexReactClient(convexUrl, {

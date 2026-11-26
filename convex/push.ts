@@ -10,6 +10,7 @@ const TEST_PUSH_RATE_LIMIT_MS = 5_000;
 export const ALLOWED_PUSH_DOMAINS = [
   "fcm.googleapis.com",
   "push.apple.com",
+  "push.services.mozilla.com",
   "updates.push.services.mozilla.com",
   "notify.windows.com",
   "web.push.apple.com",
@@ -37,8 +38,14 @@ function encodeBytesToBase64Url(bytes: Uint8Array): string {
 function deriveVapidPublicKeyFromPrivateJwk(rawPrivateJwk: string | undefined): string | null {
   if (!rawPrivateJwk) return null;
   try {
-    const parsed = JSON.parse(rawPrivateJwk) as { kty?: string; crv?: string; x?: string; y?: string };
-    if (parsed.kty === "EC" && parsed.crv === "P-256" && parsed.x && parsed.y) {
+    const parsed = JSON.parse(rawPrivateJwk) as {
+      kty?: string;
+      crv?: string;
+      x?: string;
+      y?: string;
+      d?: string;
+    };
+    if (parsed.kty === "EC" && parsed.crv === "P-256" && parsed.x && parsed.y && parsed.d) {
       const x = decodeBase64ToBytes(parsed.x);
       const y = decodeBase64ToBytes(parsed.y);
       if (x.length === 32 && y.length === 32) {
@@ -55,7 +62,7 @@ function deriveVapidPublicKeyFromPrivateJwk(rawPrivateJwk: string | undefined): 
   return null;
 }
 
-function validateEndpoint(endpoint: string): void {
+export function validateEndpoint(endpoint: string): void {
   if (!endpoint || endpoint.length > 2048) {
     throw new Error("Invalid push subscription endpoint length.");
   }
@@ -76,7 +83,7 @@ function validateEndpoint(endpoint: string): void {
   }
 }
 
-function isAllowedAppOrigin(url: URL): boolean {
+export function isAllowedAppOrigin(url: URL): boolean {
   if (url.username !== "" || url.password !== "") return false;
   if (
     url.protocol === "http:" &&
@@ -121,13 +128,22 @@ function sanitizeOrigin(rawOrigin: string | undefined): string | undefined {
   return undefined;
 }
 
-function validateDeviceId(deviceId: string): void {
+export function validateDeviceId(deviceId: string): void {
   if (!deviceId || deviceId.length > 128 || !/^[a-zA-Z0-9_.-]+$/.test(deviceId)) {
     throw new Error("Invalid deviceId format.");
   }
 }
 
-function validatePushKey(key: string, name: "p256dh" | "auth"): void {
+export function validateRotationTokenHash(hash: string | undefined): string | undefined {
+  if (hash === undefined) return undefined;
+  const normalized = hash.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new Error("Invalid rotationTokenHash format.");
+  }
+  return normalized;
+}
+
+export function validatePushKey(key: string, name: "p256dh" | "auth"): void {
   if (!key || key.length > 256 || !/^[a-zA-Z0-9+_/-]+=*$/.test(key)) {
     throw new Error(`Invalid ${name} format: must be valid base64 key.`);
   }
@@ -146,12 +162,24 @@ function validatePushKey(key: string, name: "p256dh" | "auth"): void {
   }
 }
 
+function hasUsableVapidConfig(): boolean {
+  const rawPrivate = process.env.VAPID_PRIVATE_KEY?.trim();
+  if (!rawPrivate) return false;
+  if (rawPrivate.startsWith("{")) {
+    return deriveVapidPublicKeyFromPrivateJwk(rawPrivate) !== null;
+  }
+  return Boolean(process.env.VAPID_PUBLIC_KEY?.trim());
+}
+
 export const getVapidPublicKey = query({
   args: {},
   returns: v.union(v.string(), v.null()),
   handler: async () => {
-    const derived = deriveVapidPublicKeyFromPrivateJwk(process.env.VAPID_PRIVATE_KEY);
-    if (derived) return derived;
+    const rawPrivate = process.env.VAPID_PRIVATE_KEY?.trim();
+    if (!rawPrivate) return null;
+    if (rawPrivate.startsWith("{")) {
+      return deriveVapidPublicKeyFromPrivateJwk(rawPrivate);
+    }
     const explicit = process.env.VAPID_PUBLIC_KEY?.trim();
     return explicit || null;
   },
@@ -194,6 +222,7 @@ export const register = mutation({
     userAgent: v.optional(v.string()),
     isMobile: v.optional(v.boolean()),
     origin: v.optional(v.string()),
+    rotationTokenHash: v.optional(v.string()),
   },
   returns: v.id("push_subscriptions"),
   handler: async (ctx, args) => {
@@ -202,6 +231,7 @@ export const register = mutation({
     validateEndpoint(args.endpoint);
     validatePushKey(args.p256dh, "p256dh");
     validatePushKey(args.auth, "auth");
+    const validatedRotationHash = validateRotationTokenHash(args.rotationTokenHash);
 
     const sanitizedUserAgent = args.userAgent ? args.userAgent.slice(0, 256) : undefined;
     const sanitizedOrigin = sanitizeOrigin(args.origin);
@@ -236,13 +266,15 @@ export const register = mutation({
     if (existing) {
       const nextIsMobile = args.isMobile ?? existing.isMobile;
       const nextOrigin = sanitizedOrigin ?? existing.origin;
+      const nextRotationHash = validatedRotationHash ?? existing.rotationTokenHash;
       const unchanged =
         existing.endpoint === args.endpoint &&
         existing.p256dh === args.p256dh &&
         existing.auth === args.auth &&
         existing.userAgent === sanitizedUserAgent &&
         existing.isMobile === nextIsMobile &&
-        existing.origin === nextOrigin;
+        existing.origin === nextOrigin &&
+        existing.rotationTokenHash === nextRotationHash;
 
       const lastUpdatedMs = Date.parse(existing.updatedAt);
       const needsHeartbeatTouch =
@@ -264,6 +296,11 @@ export const register = mutation({
         userAgent: sanitizedUserAgent,
         isMobile: nextIsMobile,
         origin: nextOrigin,
+        rotationTokenHash: nextRotationHash,
+        previousRotationTokenHash:
+          validatedRotationHash && validatedRotationHash !== existing.rotationTokenHash
+            ? undefined
+            : existing.previousRotationTokenHash,
         updatedAt: now,
       });
       return existing._id;
@@ -291,9 +328,83 @@ export const register = mutation({
         userAgent: sanitizedUserAgent,
         isMobile: args.isMobile,
         origin: sanitizedOrigin,
+        rotationTokenHash: validatedRotationHash,
         updatedAt: now,
       });
     }
+  },
+});
+
+export const rotateSubscription = internalMutation({
+  args: {
+    deviceId: v.string(),
+    currentTokenHash: v.string(),
+    nextTokenHash: v.optional(v.string()),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+  },
+  returns: v.object({
+    rotated: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    validateDeviceId(args.deviceId);
+    const currentHash = validateRotationTokenHash(args.currentTokenHash);
+    if (!currentHash) {
+      return { rotated: false };
+    }
+    const nextHash = validateRotationTokenHash(args.nextTokenHash);
+    validateEndpoint(args.endpoint);
+    validatePushKey(args.p256dh, "p256dh");
+    validatePushKey(args.auth, "auth");
+
+    let existing = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_rotation_token_hash", (q) => q.eq("rotationTokenHash", currentHash))
+      .first();
+
+    // Grace-slot fallback: if the SW was killed or the HTTP response dropped after a previous
+    // rotation committed, allow one recovery using previousRotationTokenHash.
+    if (!existing) {
+      existing = await ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_previous_rotation_token_hash", (q) =>
+          q.eq("previousRotationTokenHash", currentHash)
+        )
+        .first();
+    }
+
+    if (!existing || existing.deviceId !== args.deviceId) {
+      return { rotated: false };
+    }
+
+    const sameEndpointSubs = await ctx.db
+      .query("push_subscriptions")
+      .withIndex("by_endpoint", (q) => q.eq("endpoint", args.endpoint))
+      .take(50);
+
+    for (const doc of sameEndpointSubs) {
+      if (doc._id !== existing._id) {
+        await ctx.db.delete(doc._id);
+      }
+    }
+
+    const rolledTokenHash = nextHash ?? existing.rotationTokenHash;
+    const nextPreviousHash =
+      nextHash && nextHash !== existing.rotationTokenHash
+        ? currentHash
+        : existing.previousRotationTokenHash;
+
+    await ctx.db.patch(existing._id, {
+      endpoint: args.endpoint,
+      p256dh: args.p256dh,
+      auth: args.auth,
+      rotationTokenHash: rolledTokenHash,
+      previousRotationTokenHash: nextPreviousHash,
+      updatedAt: new Date(Date.now()).toISOString(),
+    });
+
+    return { rotated: true };
   },
 });
 
@@ -348,10 +459,14 @@ export const getPushDispatchContext = internalQuery({
     }
 
     const soundEnabled = user.settings?.soundEnabled ?? true;
-    const subscriptions = await ctx.db
+    const rawSubscriptions = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
       .take(MAX_PUSH_DEVICES_PER_USER);
+
+    const subscriptions = rawSubscriptions.map(
+      ({ rotationTokenHash: _omit1, previousRotationTokenHash: _omit2, ...rest }) => rest
+    );
 
     return {
       soundEnabled,
@@ -361,15 +476,26 @@ export const getPushDispatchContext = internalQuery({
 });
 
 export const deleteSubscriptionById = internalMutation({
-  args: { id: v.id("push_subscriptions") },
+  args: {
+    id: v.id("push_subscriptions"),
+    expectedEndpoint: v.optional(v.string()),
+    expectedP256dh: v.optional(v.string()),
+  },
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
-    if (existing) {
-      await ctx.db.delete(args.id);
-      return true;
+    if (!existing) {
+      return false;
     }
-    return false;
+    // TOCTOU guard: do not delete if the row was rotated/re-registered with a new endpoint/key
+    if (args.expectedEndpoint !== undefined && existing.endpoint !== args.expectedEndpoint) {
+      return false;
+    }
+    if (args.expectedP256dh !== undefined && existing.p256dh !== args.expectedP256dh) {
+      return false;
+    }
+    await ctx.db.delete(args.id);
+    return true;
   },
 });
 
@@ -403,7 +529,7 @@ export const scheduleTestPush = mutation({
       return { scheduled: false as const, reason: "rate_limited" as const };
     }
 
-    if (!process.env.VAPID_PRIVATE_KEY?.trim()) {
+    if (!hasUsableVapidConfig()) {
       return { scheduled: false as const, reason: "missing_vapid_key" as const };
     }
 

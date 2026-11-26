@@ -235,7 +235,7 @@ describe("Guest Repositories, Serialization & Backup Export", () => {
 
       function HookHarness() {
         const { exportBackup } = useBackupAndMigration({
-          isEffectiveAuthenticated: true,
+          isAuthenticated: true,
           profile: profileWithPII,
           settings: {
             workDurationMinutes: 25,
@@ -488,8 +488,7 @@ describe("Guest Repositories, Serialization & Backup Export", () => {
       let capturedTags: Tag[] = [];
       const Probe = () => {
         const { tags } = useTagsData({
-          isEffectiveAuthenticated: true,
-          isConvexAuthReady: false,
+          isAuthenticated: true,
           isLoggingOut: false,
           convexSync: {
             isConvexConfigured: true,

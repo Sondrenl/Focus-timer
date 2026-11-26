@@ -8,7 +8,6 @@ import {
   TelemetryRepository,
 } from '../services/storage/guestRepositories';
 import { TelemetryTracker } from '../services/telemetry/TelemetryTracker';
-import { AuthService } from '../services/auth/AuthService';
 import { soundService } from '../services/audio/SoundService';
 import { notificationService } from '../services/notification/NotificationService';
 
@@ -20,6 +19,5 @@ export const profileRepository = new ProfileRepository(storageService);
 export const coffeeRepository = new CoffeeRepository(storageService);
 export const telemetryRepository = new TelemetryRepository(storageService);
 export const telemetryTracker = new TelemetryTracker(telemetryRepository);
-export const authService = AuthService.getInstance();
 
 export { soundService, notificationService };

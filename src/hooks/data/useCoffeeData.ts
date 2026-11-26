@@ -6,21 +6,20 @@ import { useAuthProfile } from '../../context/AuthProfileContext';
 import { markGuestDataModified } from '../../services/sync/offlineOutbox';
 
 interface UseCoffeeDataParams {
-  isEffectiveAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
+  isAuthenticated: boolean;
   isAdoptionPaused?: boolean;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
 }
 
 export function useCoffeeData({
-  isEffectiveAuthenticated,
+  isAuthenticated,
   convexSync,
 }: UseCoffeeDataParams) {
   const { isConvexConfigured, convexCoffee, mutations: convexMutations } = convexSync;
-  const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
+  const isCloudMode = isConvexConfigured && isAuthenticated;
 
   const [guestCoffeeCups, setGuestCoffeeCups] = useState<CoffeeCup[]>([]);
-  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+  const wasAuthenticatedRef = useRef<boolean>(isAuthenticated);
 
   // Initial load of guest coffee cups from localStorage
   useEffect(() => {
@@ -30,11 +29,11 @@ export function useCoffeeData({
   // Clear in-memory guest coffee cups on sign-out so pre-sign-in data never reappears
   useEffect(() => {
     const wasAuth = wasAuthenticatedRef.current;
-    wasAuthenticatedRef.current = isEffectiveAuthenticated;
-    if (wasAuth && !isEffectiveAuthenticated) {
+    wasAuthenticatedRef.current = isAuthenticated;
+    if (wasAuth && !isAuthenticated) {
       setGuestCoffeeCups([]);
     }
-  }, [isEffectiveAuthenticated]);
+  }, [isAuthenticated]);
 
   const coffeeCups = useMemo<CoffeeCup[]>(() => {
     if (isCloudMode) {

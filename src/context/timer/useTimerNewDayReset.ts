@@ -8,6 +8,7 @@ import {
   getLastResetDayKey,
   setLastResetDayKey,
   getLastSessionCompletedAt,
+  resolveEffectiveResetDayKey,
   INACTIVITY_THRESHOLD_MS,
 } from '../../utils/newDayCheck';
 import { DEVICE_ID, saveTimerState } from './timerPersistence';
@@ -18,6 +19,7 @@ interface UseTimerNewDayResetParams {
   sessions: CompletedSession[];
   convexSessions: unknown;
   isConvexConfigured: boolean;
+  isAuthLoading?: boolean;
   hasResolvedRemoteTimer: boolean;
   hasResolvedRemoteTimerRef: React.MutableRefObject<boolean>;
   remoteTimerRef: React.MutableRefObject<any>;
@@ -36,6 +38,7 @@ export function useTimerNewDayReset({
   sessions,
   convexSessions,
   isConvexConfigured,
+  isAuthLoading = false,
   hasResolvedRemoteTimer,
   hasResolvedRemoteTimerRef,
   remoteTimerRef,
@@ -47,6 +50,10 @@ export function useTimerNewDayReset({
 }: UseTimerNewDayResetParams) {
   const checkAndResetForNewDay = useCallback(() => {
     if (refs.statusRef.current === 'RUNNING') return false;
+
+    if (isConvexConfigured && isAuthLoading) {
+      return false;
+    }
 
     if (
       isConvexConfigured &&
@@ -62,13 +69,23 @@ export function useTimerNewDayReset({
     const now = new Date();
     const nowAlignedMs = getServerAlignedNowMs();
     const currentDayKey = getLogicalDayKey(now);
+    const localResetDayKey = getLastResetDayKey();
+    const effectiveLastResetDayKey = resolveEffectiveResetDayKey(
+      localResetDayKey,
+      latestRemote?.lastResetDayKey
+    );
+
+    if (latestRemote?.lastResetDayKey === currentDayKey && localResetDayKey !== currentDayKey) {
+      setLastResetDayKey(currentDayKey);
+    }
+
     if (latestRemote && getLogicalDayKey(latestRemote.updatedAtMs) === currentDayKey) {
       if (
         latestRemote.status === 'IDLE' &&
         latestRemote.sessionType === 'WORK' &&
         latestRemote.currentCycle === 1
       ) {
-        if (getLastResetDayKey() !== currentDayKey) setLastResetDayKey(currentDayKey);
+        if (localResetDayKey !== currentDayKey) setLastResetDayKey(currentDayKey);
         return false;
       }
       if (nowAlignedMs - latestRemote.updatedAtMs < INACTIVITY_THRESHOLD_MS) return false;
@@ -83,7 +100,7 @@ export function useTimerNewDayReset({
       !shouldResetForNewDay({
         now,
         lastSessionTimeMs: getLastSessionCompletedAt(sessions),
-        lastResetDayKey: getLastResetDayKey(),
+        lastResetDayKey: effectiveLastResetDayKey,
         isTimerRunning: false,
       })
     ) {
@@ -156,10 +173,15 @@ export function useTimerNewDayReset({
         currentCycle: 1,
         activeTagId: refs.activeTagIdRef.current,
         timerRunId: null,
+        lastResetDayKey: currentDayKey,
         updatedAtMs: nowMs,
       },
       false,
-      { onlyIfNotRunning: true, expectedUpdatedAtMs: prevUpdatedAtMs }
+      {
+        onlyIfNotRunning: true,
+        expectedUpdatedAtMs: prevUpdatedAtMs,
+        lastResetDayKey: currentDayKey,
+      }
     );
 
     return true;
@@ -167,6 +189,7 @@ export function useTimerNewDayReset({
     sessions,
     convexSessions,
     isConvexConfigured,
+    isAuthLoading,
     hasResolvedRemoteTimer,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,

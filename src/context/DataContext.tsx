@@ -39,8 +39,7 @@ const DataContext = createContext<DataContextValue | null>(null);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     isLoggingOut,
     profile,
     settings,
@@ -56,8 +55,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const { isSyncGateActive } = useCloudMigration({
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     convexSync,
     setActiveTagId: (id) => setActiveTagIdRef.current?.(id),
   });
@@ -67,8 +65,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSessions,
     recordSession,
   } = useSessionsData({
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     isAdoptionPaused: isSyncGateActive,
     convexSync,
   });
@@ -79,8 +76,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     addCoffeeCup,
     removeCoffeeCup,
   } = useCoffeeData({
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     isAdoptionPaused: isSyncGateActive,
     convexSync,
   });
@@ -97,8 +93,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     unarchiveTag,
     deleteTag,
   } = useTagsData({
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     isLoggingOut,
     isAdoptionPaused: isSyncGateActive,
     convexSync,
@@ -109,8 +104,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   setActiveTagIdRef.current = setActiveTagId;
 
   const { exportBackup, resetAllData } = useBackupAndMigration({
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     profile,
     settings,
     resetProfileToDefaults,

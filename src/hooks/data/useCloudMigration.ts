@@ -186,19 +186,16 @@ async function clearLocalGuestRepositories(): Promise<void> {
 const MAX_MIGRATION_RETRIES = 5;
 
 interface UseCloudMigrationParams {
-  isEffectiveAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
+  isAuthenticated: boolean;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
   setActiveTagId?: (id: string | null) => void;
 }
 
 export function useCloudMigration({
-  isEffectiveAuthenticated,
-  isConvexAuthReady: isConvexAuthReadyParam,
+  isAuthenticated,
   convexSync,
   setActiveTagId,
 }: UseCloudMigrationParams) {
-  const isConvexAuthReady = isConvexAuthReadyParam ?? isEffectiveAuthenticated;
   const {
     isConvexConfigured,
     isConvexConnected,
@@ -218,8 +215,7 @@ export function useCloudMigration({
   useEffect(() => {
     if (
       isConvexConfigured &&
-      isEffectiveAuthenticated &&
-      isConvexAuthReady &&
+      isAuthenticated &&
       convexMutations?.upsertAttempt
     ) {
       telemetryTracker.setCloudSink({
@@ -235,8 +231,7 @@ export function useCloudMigration({
     };
   }, [
     isConvexConfigured,
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     convexMutations,
   ]);
 
@@ -293,7 +288,7 @@ export function useCloudMigration({
   );
 
   useEffect(() => {
-    if (!isEffectiveAuthenticated || !isConvexConfigured) {
+    if (!isAuthenticated || !isConvexConfigured) {
       setSyncedUserId(null);
       retryCountRef.current = 0;
       isReconcilingUserIdRef.current = null;
@@ -304,13 +299,12 @@ export function useCloudMigration({
       retryCountRef.current = 0;
       isReconcilingUserIdRef.current = null;
     }
-  }, [isEffectiveAuthenticated, isConvexConfigured, convexUserId, syncedUserId]);
+  }, [isAuthenticated, isConvexConfigured, convexUserId, syncedUserId]);
 
   useEffect(() => {
     if (
-      !isEffectiveAuthenticated ||
+      !isAuthenticated ||
       !isConvexConfigured ||
-      !isConvexAuthReady ||
       isConvexConnected === false ||
       !convexUser ||
       !Array.isArray(convexSessions) ||
@@ -476,9 +470,8 @@ export function useCloudMigration({
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [
-    isEffectiveAuthenticated,
+    isAuthenticated,
     isConvexConfigured,
-    isConvexAuthReady,
     isConvexConnected,
     convexUser,
     convexSessions,
@@ -491,7 +484,7 @@ export function useCloudMigration({
   ]);
 
   const isSyncGateActive =
-    isEffectiveAuthenticated &&
+    isAuthenticated &&
     isConvexConfigured &&
     (!convexUserId || syncedUserId !== convexUserId);
 

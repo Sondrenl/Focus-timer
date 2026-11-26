@@ -1,4 +1,12 @@
 import { isMobileDevice } from '../../utils/environment';
+import { convexSiteUrl } from '../convex/ConvexClient';
+import {
+  clearPushRotationMeta,
+  generateRotationToken,
+  readPushRotationMeta,
+  sha256Hex,
+  writePushRotationMeta,
+} from './pushRotationStore';
 
 export type NotificationPermissionStatus = 'granted' | 'denied' | 'default' | 'unsupported';
 export type PushSubscriptionStatus =
@@ -36,6 +44,7 @@ export interface PushRegisterPayload {
   userAgent?: string;
   isMobile?: boolean;
   origin?: string;
+  rotationTokenHash?: string;
 }
 
 export class NotificationService {
@@ -45,12 +54,29 @@ export class NotificationService {
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
   private lastRegisteredEndpoint: string | null = null;
   private syncEpoch = 0;
+  private subscribeEpoch = 0;
+  private unsubscribeEpoch = 0;
+  private resyncRequestedDuringFlight = false;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
   private pushResyncListeners = new Set<() => void>();
   private controllerChangeHandler: (() => void) | null = null;
   private swMessageHandler: ((event: MessageEvent) => void) | null = null;
   private visibilityChangeHandler: (() => void) | null = null;
+
+  private emitResyncRequested(): void {
+    if (this.pushSyncInFlight) {
+      this.resyncRequestedDuringFlight = true;
+      return;
+    }
+    for (const listener of this.pushResyncListeners) {
+      try {
+        listener();
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  }
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -71,22 +97,12 @@ export class NotificationService {
         })
         .catch(() => {});
 
-      const notifyResync = () => {
-        for (const listener of this.pushResyncListeners) {
-          try {
-            listener();
-          } catch {
-            // Ignore listener errors
-          }
-        }
-      };
-
       this.controllerChangeHandler = () => {
         navigator.serviceWorker
           .getRegistration()
           .then((reg) => {
             if (reg) this.cachedRegistration = reg;
-            notifyResync();
+            this.emitResyncRequested();
           })
           .catch(() => {});
       };
@@ -94,7 +110,7 @@ export class NotificationService {
 
       this.swMessageHandler = (event: MessageEvent) => {
         if (event.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') {
-          notifyResync();
+          this.emitResyncRequested();
         }
       };
       navigator.serviceWorker.addEventListener('message', this.swMessageHandler);
@@ -201,21 +217,32 @@ export class NotificationService {
   }
 
   private async getActiveRegistration(timeoutMs = 2500): Promise<ServiceWorkerRegistration | null> {
-    if (this.cachedRegistration?.active) return this.cachedRegistration;
+    if (this.cachedRegistration?.active && this.cachedRegistration.active.state !== 'redundant') {
+      return this.cachedRegistration;
+    }
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
 
     try {
       const existing = await navigator.serviceWorker.getRegistration();
-      if (existing?.active) {
+      if (existing?.active && existing.active.state !== 'redundant') {
         this.cachedRegistration = existing;
         return existing;
       }
 
-      const regPromise =
-        this.swRegistrationPromise ??
-        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => null);
-      const reg = await regPromise;
-      if (reg?.active) {
+      if (!this.swRegistrationPromise) {
+        this.swRegistrationPromise = navigator.serviceWorker
+          .register('/sw.js', { updateViaCache: 'none' })
+          .then((reg) => {
+            this.cachedRegistration = reg;
+            return reg;
+          })
+          .catch(() => {
+            this.swRegistrationPromise = null;
+            return null;
+          });
+      }
+      const reg = await this.swRegistrationPromise;
+      if (reg?.active && reg.active.state !== 'redundant') {
         this.cachedRegistration = reg;
         return reg;
       }
@@ -226,7 +253,7 @@ export class NotificationService {
         navigator.serviceWorker.ready,
         new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
       ]);
-      if (readyReg?.active) {
+      if (readyReg?.active && readyReg.active.state !== 'redundant') {
         this.cachedRegistration = readyReg;
         return readyReg;
       }
@@ -238,7 +265,7 @@ export class NotificationService {
 
   private async getPushManager(): Promise<PushManager | null> {
     const windowPushManager = this.getWindowPushManager();
-    const reg = await this.getActiveRegistration(windowPushManager ? 1000 : 2500);
+    const reg = await this.getActiveRegistration(windowPushManager ? 1500 : 6000);
     return reg?.pushManager ?? windowPushManager;
   }
 
@@ -281,15 +308,28 @@ export class NotificationService {
       this.setPushStatus(status);
       return { ok: false, status, reason };
     };
+    const failPreFlight = (status: PushSubscriptionStatus, reason: string) => {
+      this.resetPushStatus(status);
+      return { ok: false, status, reason };
+    };
 
-    if (!this.isPushSupported()) return fail('unsupported', 'PushManager unsupported');
-    if (!this.hasPermission()) return fail('permission_denied', 'Notification permission not granted');
+    if (!this.isPushSupported()) return failPreFlight('unsupported', 'PushManager unsupported');
+    const perm = this.getPermissionState();
+    if (perm !== 'granted') {
+      return failPreFlight(
+        perm === 'denied' ? 'permission_denied' : 'unsubscribed',
+        'Notification permission not granted'
+      );
+    }
     const trimmedKey = vapidPublicKey?.trim();
-    if (!trimmedKey) return fail('unconfigured', 'VAPID public key unavailable');
+    if (!trimmedKey) return failPreFlight('unconfigured', 'VAPID public key unavailable');
 
     if (this.pushSyncInFlight) return this.pushSyncInFlight;
 
     const epoch = ++this.syncEpoch;
+    const mySubscribeEpoch = ++this.subscribeEpoch;
+    const startUnsubscribeEpoch = this.unsubscribeEpoch;
+    this.resyncRequestedDuringFlight = false;
     const isSuperseded = () => epoch !== this.syncEpoch;
     const supersededResult = () => ({
       ok: false,
@@ -310,10 +350,11 @@ export class NotificationService {
       try {
         const pushManager = await this.getPushManager();
         if (isSuperseded()) return supersededResult();
-        if (!pushManager) return fail('unsupported', 'PushManager unavailable');
+        if (!pushManager) return fail('error', 'Service worker not ready yet');
 
         const expectedKeyBytes = urlBase64ToUint8Array(trimmedKey);
         let subscription = await pushManager.getSubscription();
+        if (isSuperseded()) return supersededResult();
 
         const isExpired =
           typeof subscription?.expirationTime === 'number' &&
@@ -330,14 +371,28 @@ export class NotificationService {
           subscription = null;
         }
 
+        if (isSuperseded()) return supersededResult();
+
+        let createdSubscription = false;
         if (!subscription) {
           subscription = await pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: expectedKeyBytes as BufferSource,
           });
+          createdSubscription = true;
         }
 
-        if (isSuperseded()) return supersededResult();
+        if (isSuperseded()) {
+          if (
+            createdSubscription &&
+            subscription &&
+            this.unsubscribeEpoch !== startUnsubscribeEpoch &&
+            this.subscribeEpoch === mySubscribeEpoch
+          ) {
+            void subscription.unsubscribe().catch(() => {});
+          }
+          return supersededResult();
+        }
 
         const subJson = typeof subscription.toJSON === 'function' ? subscription.toJSON() : {};
         const p256dh = subJson.keys?.p256dh || '';
@@ -347,6 +402,15 @@ export class NotificationService {
           return fail('error', 'Incomplete push subscription keys');
         }
 
+        const existingMeta = await readPushRotationMeta();
+        const rotationToken =
+          existingMeta && existingMeta.deviceId === deviceId && existingMeta.rotationToken
+            ? existingMeta.rotationToken
+            : generateRotationToken();
+        const rotationTokenHash = rotationToken ? await sha256Hex(rotationToken) : null;
+
+        if (isSuperseded()) return supersededResult();
+
         await registerFn({
           deviceId,
           endpoint: subscription.endpoint,
@@ -355,9 +419,45 @@ export class NotificationService {
           userAgent: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 256) : undefined,
           isMobile: isMobileDevice(),
           origin: typeof window !== 'undefined' ? window.location?.origin : undefined,
+          ...(rotationTokenHash ? { rotationTokenHash } : {}),
         });
 
         if (isSuperseded()) return supersededResult();
+
+        if (rotationToken && rotationTokenHash && convexSiteUrl) {
+          const latestMeta = await readPushRotationMeta();
+          if (isSuperseded()) return supersededResult();
+          const swRotatedConcurrently = Boolean(
+            latestMeta &&
+              latestMeta.deviceId === deviceId &&
+              latestMeta.rotationToken &&
+              latestMeta.rotationToken !== existingMeta?.rotationToken
+          );
+          if (swRotatedConcurrently) {
+            // sw.js rotated the token while registerFn was in flight; trigger a fresh sync
+            // after this promise settles so Convex and IndexedDB converge on the latest endpoint & token.
+            this.resyncRequestedDuringFlight = true;
+          }
+          const tokenToPersist = swRotatedConcurrently
+            ? latestMeta!.rotationToken
+            : rotationToken;
+          await writePushRotationMeta({
+            convexSiteUrl,
+            deviceId,
+            rotationToken: tokenToPersist,
+            vapidPublicKey: trimmedKey,
+          });
+        }
+
+        if (isSuperseded()) {
+          if (
+            this.unsubscribeEpoch !== startUnsubscribeEpoch &&
+            this.subscribeEpoch === mySubscribeEpoch
+          ) {
+            void clearPushRotationMeta().catch(() => {});
+          }
+          return supersededResult();
+        }
 
         this.lastRegisteredEndpoint = subscription.endpoint;
         this.setPushStatus('active');
@@ -370,6 +470,10 @@ export class NotificationService {
       } finally {
         if (this.pushSyncInFlight === currentPromise) {
           this.pushSyncInFlight = null;
+          if (this.resyncRequestedDuringFlight && !isSuperseded()) {
+            this.resyncRequestedDuringFlight = false;
+            queueMicrotask(() => this.emitResyncRequested());
+          }
         }
       }
     })();
@@ -379,11 +483,17 @@ export class NotificationService {
   }
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
+    this.unsubscribeEpoch++;
     this.resetPushStatus('unsubscribed');
+    const unsubSubscribeEpoch = this.subscribeEpoch;
+    await clearPushRotationMeta();
+    if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
 
     if (unregisterFn) {
       await unregisterFn().catch(() => {});
     }
+
+    if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
 
     const managers: PushManager[] = [];
     const reg = await this.getActiveRegistration(2000).catch(() => null);
@@ -393,8 +503,10 @@ export class NotificationService {
     if (winPm && !managers.includes(winPm)) managers.push(winPm);
 
     for (const pm of managers) {
+      if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
       try {
         const sub = await pm.getSubscription();
+        if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
         if (sub) await sub.unsubscribe();
       } catch {
         // Ignore browser unsubscribe errors
@@ -431,10 +543,11 @@ export class NotificationService {
     };
 
     try {
-      const reg = this.cachedRegistration?.active
-        ? this.cachedRegistration
-        : await this.getActiveRegistration();
-      if (reg?.active && typeof reg.showNotification === 'function') {
+      const reg =
+        this.cachedRegistration?.active && this.cachedRegistration.active.state !== 'redundant'
+          ? this.cachedRegistration
+          : await this.getActiveRegistration();
+      if (reg?.active && reg.active.state !== 'redundant' && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, options);
         if (sessionRunId) this.lastNotifiedSessionId = sessionRunId;
         return true;

@@ -149,3 +149,16 @@ export function shouldResetForNewDay({
 
   return true;
 }
+
+/**
+ * Returns the most recent logical day reset key across local storage and remote timer state.
+ * Day keys are formatted as 'YYYY-MM-DD', so lexicographical comparison matches chronological order.
+ */
+export function resolveEffectiveResetDayKey(
+  localDayKey: string | null,
+  remoteDayKey?: string | null
+): string | null {
+  if (!localDayKey) return remoteDayKey ?? null;
+  if (!remoteDayKey) return localDayKey;
+  return remoteDayKey > localDayKey ? remoteDayKey : localDayKey;
+}

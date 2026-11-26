@@ -51,6 +51,7 @@ export const getActive = query({
       timerRunId: timer.timerRunId ?? null,
       lastCompletedTimerRunId: timer.lastCompletedTimerRunId ?? null,
       serverAutoStartStreak: timer.serverAutoStartStreak ?? 0,
+      lastResetDayKey: timer.lastResetDayKey ?? null,
       updatedAtMs: timer.updatedAtMs,
     };
   },
@@ -130,6 +131,16 @@ export const start = mutation({
       return existing
         ? { ...existing, applied: false, rejectedReason: "already_elapsed" as const, serverNowMs: now }
         : null;
+    }
+
+    if (
+      existing &&
+      existing.status === "RUNNING" &&
+      existing.timerRunId === args.timerRunId &&
+      existing.targetEndTime !== undefined &&
+      existing.targetEndTime > now
+    ) {
+      return { ...existing, applied: true, serverNowMs: now };
     }
 
     const baseTotal = args.totalSeconds ?? args.durationSeconds;
@@ -272,6 +283,7 @@ export const reset = mutation({
     expectedTimerRunId: v.optional(v.string()),
     expectedUpdatedAtMs: v.optional(v.number()),
     clientActionAtMs: v.optional(v.number()),
+    lastResetDayKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
@@ -284,6 +296,9 @@ export const reset = mutation({
     }
     if (args.clientActionAtMs !== undefined && !Number.isFinite(args.clientActionAtMs)) {
       throw new Error("Invalid clientActionAtMs.");
+    }
+    if (args.lastResetDayKey !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(args.lastResetDayKey)) {
+      throw new Error("Invalid lastResetDayKey.");
     }
     const now = Date.now();
     const existing = await getUserActiveTimer(ctx, user._id);
@@ -302,8 +317,16 @@ export const reset = mutation({
       return { ...existing, applied: false, serverNowMs: now };
     }
 
+    const nextLastResetDayKey =
+      args.lastResetDayKey &&
+      (!existing?.lastResetDayKey || args.lastResetDayKey > existing.lastResetDayKey)
+        ? args.lastResetDayKey
+        : existing?.lastResetDayKey;
+    const isUpdatingResetDayKey = nextLastResetDayKey !== existing?.lastResetDayKey;
+
     if (
       existing &&
+      !isUpdatingResetDayKey &&
       existing.status === "IDLE" &&
       existing.sessionType === args.sessionType &&
       existing.remainingSeconds === args.durationSeconds &&
@@ -325,6 +348,7 @@ export const reset = mutation({
         updatedAtMs: now,
       }),
       tagId: sanitizedTagId,
+      ...(nextLastResetDayKey !== undefined ? { lastResetDayKey: nextLastResetDayKey } : {}),
     };
 
     if (existing) {
@@ -516,8 +540,9 @@ export const cleanupStaleTimers = internalMutation({
     for (const timer of [...runningTimers, ...stalePausedTimers]) {
       const isAbandonedRunning =
         timer.status === "RUNNING" &&
-        timer.targetEndTime !== undefined &&
-        nowMs > timer.targetEndTime + ONE_HOUR_MS;
+        (timer.targetEndTime !== undefined
+          ? nowMs > timer.targetEndTime + ONE_HOUR_MS
+          : nowMs - timer.updatedAtMs > ONE_HOUR_MS);
       const isAbandonedPaused =
         timer.status === "PAUSED" && nowMs - timer.updatedAtMs > SEVEN_DAYS_MS;
 

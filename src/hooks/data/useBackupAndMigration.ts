@@ -24,8 +24,7 @@ export function sanitizeProfileForExport(
 }
 
 interface UseBackupAndMigrationParams {
-  isEffectiveAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
+  isAuthenticated: boolean;
   profile: ReturnType<typeof useAuthProfile>['profile'];
   settings: ReturnType<typeof useAuthProfile>['settings'];
   resetProfileToDefaults: ReturnType<typeof useAuthProfile>['resetProfileToDefaults'];
@@ -42,8 +41,7 @@ interface UseBackupAndMigrationParams {
 }
 
 export function useBackupAndMigration({
-  isEffectiveAuthenticated,
-  isConvexAuthReady: isConvexAuthReadyParam,
+  isAuthenticated,
   profile,
   settings,
   resetProfileToDefaults,
@@ -58,9 +56,8 @@ export function useBackupAndMigration({
   setCoffeeCups,
   onDataReset,
 }: UseBackupAndMigrationParams) {
-  const isConvexAuthReady = isConvexAuthReadyParam ?? isEffectiveAuthenticated;
   const { isConvexConfigured, mutations: convexMutations } = convexSync;
-  const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
+  const isCloudMode = isConvexConfigured && isAuthenticated;
 
   const exportBackup = useCallback((): BackupData => {
     const sortedSessions = [...sessions].sort(
@@ -106,7 +103,7 @@ export function useBackupAndMigration({
 
       onDataReset?.(scope);
 
-      if (isCloudMode && isConvexAuthReady) {
+      if (isCloudMode) {
         await convexMutations.clearSessions({});
         await convexMutations.clearCoffee({});
         if (convexMutations.clearTelemetry) {
@@ -119,7 +116,6 @@ export function useBackupAndMigration({
     },
     [
       isCloudMode,
-      isConvexAuthReady,
       convexMutations,
       resetSettingsToDefaults,
       resetProfileToDefaults,

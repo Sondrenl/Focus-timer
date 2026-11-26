@@ -23,7 +23,6 @@ const PERMANENT_ERROR_REASONS = [
 
 type DeclarativePushPayload = {
   web_push: 8030;
-  mutable: false;
   notification: {
     title: string;
     body: string;
@@ -32,6 +31,7 @@ type DeclarativePushPayload = {
     badge: string;
     tag: string;
     silent: boolean;
+    mutable: false;
     timestamp: number;
   };
 };
@@ -203,7 +203,7 @@ async function sendWithRetry(
   headers: Record<string, string>,
   body: Uint8Array
 ): Promise<Response> {
-  const maxAttempts = 2;
+  const maxAttempts = 3;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -212,6 +212,7 @@ async function sendWithRetry(
         method: "POST",
         headers,
         body: body as BodyInit,
+        redirect: "error",
         signal: AbortSignal.timeout(PUSH_FETCH_TIMEOUT_MS),
       });
 
@@ -220,10 +221,14 @@ async function sendWithRetry(
         return response;
       }
 
+      const backoffMs = Math.min(
+        MAX_RETRY_AFTER_MS,
+        TRANSIENT_RETRY_DELAY_MS * Math.pow(3, attempt - 1)
+      );
       const delayMs =
         response.status === 429
           ? parseRetryDelayMs(response.headers.get("retry-after"))
-          : TRANSIENT_RETRY_DELAY_MS;
+          : backoffMs;
       // Drain body before retrying to release connection resources cleanly
       await response.text().catch(() => "");
       await sleep(delayMs);
@@ -232,7 +237,11 @@ async function sendWithRetry(
       if (attempt === maxAttempts) {
         throw err;
       }
-      await sleep(TRANSIENT_RETRY_DELAY_MS);
+      const backoffMs = Math.min(
+        MAX_RETRY_AFTER_MS,
+        TRANSIENT_RETRY_DELAY_MS * Math.pow(3, attempt - 1)
+      );
+      await sleep(backoffMs);
     }
   }
 
@@ -254,7 +263,7 @@ async function dispatchPushToSubscriptions(
   ctx: ActionCtx,
   params: {
     userId: Id<"users">;
-    buildPayload: (appOrigin: string, soundEnabled: boolean) => DeclarativePushPayload;
+    buildPayload: (appOrigin: string, silent: boolean) => DeclarativePushPayload;
     options: { ttl: number; urgency: "high"; topic: string };
   }
 ) {
@@ -277,6 +286,10 @@ async function dispatchPushToSubscriptions(
   await Promise.allSettled(
     dispatchCtx.subscriptions.map(async (sub: Doc<"push_subscriptions">) => {
       const appOrigin = resolveAppOrigin(sub.origin);
+      // Keep mobile OS push notifications audible so muting the desktop in-app chime
+      // never suppresses phone vibration/sound or smartwatch alerts (the phone's OS silent/DND
+      // mode controls mobile notification audio).
+      const effectiveSilent = sub.isMobile ? false : !dispatchCtx.soundEnabled;
       let req: webPush.RequestDetails;
 
       try {
@@ -288,7 +301,7 @@ async function dispatchPushToSubscriptions(
               auth: sub.auth,
             },
           },
-          JSON.stringify(params.buildPayload(appOrigin, dispatchCtx.soundEnabled)),
+          JSON.stringify(params.buildPayload(appOrigin, effectiveSilent)),
           {
             vapidDetails: {
               subject: vapid.subject,
@@ -304,21 +317,27 @@ async function dispatchPushToSubscriptions(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const lower = msg.toLowerCase();
+        const isVapidConfigError = lower.includes("vapid");
         const isSubscriberKeyError =
-          lower.includes("p256dh") ||
-          lower.includes("auth") ||
-          lower.includes("public key") ||
-          lower.includes("curve") ||
-          lower.includes("subscription") ||
-          lower.includes("endpoint");
+          !isVapidConfigError &&
+          (lower.includes("p256dh") ||
+            lower.includes("auth") ||
+            lower.includes("public key") ||
+            lower.includes("curve") ||
+            lower.includes("subscription") ||
+            lower.includes("endpoint"));
 
         if (isSubscriberKeyError) {
           console.warn(
             `[Push] Invalid subscription cryptography for device ${sub.deviceId}; pruning:`,
             msg
           );
-          await ctx.runMutation(internal.push.deleteSubscriptionById, { id: sub._id });
-          pruned++;
+          const deleted = await ctx.runMutation(internal.push.deleteSubscriptionById, {
+            id: sub._id,
+            expectedEndpoint: sub.endpoint,
+            expectedP256dh: sub.p256dh,
+          });
+          if (deleted) pruned++;
         } else {
           console.error(
             `[Push] Failed to build push request for device ${sub.deviceId}:`,
@@ -339,13 +358,17 @@ async function dispatchPushToSubscriptions(
 
         const errorBody = (await response.text().catch(() => "")).slice(0, 300);
         if (shouldPruneOnError(response.status, errorBody)) {
-          await ctx.runMutation(internal.push.deleteSubscriptionById, {
+          const deleted = await ctx.runMutation(internal.push.deleteSubscriptionById, {
             id: sub._id,
+            expectedEndpoint: sub.endpoint,
+            expectedP256dh: sub.p256dh,
           });
-          pruned++;
-          console.info(
-            `[Push] Pruned dead subscription (${response.status}) for device ${sub.deviceId}${errorBody ? `: ${errorBody}` : ""}`
-          );
+          if (deleted) {
+            pruned++;
+            console.info(
+              `[Push] Pruned dead subscription (${response.status}) for device ${sub.deviceId}${errorBody ? `: ${errorBody}` : ""}`
+            );
+          }
         } else {
           console.warn(
             `[Push] Failed delivery (${response.status}) for device ${sub.deviceId}${errorBody ? `: ${errorBody}` : ""}`
@@ -378,9 +401,8 @@ export const sendTimerCompletionPush = internalAction({
 
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
-      buildPayload: (appOrigin, soundEnabled) => ({
+      buildPayload: (appOrigin, silent) => ({
         web_push: 8030,
-        mutable: false,
         notification: {
           title,
           body,
@@ -388,7 +410,8 @@ export const sendTimerCompletionPush = internalAction({
           icon: `${appOrigin}/icon-192.png`,
           badge: `${appOrigin}/badge-72.png`,
           tag: `pomodor-session-${args.timerRunId}`,
-          silent: !soundEnabled,
+          silent,
+          mutable: false,
           timestamp: completedTimestamp,
         },
       }),
@@ -410,9 +433,8 @@ export const sendTestPush = internalAction({
   handler: async (ctx, args) => {
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
-      buildPayload: (appOrigin, soundEnabled) => ({
+      buildPayload: (appOrigin, silent) => ({
         web_push: 8030,
-        mutable: false,
         notification: {
           title: "Pomodor — Test push alert",
           body: "Background & lock-screen push notifications are active.",
@@ -420,7 +442,8 @@ export const sendTestPush = internalAction({
           icon: `${appOrigin}/icon-192.png`,
           badge: `${appOrigin}/badge-72.png`,
           tag: `pomodor-test-${Math.round(args.scheduledAtMs)}`,
-          silent: !soundEnabled,
+          silent,
+          mutable: false,
           timestamp: Date.now(),
         },
       }),
