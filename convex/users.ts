@@ -1,5 +1,6 @@
-import { v } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import { ConvexError, v } from "convex/values";
+import { query, mutation, internalMutation, type MutationCtx } from "./_generated/server";
+import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
 import { getAuthenticatedUser, requireUser, DEFAULT_SETTINGS, DEFAULT_TAGS } from "./authHelper";
 import {
   MIN_DURATION_MINUTES,
@@ -132,6 +133,68 @@ export const updateSettings = mutation({
   },
 });
 
+function sanitizeAvatarUrl(url: string | undefined): string | undefined {
+  return url && url.startsWith("https://") && url.length <= 2048 ? url : undefined;
+}
+
+async function upsertGoogleUser(
+  ctx: MutationCtx,
+  args: {
+    email: string;
+    sub: string;
+    name: string;
+    avatarUrl?: string;
+  }
+) {
+  const canonicalTokenId = `https://accounts.google.com|${args.sub}`;
+  const safeAvatar = sanitizeAvatarUrl(args.avatarUrl);
+
+  const existing =
+    (await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.email))
+      .first()) ??
+    (await ctx.db
+      .query("users")
+      .withIndex("by_token", (q) => q.eq("tokenIdentifier", canonicalTokenId))
+      .first());
+
+  if (existing) {
+    const patchData: Record<string, unknown> = {};
+    if (existing.email !== args.email) patchData.email = args.email;
+    if (!existing.emailVerificationTime) patchData.emailVerificationTime = Date.now();
+    if (!existing.displayName && args.name) patchData.displayName = args.name;
+    if (!existing.name && args.name) patchData.name = args.name;
+    if (safeAvatar && existing.avatarUrl !== safeAvatar) {
+      patchData.avatarUrl = safeAvatar;
+      patchData.image = safeAvatar;
+    }
+    if (!existing.tokenIdentifier || existing.tokenIdentifier !== canonicalTokenId) {
+      patchData.tokenIdentifier = canonicalTokenId;
+    }
+    if (Object.keys(patchData).length > 0) {
+      await ctx.db.patch(existing._id, patchData);
+    }
+    return existing._id;
+  }
+
+  const now = new Date().toISOString();
+  return await ctx.db.insert("users", {
+    email: args.email,
+    name: args.name,
+    displayName: args.name,
+    avatarUrl: safeAvatar,
+    image: safeAvatar,
+    avatarEmoji: "",
+    dailyGoalMinutes: 120,
+    createdAt: now,
+    emailVerificationTime: Date.now(),
+    tokenIdentifier: canonicalTokenId,
+    settings: { ...DEFAULT_SETTINGS, updatedAt: now },
+    tags: DEFAULT_TAGS,
+  });
+}
+
 export const getOrCreateUserForAuth = internalMutation({
   args: {
     email: v.string(),
@@ -140,55 +203,73 @@ export const getOrCreateUserForAuth = internalMutation({
     avatarUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const canonicalTokenId = `https://accounts.google.com|${args.sub}`;
-    const safeAvatar =
-      args.avatarUrl && args.avatarUrl.startsWith("https://") && args.avatarUrl.length <= 2048
-        ? args.avatarUrl
-        : undefined;
+    return await upsertGoogleUser(ctx, args);
+  },
+});
 
-    const existing =
-      (await ctx.db
-        .query("users")
-        .withIndex("email", (q) => q.eq("email", args.email))
-        .first()) ??
-      (await ctx.db
-        .query("users")
-        .withIndex("by_token", (q) => q.eq("tokenIdentifier", canonicalTokenId))
-        .first());
+export const createUserFromGoogle = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("google"),
+      profile: vGoogleProfile,
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx, { method: { profile } }) => {
+    const email = profile.email?.trim().toLowerCase();
+    const sub = profile.id.trim();
+    if (!email || !sub) {
+      throw new ConvexError("Google account is missing required email or identifier.");
+    }
+    if (!profile.emailVerified) {
+      throw new ConvexError("Google account email is not verified.");
+    }
+    const rawName = profile.name?.trim() ?? "";
+    const name = (rawName || email.split("@")[0] || "Focus Practitioner").slice(0, 100);
 
-    if (existing) {
-      const patchData: Record<string, unknown> = {};
-      if (existing.email !== args.email) patchData.email = args.email;
-      if (!existing.emailVerificationTime) patchData.emailVerificationTime = Date.now();
-      if (!existing.displayName && args.name) patchData.displayName = args.name;
-      if (!existing.name && args.name) patchData.name = args.name;
-      if (safeAvatar && existing.avatarUrl !== safeAvatar) {
-        patchData.avatarUrl = safeAvatar;
-        patchData.image = safeAvatar;
-      }
-      if (!existing.tokenIdentifier || existing.tokenIdentifier !== canonicalTokenId) {
-        patchData.tokenIdentifier = canonicalTokenId;
-      }
-      if (Object.keys(patchData).length > 0) {
-        await ctx.db.patch(existing._id, patchData);
-      }
-      return existing._id;
+    return await upsertGoogleUser(ctx, {
+      email,
+      sub,
+      name,
+      avatarUrl: profile.picture,
+    });
+  },
+});
+
+export const onSignInGoogle = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("google"),
+      profile: vGoogleProfile,
+    }),
+    userId: v.id("users"),
+  },
+  returns: v.null(),
+  handler: async (ctx, { method: { profile }, userId }) => {
+    const user = await ctx.db.get(userId);
+    if (!user) return null;
+
+    const patchData: Record<string, unknown> = {};
+    const email = profile.email?.trim().toLowerCase();
+    if (email && profile.emailVerified) {
+      if (user.email !== email) patchData.email = email;
+      if (!user.emailVerificationTime) patchData.emailVerificationTime = Date.now();
     }
 
-    const now = new Date().toISOString();
-    return await ctx.db.insert("users", {
-      email: args.email,
-      name: args.name,
-      displayName: args.name,
-      avatarUrl: safeAvatar,
-      image: safeAvatar,
-      avatarEmoji: "",
-      dailyGoalMinutes: 120,
-      createdAt: now,
-      emailVerificationTime: Date.now(),
-      tokenIdentifier: canonicalTokenId,
-      settings: { ...DEFAULT_SETTINGS, updatedAt: now },
-      tags: DEFAULT_TAGS,
-    });
+    const safeAvatar = sanitizeAvatarUrl(profile.picture);
+    if (safeAvatar && user.avatarUrl !== safeAvatar) {
+      patchData.avatarUrl = safeAvatar;
+      patchData.image = safeAvatar;
+    }
+
+    const canonicalTokenId = `https://accounts.google.com|${profile.id.trim()}`;
+    if (user.tokenIdentifier !== canonicalTokenId) {
+      patchData.tokenIdentifier = canonicalTokenId;
+    }
+
+    if (Object.keys(patchData).length > 0) {
+      await ctx.db.patch(userId, patchData);
+    }
+    return null;
   },
 });

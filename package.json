@@ -13,12 +13,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@auth/core": "^0.41.3",
-    "@convex-dev/auth": "^0.0.98",
+    "@convex-dev/auth": "^2.1.0",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "convex": "^1.51.0",
-    "jose": "^6.2.18",
     "lucide-react": "^1.80.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -36,6 +34,7 @@
     "@vitejs/plugin-react": "^6.3.0",
     "concurrently": "^10.0.7",
     "convex-test": "^0.0.75",
+    "jose": "^6.2.18",
     "tailwindcss": "^4.3.5",
     "typescript": "~7.0.2",
     "vite": "^8.3.8",

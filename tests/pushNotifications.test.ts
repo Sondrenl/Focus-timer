@@ -1,11 +1,8 @@
 // @vitest-environment node
-import { convexTest } from "convex-test";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
 import * as webpush from "web-push";
-
-const modules = import.meta.glob("../convex/**/*.*s");
+import { createConvexTest, createAuthenticatedTestUser } from "./helpers/authTestHelper";
 
 function toBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -62,18 +59,12 @@ describe("Web Push Backend & Declarative Push", () => {
     }
   });
 
-  async function createTestUser(t: ReturnType<typeof convexTest>) {
-    const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+  async function createTestUser(t: ReturnType<typeof createConvexTest>) {
+    return await createAuthenticatedTestUser(t, {
       email: "push@example.com",
       sub: "google-push-sub",
       name: "Push User",
     });
-    const asUser = t.withIdentity({
-      subject: `${userId}|push-session`,
-      email: "push@example.com",
-      name: "Push User",
-    });
-    return { userId, asUser };
   }
 
   it("derives uncompressed P-256 VAPID public key from VAPID_PRIVATE_KEY JWK", async () => {
@@ -81,7 +72,7 @@ describe("Web Push Backend & Declarative Push", () => {
     delete process.env.VAPID_PUBLIC_KEY;
     process.env.VAPID_PRIVATE_KEY = JSON.stringify(jwk);
 
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const derivedKey = await t.query(api.push.getVapidPublicKey, {});
     expect(derivedKey).toBeTypeOf("string");
     expect(derivedKey!.length).toBeGreaterThan(80);
@@ -153,7 +144,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("validates p256dh/auth key lengths, accepts standard base64 with + and /, and enforces strict origin allowlist", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
 
     // Rejects short/corrupt p256dh
@@ -256,7 +247,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("validates scheduleTestPush preconditions (VAPID key, subscriptions, 5s rate limit)", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createTestUser(t);
 
     // Missing VAPID_PRIVATE_KEY fails fast
@@ -288,7 +279,7 @@ describe("Web Push Backend & Declarative Push", () => {
   it("delivers RFC 8291 aes128gcm Web Push to all registered devices, retries 503 once, and prunes 403/410", async () => {
     process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
 
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
 
     const mobileKeys = await makeRealSubKeys();
@@ -371,7 +362,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("schedules push based on per-device push_subscriptions (Decision 4A) even if account notificationsEnabled is false", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
 
     // Account setting is false, but this device has an active push subscription
@@ -421,7 +412,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("does not double-schedule push when onTimerCompleted fires twice for the same timerRunId", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
     await asUser.mutation(api.push.register, {
       deviceId: "device-push-active",
@@ -464,7 +455,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("removes stale same-user endpoint rows when deviceId changes and returns soundEnabled in dispatch context", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
     const keys = makeSyntheticSubKeys(0x61);
 
@@ -494,7 +485,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("skips patching updatedAt within 24h when unchanged, but refreshes updatedAt after 24h to prevent active-device eviction", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createTestUser(t);
     const keys = makeSyntheticSubKeys(0x71);
 
@@ -538,7 +529,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("cleans up duplicate (userId, deviceId) rows in api.push.register", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
     const keys = makeSyntheticSubKeys(0x81);
 
@@ -581,7 +572,7 @@ describe("Web Push Backend & Declarative Push", () => {
   });
 
   it("does not schedule sendTimerCompletionPush when no device has an active push subscription", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createTestUser(t);
 
     // Even if account notificationsEnabled is true, having 0 push_subscriptions skips scheduling push

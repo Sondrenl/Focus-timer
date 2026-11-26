@@ -7,15 +7,13 @@ import React, {
   useCallback,
   useRef,
 } from 'react';
-import { useConvexAuth, useAuthActions } from '@convex-dev/auth/react';
+import { useConvexAuth } from 'convex/react';
+import { useAuthActions } from '@convex-dev/auth/react';
+import { useSignInWithGoogle, useOauth } from '@convex-dev/auth/methods/google/react';
+import { api } from '../../convex/_generated/api';
 import { UserSettings } from '../types/settings';
 import { UserProfile, DEFAULT_PROFILE, AuthState } from '../types/user';
-import {
-  AUTH_USER_KEY,
-  parseGoogleJwt,
-  buildProfileFromJwt,
-  GOOGLE_CLIENT_ID,
-} from '../services/auth/AuthService';
+import { AUTH_USER_KEY } from '../services/auth/AuthService';
 import { convexClient, convexUrl } from '../services/convex/ConvexClient';
 import { SoundService } from '../services/audio/SoundService';
 import {
@@ -29,7 +27,6 @@ import { sanitizeProfile } from '../services/storage/guestRepositories';
 import { LAST_DAY_RESET_STORAGE_KEY } from '../utils/newDayCheck';
 import {
   clearGuestDataModifiedFlag,
-  getLocalDataOwnerUserId,
   markGuestDataModified,
   setLocalDataOwner,
 } from '../services/sync/offlineOutbox';
@@ -46,7 +43,6 @@ import {
 } from './services';
 
 const LOGOUT_REMOTE_TIMEOUT_MS = 2500;
-const MAX_GIS_INIT_ATTEMPTS = 20;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -122,7 +118,7 @@ export interface AuthProfileContextValue {
   isConvexAuthAuthenticated: boolean;
   isConvexAuthLoading: boolean;
   isLoggingOut: boolean;
-  loginWithGoogle: (idToken: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   syncWithCloud: () => Promise<void>;
   profile: UserProfile;
@@ -158,7 +154,9 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     isAuthenticated: isConvexAuthAuthenticated,
     isLoading: isConvexAuthLoading,
   } = useConvexAuth();
-  const { signIn: convexSignIn, signOut: convexSignOut } = useAuthActions();
+  const { signOut: convexSignOut } = useAuthActions();
+  const { signIn: startGoogleSignIn } = useSignInWithGoogle(api.auth);
+  const { flowError: oauthFlowError } = useOauth();
 
   const isConvexAuthReady =
     !isLoggingOut && isConvexAuthAuthenticated && !isConvexAuthLoading;
@@ -318,85 +316,40 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     resetLocalAuthUi,
   ]);
 
-  const loginWithGoogle = useCallback(
-    async (idToken: string): Promise<void> => {
-      authEpochRef.current += 1;
-      setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
-      try {
-        const payload = parseGoogleJwt(idToken);
-        if (!payload || !payload.sub) {
-          throw new Error('Invalid Google identity token');
-        }
+  const loginWithGoogle = useCallback(async (): Promise<void> => {
+    if (!isConvexConfigured) {
+      setAuth((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncError: 'Cloud sync is not configured for this environment.',
+      }));
+      return;
+    }
 
-        const priorOwner = getLocalDataOwnerUserId();
-        const priorEmail = auth.user?.email;
-        if (priorOwner && priorEmail && payload.email && priorEmail !== payload.email) {
-          await notificationService.unsubscribePush(
-            isConvexConfigured && isConvexAuthReady && isConvexConnectedRef.current
-              ? () =>
-                  withTimeout(
-                    convexMutations.unregisterPushSubscription({ deviceId: DEVICE_ID }),
-                    LOGOUT_REMOTE_TIMEOUT_MS
-                  )
-              : undefined
-          );
-          const { cleanProfile, cleanSettings } = await clearAccountLocalCaches();
-          setLocalProfile(cleanProfile);
-          setLocalSettings(cleanSettings);
-        }
-
-        if (isConvexConfigured) {
-          const res = await convexSignIn('google-id-token', { token: idToken });
-          const signedIn =
-            Boolean(res?.signingIn) || authService.hasConvexAuthSession(convexUrl);
-          if (!signedIn) {
-            throw new Error('Could not establish cloud session. Please try again.');
-          }
-        }
-
-        const user = buildProfileFromJwt(payload, profileRef.current);
-        authService.saveAuthUser(user);
-
-        setAuth({
-          isAuthenticated: true,
-          user,
-          token: null,
-          isSyncing: false,
-          lastSyncedAt: null,
-          syncError: null,
-          isTokenExpired: false,
-        });
-
-        const updatedProfile: UserProfile = {
-          ...profileRef.current,
-          id: user.id,
-          email: user.email,
-          avatarUrl: user.avatarUrl,
-          avatarEmoji: profileRef.current.avatarEmoji || '',
-          displayName: user.displayName || profileRef.current.displayName,
-        };
-        if (!isConvexConfigured) {
-          await profileRepository.save(updatedProfile);
-        }
-        setLocalProfile(updatedProfile);
-      } catch (err) {
-        const message = (err as Error).message || 'Google sign-in failed';
-        setAuth((prev) => ({
-          ...prev,
-          isSyncing: false,
-          syncError: message,
-        }));
-        throw err;
+    authEpochRef.current += 1;
+    setAuth((prev) => ({ ...prev, isSyncing: true, syncError: null }));
+    try {
+      const redirectTo =
+        typeof window !== 'undefined'
+          ? `${window.location.origin}${window.location.pathname}`
+          : undefined;
+      const res = await startGoogleSignIn(redirectTo ? { redirectTo } : undefined);
+      if (res && 'status' in res && res.status === 'error') {
+        const errorCode =
+          typeof res.userError === 'object' && res.userError !== null && 'error' in res.userError
+            ? String((res.userError as { error: unknown }).error)
+            : 'Google sign-in failed';
+        throw new Error(errorCode);
       }
-    },
-    [
-      isConvexConfigured,
-      isConvexAuthReady,
-      auth.user?.email,
-      convexSignIn,
-      convexMutations,
-    ]
-  );
+    } catch (err) {
+      const message = (err as Error).message || 'Google sign-in failed';
+      setAuth((prev) => ({
+        ...prev,
+        isSyncing: false,
+        syncError: message,
+      }));
+    }
+  }, [isConvexConfigured, startGoogleSignIn]);
 
   // Initial local load with cancellation + authEpoch guard
   useEffect(() => {
@@ -510,67 +463,15 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     };
   }, [resetLocalAuthUi]);
 
-  // Google Identity Services initialization
+  // Surface any post-redirect OAuth flow errors from @convex-dev/auth
   useEffect(() => {
-    let initialized = false;
-    let attempts = 0;
-    let interval: ReturnType<typeof setInterval> | null = null;
-
-    const initGoogleAccounts = () => {
-      if (initialized || typeof window === 'undefined' || !(window as any).google?.accounts?.id) {
-        return false;
-      }
-      try {
-        (window as any).google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          auto_select: true,
-          callback: async (response: any) => {
-            if (response?.credential) {
-              try {
-                await loginWithGoogle(response.credential);
-              } catch (err) {
-                console.warn('Google sign-in callback error:', err);
-              }
-            }
-          },
-        });
-        initialized = true;
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    const startPolling = () => {
-      if (initGoogleAccounts()) return;
-      if (interval) clearInterval(interval);
-      attempts = 0;
-      interval = setInterval(() => {
-        attempts += 1;
-        if (initGoogleAccounts() || attempts >= MAX_GIS_INIT_ATTEMPTS) {
-          if (interval) {
-            clearInterval(interval);
-            interval = null;
-          }
-        }
-      }, 500);
-    };
-
-    startPolling();
-    const handleOnline = () => {
-      if (!initialized) startPolling();
-    };
-    if (typeof window !== 'undefined') {
-      window.addEventListener('online', handleOnline);
-    }
-
-    return () => {
-      if (interval) clearInterval(interval);
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('online', handleOnline);
-      }
-    };
-  }, [loginWithGoogle]);
+    if (!oauthFlowError) return;
+    setAuth((prev) => ({
+      ...prev,
+      isSyncing: false,
+      syncError: `Google sign-in failed (${oauthFlowError.error}). Please try again.`,
+    }));
+  }, [oauthFlowError]);
 
   const syncWithCloud = useCallback(async (): Promise<void> => {
     if (!isEffectiveAuthenticated || isLoggingOutRef.current) return;

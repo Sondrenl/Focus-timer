@@ -1,29 +1,16 @@
 // @vitest-environment edge-runtime
-import { convexTest } from "convex-test";
 import { describe, it, expect } from "vitest";
-import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-
-const modules = import.meta.glob("../convex/**/*.*s");
+import { createConvexTest, createAuthenticatedTestUser } from "./helpers/authTestHelper";
 
 describe("Topic 2 — Convex Timer Accuracy & Server-Authoritative Completion", () => {
-  async function createAuthenticatedTestUser(t: ReturnType<typeof convexTest>) {
-    const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+  it("honors autoStartBreaks on server completion with a safety cap of 1 unattended auto-start (Decision 1A)", async () => {
+    const t = createConvexTest();
+    const { userId, asUser } = await createAuthenticatedTestUser(t, {
       email: "accuracy@example.com",
       sub: "google-sub-accuracy",
       name: "Accuracy Tester",
     });
-    const asUser = t.withIdentity({
-      subject: `${userId}|session-1`,
-      email: "accuracy@example.com",
-      name: "Accuracy Tester",
-    });
-    return { userId, asUser };
-  }
-
-  it("honors autoStartBreaks on server completion with a safety cap of 1 unattended auto-start (Decision 1A)", async () => {
-    const t = convexTest(schema, modules);
-    const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     // Enable both autoStartBreaks and autoStartPomodoros
     await asUser.mutation(api.users.updateSettings, {
@@ -92,7 +79,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-Authoritative Completion", 
   });
 
   it("rejects stale scheduled onTimerCompleted jobs when scheduleNonce no longer matches after pause/resume", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     await asUser.mutation(api.timer.start, {
@@ -145,7 +132,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-Authoritative Completion", 
   });
 
   it("enforces guards on timer.pause, timer.updateTag, and timer.reset(onlyIfIdle)", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // 1. Start a fresh 25m timer
@@ -223,7 +210,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-Authoritative Completion", 
   });
 
   it("deduplicates sessions by exact timerRunId across >45s skew while preserving rapid distinct short sessions", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // Same timerRunId recorded 120 seconds apart (clock skew > 45s) -> deduplicated!
@@ -270,7 +257,7 @@ describe("Topic 2 — Convex Timer Accuracy & Server-Authoritative Completion", 
   });
 
   it("resets an abandoned RUNNING timer in cleanupStaleTimers and rejects non-integer durations", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     // Rejects fractional durationSeconds

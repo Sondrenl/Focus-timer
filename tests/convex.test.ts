@@ -1,29 +1,16 @@
 // @vitest-environment edge-runtime
 import { describe, it, expect } from "vitest";
-import { convexTest } from "convex-test";
-import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-
-const modules = import.meta.glob("../convex/**/*.*s");
+import { createConvexTest, createAuthenticatedTestUser } from "./helpers/authTestHelper";
 
 describe("Convex Backend Integration Tests (convex-test)", () => {
-  async function createAuthenticatedTestUser(t: ReturnType<typeof convexTest>) {
-    const userId = await t.mutation(internal.users.getOrCreateUserForAuth, {
+  it("initializes user profile, settings, and default tags on sign-in", async () => {
+    const t = createConvexTest();
+    const { asUser } = await createAuthenticatedTestUser(t, {
       email: "user@example.com",
       sub: "google-sub-123",
       name: "Test Practitioner",
     });
-    const asUser = t.withIdentity({
-      subject: `${userId}|session-1`,
-      email: "user@example.com",
-      name: "Test Practitioner",
-    });
-    return { userId, asUser };
-  }
-
-  it("initializes user profile, settings, and default tags on sign-in", async () => {
-    const t = convexTest(schema, modules);
-    const { asUser } = await createAuthenticatedTestUser(t);
 
     const userState = await asUser.query(api.users.current, {});
     expect(userState).not.toBeNull();
@@ -34,7 +21,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("deduplicates sessions within ±45s of same sessionType and durationSeconds", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     const first = await asUser.mutation(api.sessions.record, {
@@ -59,7 +46,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("clears custom tagId references across sessions, coffee_cups, and active_timers on tags.resetToDefaults (Option A)", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     // Create a custom tag
@@ -121,7 +108,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("advances active_timers to the next interval in IDLE status when onTimerCompleted fires (Option A)", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     const targetEndTime = Date.now() + 1500_000;
@@ -160,7 +147,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("updates tagId when timer.pause is called with a new tag selection while PAUSED", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await asUser.mutation(api.timer.start, {
@@ -191,7 +178,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("remaps duplicate-named tags and sanitizes orphaned tagIds during migrations.importBackup merge", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     await asUser.mutation(api.migrations.importBackup, {
@@ -234,7 +221,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("refuses stale timer.reset when onlyIfNotRunning, expectedTimerRunId, or expectedUpdatedAtMs guards fail", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // Phone starts focus session
@@ -299,7 +286,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("increments cycle on SHORT_BREAK server completion", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     await asUser.mutation(api.timer.start, {
@@ -324,7 +311,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("regenerates invalid tag IDs during importBackup", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // Import backup with invalid tag ID containing spaces/special characters
@@ -361,7 +348,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("blocks phantom user auto-creation for deleted accounts", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     await t.run(async (ctx) => ctx.db.delete(userId));
@@ -376,7 +363,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("omits serverNowMs from getActive, resets streak via acknowledgeActive, rejects stale actions, and coerces invalid tagIds", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { userId, asUser } = await createAuthenticatedTestUser(t);
 
     const first = await asUser.mutation(api.timer.start, {
@@ -438,7 +425,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("prevents duplicate coffee deletion from deleting another cup and propagates tag removal to active_timers", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     const cup1 = await asUser.mutation(api.coffee.addCup, { date: "2026-04-05", tagId: "tag-study", createdAt: "2026-04-05T08:00:00.000Z" });
@@ -463,7 +450,7 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
   });
 
   it("handles importBackup tag ID collisions by minting a fresh tag ID and remapping guest sessions", async () => {
-    const t = convexTest(schema, modules);
+    const t = createConvexTest();
     const { asUser } = await createAuthenticatedTestUser(t);
 
     // Colliding tag ID with different name mints a fresh tag ID and remaps sessions
@@ -479,5 +466,83 @@ describe("Convex Backend Integration Tests (convex-test)", () => {
     const mergedSessions = await asUser.query(api.sessions.list, {});
     expect(mergedSessions?.[0].tagId).toBe(quantumTag?.id);
     expect(mergedSessions?.[0].timerRunId).toBe("run-u-1");
+  });
+
+  it("links existing users by verified email in createUserFromGoogle, rejects unverified emails, and syncs avatar in onSignInGoogle", async () => {
+    const t = createConvexTest();
+
+    // Unauthenticated caller is not authenticated
+    expect(await t.query(api.auth.isAuthenticated, {})).toBe(false);
+
+    // Rejects unverified Google email
+    await expect(
+      t.mutation(internal.users.createUserFromGoogle, {
+        method: {
+          name: "google",
+          profile: {
+            id: "sub-unverified",
+            email: "unverified@example.com",
+            emailVerified: false,
+            name: "Unverified",
+          },
+        },
+      })
+    ).rejects.toThrow("Google account email is not verified.");
+
+    // Creates a new user on first verified Google sign-in
+    const createdId = await t.mutation(internal.users.createUserFromGoogle, {
+      method: {
+        name: "google",
+        profile: {
+          id: "sub-existing",
+          email: "existing@example.com",
+          emailVerified: true,
+          name: "Existing User",
+          picture: "https://lh3.googleusercontent.com/a/initial",
+        },
+      },
+    });
+
+    // Re-running createUserFromGoogle with the same verified email links to the existing user
+    const linkedId = await t.mutation(internal.users.createUserFromGoogle, {
+      method: {
+        name: "google",
+        profile: {
+          id: "sub-existing",
+          email: "existing@example.com",
+          emailVerified: true,
+          name: "Different Name",
+          picture: "https://lh3.googleusercontent.com/a/updated",
+        },
+      },
+    });
+    expect(linkedId).toBe(createdId);
+
+    // onSignInGoogle updates avatar when HTTPS and ignores non-HTTPS URLs
+    await t.mutation(internal.users.onSignInGoogle, {
+      method: {
+        name: "google",
+        profile: {
+          id: "sub-existing",
+          email: "existing@example.com",
+          emailVerified: true,
+          name: "Existing User",
+          picture: "javascript:alert(1)",
+        },
+      },
+      userId: createdId,
+    });
+
+    const userDoc = await t.run(async (ctx) => ctx.db.get(createdId));
+    expect(userDoc?.avatarUrl).toBe("https://lh3.googleusercontent.com/a/updated");
+    expect(userDoc?.displayName).toBe("Existing User");
+
+    // Authenticated v2 session returns true from api.auth.isAuthenticated
+    const { asUser } = await createAuthenticatedTestUser(t, {
+      email: "existing@example.com",
+      sub: "sub-existing",
+      name: "Existing User",
+    });
+    expect(await asUser.query(api.auth.isAuthenticated, {})).toBe(true);
   });
 });
