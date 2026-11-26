@@ -416,7 +416,10 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     if (wasConvexAuthenticatedRef.current || auth.isAuthenticated) {
       wasConvexAuthenticatedRef.current = false;
-      void notificationService.unsubscribePush();
+      // Preserve the browser PushSubscription across transient token/network flickers on mobile
+      // wake so re-authentication can seamlessly re-sync without requiring a fresh user gesture.
+      // Explicit logout() still unsubscribes at both Convex and OS PushManager levels.
+      notificationService.resetPushStatus('unsubscribed');
       const shouldMarkExpired = Boolean(auth.isAuthenticated || authService.getStoredUser());
       void resetLocalAuthUi({
         isTokenExpired: shouldMarkExpired,
@@ -442,7 +445,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
           } catch {
             // Ignore
           }
-          void notificationService.unsubscribePush();
+          notificationService.resetPushStatus('unsubscribed');
           void resetLocalAuthUi({ isTokenExpired: false, wipeCaches: false });
         }
       } else if (e.key === 'pomodor:settings_v1' && e.newValue) {

@@ -203,7 +203,7 @@ async function sendWithRetry(
   headers: Record<string, string>,
   body: Uint8Array
 ): Promise<Response> {
-  const maxAttempts = 2;
+  const maxAttempts = 3;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -220,10 +220,14 @@ async function sendWithRetry(
         return response;
       }
 
+      const backoffMs = Math.min(
+        MAX_RETRY_AFTER_MS,
+        TRANSIENT_RETRY_DELAY_MS * Math.pow(3, attempt - 1)
+      );
       const delayMs =
         response.status === 429
           ? parseRetryDelayMs(response.headers.get("retry-after"))
-          : TRANSIENT_RETRY_DELAY_MS;
+          : backoffMs;
       // Drain body before retrying to release connection resources cleanly
       await response.text().catch(() => "");
       await sleep(delayMs);
@@ -232,7 +236,11 @@ async function sendWithRetry(
       if (attempt === maxAttempts) {
         throw err;
       }
-      await sleep(TRANSIENT_RETRY_DELAY_MS);
+      const backoffMs = Math.min(
+        MAX_RETRY_AFTER_MS,
+        TRANSIENT_RETRY_DELAY_MS * Math.pow(3, attempt - 1)
+      );
+      await sleep(backoffMs);
     }
   }
 
@@ -254,7 +262,7 @@ async function dispatchPushToSubscriptions(
   ctx: ActionCtx,
   params: {
     userId: Id<"users">;
-    buildPayload: (appOrigin: string, soundEnabled: boolean) => DeclarativePushPayload;
+    buildPayload: (appOrigin: string, silent: boolean) => DeclarativePushPayload;
     options: { ttl: number; urgency: "high"; topic: string };
   }
 ) {
@@ -277,6 +285,10 @@ async function dispatchPushToSubscriptions(
   await Promise.allSettled(
     dispatchCtx.subscriptions.map(async (sub: Doc<"push_subscriptions">) => {
       const appOrigin = resolveAppOrigin(sub.origin);
+      // Keep mobile OS push notifications audible so muting the desktop in-app chime
+      // never suppresses phone vibration/sound or smartwatch alerts (the phone's OS silent/DND
+      // mode controls mobile notification audio).
+      const effectiveSilent = sub.isMobile ? false : !dispatchCtx.soundEnabled;
       let req: webPush.RequestDetails;
 
       try {
@@ -288,7 +300,7 @@ async function dispatchPushToSubscriptions(
               auth: sub.auth,
             },
           },
-          JSON.stringify(params.buildPayload(appOrigin, dispatchCtx.soundEnabled)),
+          JSON.stringify(params.buildPayload(appOrigin, effectiveSilent)),
           {
             vapidDetails: {
               subject: vapid.subject,
@@ -378,7 +390,7 @@ export const sendTimerCompletionPush = internalAction({
 
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
-      buildPayload: (appOrigin, soundEnabled) => ({
+      buildPayload: (appOrigin, silent) => ({
         web_push: 8030,
         mutable: false,
         notification: {
@@ -388,7 +400,7 @@ export const sendTimerCompletionPush = internalAction({
           icon: `${appOrigin}/icon-192.png`,
           badge: `${appOrigin}/badge-72.png`,
           tag: `pomodor-session-${args.timerRunId}`,
-          silent: !soundEnabled,
+          silent,
           timestamp: completedTimestamp,
         },
       }),
@@ -410,7 +422,7 @@ export const sendTestPush = internalAction({
   handler: async (ctx, args) => {
     return dispatchPushToSubscriptions(ctx, {
       userId: args.userId,
-      buildPayload: (appOrigin, soundEnabled) => ({
+      buildPayload: (appOrigin, silent) => ({
         web_push: 8030,
         mutable: false,
         notification: {
@@ -420,7 +432,7 @@ export const sendTestPush = internalAction({
           icon: `${appOrigin}/icon-192.png`,
           badge: `${appOrigin}/badge-72.png`,
           tag: `pomodor-test-${Math.round(args.scheduledAtMs)}`,
-          silent: !soundEnabled,
+          silent,
           timestamp: Date.now(),
         },
       }),

@@ -238,7 +238,7 @@ export class NotificationService {
 
   private async getPushManager(): Promise<PushManager | null> {
     const windowPushManager = this.getWindowPushManager();
-    const reg = await this.getActiveRegistration(windowPushManager ? 1000 : 2500);
+    const reg = await this.getActiveRegistration(windowPushManager ? 1500 : 6000);
     return reg?.pushManager ?? windowPushManager;
   }
 
@@ -310,7 +310,7 @@ export class NotificationService {
       try {
         const pushManager = await this.getPushManager();
         if (isSuperseded()) return supersededResult();
-        if (!pushManager) return fail('unsupported', 'PushManager unavailable');
+        if (!pushManager) return fail('error', 'Service worker not ready yet');
 
         const expectedKeyBytes = urlBase64ToUint8Array(trimmedKey);
         let subscription = await pushManager.getSubscription();

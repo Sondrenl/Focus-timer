@@ -311,7 +311,7 @@ export const SoundNotificationSection: React.FC<SoundNotificationSectionProps> =
           <div>
             <div className="text-sm font-semibold text-md-on-surface">Sound & Chime</div>
             <div className="text-xs text-md-on-surface-variant">
-              Plays the in-app chime while open, and enables OS alert sound in the background
+              Plays the in-app chime while open; mobile push follows your phone&apos;s sound/vibrate mode
             </div>
           </div>
           <div className="flex items-center gap-2.5 shrink-0">

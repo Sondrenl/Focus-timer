@@ -1,7 +1,7 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 2.1.0
+// Version: 2.2.0
 // Native Web Push fallback (for browsers without Declarative Web Push),
-// visible-client silence coordination, pushsubscriptionchange recovery, and safe notificationclick focus
+// focused-client silence coordination, pushsubscriptionchange recovery, and safe notificationclick focus
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
@@ -39,14 +39,16 @@ function resolveSameOriginUrl(rawUrl) {
   return fallback;
 }
 
-async function hasAnyVisibleClient() {
+async function hasAnyFocusedVisibleClient() {
   try {
     const clientList = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true,
     });
     for (const client of clientList) {
-      if (client.visibilityState === 'visible') {
+      // Require both visible AND focused so mobile lock-screen / split-screen states
+      // where visibilityState briefly stays 'visible' do not silently mute the OS alert.
+      if (client.visibilityState === 'visible' && client.focused === true) {
         return true;
       }
     }
@@ -159,15 +161,11 @@ self.addEventListener('push', (event) => {
 
   event.waitUntil(
     (async () => {
-      // When the app is actively visible on screen, the page plays the instant in-app Web Audio
-      // chime for timer completions. Keep the OS notification silent to prevent double-sound
+      // When the app is actively visible and focused on screen, the page plays the instant in-app
+      // Web Audio chime for timer completions. Keep the OS notification silent to prevent double-sound
       // while still satisfying browser userVisibleOnly requirements.
-      const visible = !isTestAlert && (await hasAnyVisibleClient());
-      const effectiveSilent = silent || visible;
-
-      if (tag.startsWith('pomodor-session-')) {
-        await closeOlderSessionNotifications(tag);
-      }
+      const focusedVisible = !isTestAlert && (await hasAnyFocusedVisibleClient());
+      const effectiveSilent = silent || focusedVisible;
 
       const options = {
         body,
@@ -181,11 +179,20 @@ self.addEventListener('push', (event) => {
       if (typeof timestamp === 'number') {
         options.timestamp = timestamp;
       }
-      if (!hasExplicitTag && !effectiveSilent) {
-        options.renotify = true;
+      if (!effectiveSilent) {
+        options.vibrate = [200, 100, 200];
+        if (!hasExplicitTag) {
+          options.renotify = true;
+        }
       }
 
+      // Show the notification immediately before any secondary cleanup to minimize latency
+      // and avoid iOS/browser silent-push timeout penalties.
       await self.registration.showNotification(title, options);
+
+      if (tag.startsWith('pomodor-session-')) {
+        await closeOlderSessionNotifications(tag);
+      }
     })()
   );
 });

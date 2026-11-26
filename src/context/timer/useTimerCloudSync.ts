@@ -131,6 +131,24 @@ export const useTimerCloudSync = ({
   const prevConnectedRef = useRef<boolean>(isConvexConnected);
   const finalizedStaleRunIdsRef = useRef<Set<string>>(new Set());
   const acknowledgedRunIdsRef = useRef<Set<string>>(new Set());
+  const pendingPublishRef = useRef<{
+    payload: RemoteTimerState;
+    isUserAction: boolean;
+    resetOptions?: ResetTimerOptions;
+    dispatchActionWallMs: number;
+  } | null>(null);
+  const publishRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const publishRetryCountRef = useRef<number>(0);
+  const PUBLISH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+  const clearPublishRetry = useCallback(() => {
+    if (publishRetryTimeoutRef.current !== null) {
+      clearTimeout(publishRetryTimeoutRef.current);
+      publishRetryTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearPublishRetry, [clearPublishRetry]);
 
   const isOnlineAndConnected = useCallback((): boolean => {
     return Boolean(
@@ -159,8 +177,11 @@ export const useTimerCloudSync = ({
       refs.serverClockOffsetMsRef.current = 0;
       hasReconciledSignInRef.current = false;
       acknowledgedRunIdsRef.current.clear();
+      pendingPublishRef.current = null;
+      publishRetryCountRef.current = 0;
+      clearPublishRetry();
     }
-  }, [isAuthenticated, refs]);
+  }, [isAuthenticated, refs, clearPublishRetry]);
 
   const applyRemoteStateRef = useRef<(remote: RemoteTimerState, forceApply?: boolean) => void>(
     () => {}
@@ -184,24 +205,51 @@ export const useTimerCloudSync = ({
     [recordServerClockSample, refs]
   );
 
-  const publishLocalTimerState = useCallback(
-    (payload: RemoteTimerState, isUserAction = false, resetOptions?: ResetTimerOptions) => {
-      refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, payload.updatedAtMs);
-      if (isUserAction) {
-        refs.lastLocalActionWallMsRef.current = Date.now();
-      }
-      const dispatchActionWallMs = refs.lastLocalActionWallMsRef.current;
+  const dispatchTimerMutationRef = useRef<
+    (entry: {
+      payload: RemoteTimerState;
+      isUserAction: boolean;
+      resetOptions?: ResetTimerOptions;
+      dispatchActionWallMs: number;
+    }) => void
+  >(() => {});
 
+  const dispatchTimerMutation = useCallback(
+    (entry: {
+      payload: RemoteTimerState;
+      isUserAction: boolean;
+      resetOptions?: ResetTimerOptions;
+      dispatchActionWallMs: number;
+    }) => {
       if (!isOnlineAndConnected()) {
         return;
       }
 
+      const { payload, resetOptions, dispatchActionWallMs } = entry;
       let mutationPromise: Promise<any> | null = null;
       if (payload.status === 'RUNNING') {
+        const nowAligned = getServerAlignedNowMs();
+        if (payload.targetEndTime !== null && payload.targetEndTime <= nowAligned) {
+          if (pendingPublishRef.current?.dispatchActionWallMs === dispatchActionWallMs) {
+            pendingPublishRef.current = null;
+            publishRetryCountRef.current = 0;
+          }
+          return;
+        }
+        const computedRemaining =
+          payload.targetEndTime !== null
+            ? Math.max(
+                1,
+                Math.min(
+                  Math.max(1, Math.round(payload.totalSeconds)),
+                  Math.ceil((payload.targetEndTime - nowAligned) / 1000)
+                )
+              )
+            : Math.max(1, Math.round(payload.remainingSeconds));
         mutationPromise = convexTimerMutationsRef.current.startTimer({
           sessionType: payload.sessionType,
           durationSeconds: Math.max(1, Math.round(payload.totalSeconds)),
-          remainingSeconds: Math.max(1, Math.round(payload.remainingSeconds)),
+          remainingSeconds: computedRemaining,
           totalSeconds: Math.max(1, Math.round(payload.totalSeconds)),
           currentCycle: Math.max(1, Math.round(payload.currentCycle)),
           tagId: payload.activeTagId || undefined,
@@ -231,11 +279,63 @@ export const useTimerCloudSync = ({
 
       if (mutationPromise) {
         mutationPromise
-          .then((res) => reconcileMutationResponse(res, dispatchActionWallMs))
-          .catch(console.warn);
+          .then((res) => {
+            if (pendingPublishRef.current?.dispatchActionWallMs === dispatchActionWallMs) {
+              pendingPublishRef.current = null;
+              publishRetryCountRef.current = 0;
+              clearPublishRetry();
+            }
+            reconcileMutationResponse(res, dispatchActionWallMs);
+          })
+          .catch((err) => {
+            console.warn(err);
+            const currentPending = pendingPublishRef.current;
+            if (
+              currentPending &&
+              currentPending.dispatchActionWallMs === dispatchActionWallMs &&
+              isOnlineAndConnected() &&
+              publishRetryCountRef.current < PUBLISH_RETRY_DELAYS_MS.length
+            ) {
+              const delayMs = PUBLISH_RETRY_DELAYS_MS[publishRetryCountRef.current];
+              publishRetryCountRef.current += 1;
+              clearPublishRetry();
+              publishRetryTimeoutRef.current = setTimeout(() => {
+                publishRetryTimeoutRef.current = null;
+                const latestPending = pendingPublishRef.current;
+                if (latestPending && latestPending.dispatchActionWallMs === dispatchActionWallMs) {
+                  dispatchTimerMutationRef.current(latestPending);
+                }
+              }, delayMs);
+            }
+          });
       }
     },
-    [isOnlineAndConnected, refs, reconcileMutationResponse]
+    [isOnlineAndConnected, getServerAlignedNowMs, clearPublishRetry, reconcileMutationResponse]
+  );
+  dispatchTimerMutationRef.current = dispatchTimerMutation;
+
+  const publishLocalTimerState = useCallback(
+    (payload: RemoteTimerState, isUserAction = false, resetOptions?: ResetTimerOptions) => {
+      refs.localUpdatedAtRef.current = Math.max(refs.localUpdatedAtRef.current, payload.updatedAtMs);
+      if (isUserAction) {
+        refs.lastLocalActionWallMsRef.current = Date.now();
+      }
+      const dispatchActionWallMs = refs.lastLocalActionWallMsRef.current;
+      const entry = { payload, isUserAction, resetOptions, dispatchActionWallMs };
+
+      if (isUserAction || payload.status === 'RUNNING') {
+        pendingPublishRef.current = entry;
+        publishRetryCountRef.current = 0;
+        clearPublishRetry();
+      }
+
+      if (!isOnlineAndConnected()) {
+        return;
+      }
+
+      dispatchTimerMutation(entry);
+    },
+    [isOnlineAndConnected, refs, clearPublishRetry, dispatchTimerMutation]
   );
 
   const publishTagUpdate = useCallback(
@@ -604,6 +704,15 @@ export const useTimerCloudSync = ({
 
   applyRemoteStateRef.current = applyRemoteState;
 
+  const flushPendingLocalPublish = useCallback((): boolean => {
+    const pending = pendingPublishRef.current;
+    if (!pending || !isOnlineAndConnected()) return false;
+    publishRetryCountRef.current = 0;
+    clearPublishRetry();
+    dispatchTimerMutation(pending);
+    return true;
+  }, [isOnlineAndConnected, clearPublishRetry, dispatchTimerMutation]);
+
   const promoteLocalActiveTimerIfNewer = useCallback(
     (remote: typeof remoteTimer) => {
       if (!isOnlineAndConnected() || refs.statusRef.current !== 'RUNNING') return false;
@@ -612,13 +721,13 @@ export const useTimerCloudSync = ({
       const targetEnd = refs.targetEndTimeRef.current;
       if (!targetEnd || targetEnd <= nowAligned) return false;
 
-      const remoteIsEmptyOrOlderIdle =
+      const remoteIsEmptyOrOlderInactive =
         remote === null ||
         (remote !== undefined &&
-          remote.status === 'IDLE' &&
+          (remote.status === 'IDLE' || remote.status === 'PAUSED') &&
           refs.localUpdatedAtRef.current > remote.updatedAtMs);
 
-      if (!remoteIsEmptyOrOlderIdle) return false;
+      if (!remoteIsEmptyOrOlderInactive) return false;
 
       const remainingSec = Math.max(
         1,
@@ -673,7 +782,7 @@ export const useTimerCloudSync = ({
 
     if (!hasReconciledSignInRef.current) {
       hasReconciledSignInRef.current = true;
-      if (promoteLocalActiveTimerIfNewer(remoteTimer)) return;
+      if (flushPendingLocalPublish() || promoteLocalActiveTimerIfNewer(remoteTimer)) return;
     }
 
     if (!remoteTimer) return;
@@ -685,6 +794,16 @@ export const useTimerCloudSync = ({
         remoteTimer.lastCompletedTimerRunId === refs.timerRunIdRef.current
     );
 
+    const pending = pendingPublishRef.current;
+    if (
+      pending &&
+      !isServerCompletionOfCurrentRun &&
+      remoteTimer.updatedAtMs <= pending.payload.updatedAtMs
+    ) {
+      flushPendingLocalPublish();
+      return;
+    }
+
     if (!hasRecentLocalAction || isNewer || isServerCompletionOfCurrentRun) {
       applyRemoteStateRef.current(toRemoteTimerState(remoteTimer), isServerCompletionOfCurrentRun);
     }
@@ -695,6 +814,7 @@ export const useTimerCloudSync = ({
     hasResolvedRemoteTimer,
     isConvexConfigured,
     refs,
+    flushPendingLocalPublish,
     promoteLocalActiveTimerIfNewer,
     acknowledgeRemoteRunIfActive,
   ]);
@@ -702,13 +822,18 @@ export const useTimerCloudSync = ({
   useEffect(() => {
     const wasConnected = prevConnectedRef.current;
     prevConnectedRef.current = isConvexConnected;
-    if (!wasConnected && isConvexConnected && hasResolvedRemoteTimer) {
-      const latestRemote = remoteTimerRef.current;
-      if (!promoteLocalActiveTimerIfNewer(latestRemote) && latestRemote) {
-        applyRemoteStateRef.current(toRemoteTimerState(latestRemote));
+    if (!wasConnected && isConvexConnected) {
+      if (flushPendingLocalPublish()) {
+        return;
+      }
+      if (hasResolvedRemoteTimer) {
+        const latestRemote = remoteTimerRef.current;
+        if (!promoteLocalActiveTimerIfNewer(latestRemote) && latestRemote) {
+          applyRemoteStateRef.current(toRemoteTimerState(latestRemote));
+        }
       }
     }
-  }, [isConvexConnected, hasResolvedRemoteTimer, promoteLocalActiveTimerIfNewer]);
+  }, [isConvexConnected, hasResolvedRemoteTimer, flushPendingLocalPublish, promoteLocalActiveTimerIfNewer]);
 
   useEffect(() => {
     if (!isConvexConfigured) return;

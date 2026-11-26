@@ -604,4 +604,114 @@ describe("Web Push Backend & Declarative Push", () => {
     const pushJobs = scheduled.filter((job) => job.name.includes("sendTimerCompletionPush"));
     expect(pushJobs).toHaveLength(0);
   });
+
+  it("retries transient 503 errors up to 3 attempts, keeps TTL at 180s, and accepts push.services.mozilla.com", async () => {
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
+
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+    const keys = await makeRealSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "firefox-android-1",
+      endpoint: "https://push.services.mozilla.com/wpush/v2/firefox-tok",
+      ...keys,
+      isMobile: true,
+    });
+
+    let attempts = 0;
+    let seenTtl: string | undefined;
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init) => {
+        attempts += 1;
+        const hdrs = Object.fromEntries(
+          Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [
+            k.toLowerCase(),
+            String(v),
+          ])
+        );
+        seenTtl = hdrs["ttl"];
+        if (attempts < 3) {
+          return new Response("Temporary outage", { status: 503 });
+        }
+        return new Response(null, { status: 201 });
+      });
+
+    try {
+      const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+        userId,
+        sessionType: "WORK",
+        timerRunId: "run-retry-3",
+        completedAtMs: Date.now(),
+      });
+
+      expect(result).toEqual({ sent: 1, pruned: 0 });
+      expect(attempts).toBe(3);
+      expect(seenTtl).toBe("180");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("keeps mobile push audible (silent: false) even when account soundEnabled is false, while silencing desktop push", async () => {
+    process.env.VAPID_PRIVATE_KEY = JSON.stringify(await generateVapidJwk());
+
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+
+    await asUser.mutation(api.users.updateSettings, { soundEnabled: false });
+
+    const mobileKeys = await makeRealSubKeys();
+    const desktopKeys = await makeRealSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "mobile-audible-1",
+      endpoint: "https://web.push.apple.com/mobile-audible-tok",
+      ...mobileKeys,
+      isMobile: true,
+    });
+    await asUser.mutation(api.push.register, {
+      deviceId: "desktop-silent-1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/desktop-silent-tok",
+      ...desktopKeys,
+      isMobile: false,
+    });
+
+    const capturedPayloads: Array<{ notification?: { silent?: boolean; tag?: string } }> = [];
+    const originalStringify = JSON.stringify;
+    const stringifySpy = vi.spyOn(JSON, "stringify").mockImplementation((value, ...rest) => {
+      if (
+        value &&
+        typeof value === "object" &&
+        "web_push" in value &&
+        (value as { web_push?: unknown }).web_push === 8030
+      ) {
+        capturedPayloads.push(value as { notification?: { silent?: boolean; tag?: string } });
+      }
+      return originalStringify(value, ...(rest as [never, never]));
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 201 }));
+
+    try {
+      const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+        userId,
+        sessionType: "WORK",
+        timerRunId: "run-mobile-audible",
+        completedAtMs: Date.now(),
+      });
+
+      expect(result).toEqual({ sent: 2, pruned: 0 });
+      expect(capturedPayloads).toHaveLength(2);
+      // Mobile device receives silent: false; desktop device receives silent: true
+      const silentValues = capturedPayloads.map((p) => p.notification?.silent).sort();
+      expect(silentValues).toEqual([false, true]);
+    } finally {
+      stringifySpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
 });

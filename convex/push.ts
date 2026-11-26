@@ -10,6 +10,7 @@ const TEST_PUSH_RATE_LIMIT_MS = 5_000;
 export const ALLOWED_PUSH_DOMAINS = [
   "fcm.googleapis.com",
   "push.apple.com",
+  "push.services.mozilla.com",
   "updates.push.services.mozilla.com",
   "notify.windows.com",
   "web.push.apple.com",

@@ -10,6 +10,7 @@ import { settingsRepository } from '../context/services';
 
 const PUSH_RESYNC_TTL_MS = 15 * 60 * 1000;
 const SERVER_PRUNE_RECOVERY_COOLDOWN_MS = 30 * 1000;
+const SYNC_ERROR_RETRY_DELAYS_MS = [3_000, 8_000, 20_000];
 
 interface UsePushSubscriptionSyncParams {
   notificationService: NotificationService;
@@ -50,8 +51,19 @@ export function usePushSubscriptionSync({
   const prevConnectedRef = useRef<boolean>(isConvexConnected);
   const isServerRegisteredRef = useRef<boolean | undefined>(isServerSubscriptionRegistered);
   isServerRegisteredRef.current = isServerSubscriptionRegistered;
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryAttemptRef = useRef<number>(0);
 
   const isAuthOperational = isConvexConfigured && isEffectiveAuthenticated && isConvexAuthReady;
+
+  const clearScheduledRetry = useCallback(() => {
+    if (retryTimeoutRef.current !== null) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearScheduledRetry, [clearScheduledRetry]);
 
   const isNotificationsEnabledLive = useCallback((): boolean => {
     if (!settingsRef.current.notificationsEnabled) return false;
@@ -74,6 +86,8 @@ export function usePushSubscriptionSync({
 
   const handleMissingPermission = useCallback(
     (requireServerRegistered = true) => {
+      clearScheduledRetry();
+      retryAttemptRef.current = 0;
       lastSyncedAtRef.current = 0;
       const perm = notificationService.getPermissionState();
       notificationService.resetPushStatus(
@@ -91,11 +105,17 @@ export function usePushSubscriptionSync({
         void unregisterPushSubscription({ deviceId: DEVICE_ID }).catch(() => {});
       }
     },
-    [notificationService, unregisterPushSubscription]
+    [clearScheduledRetry, notificationService, unregisterPushSubscription]
+  );
+
+  const performSyncRef = useRef<() => Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }>>(
+    async () => ({ ok: false, status: 'unsubscribed' })
   );
 
   const performSync = useCallback(async () => {
+    clearScheduledRetry();
     if (isLoggingOutRef?.current || !isNotificationsEnabledLive()) {
+      retryAttemptRef.current = 0;
       return {
         ok: false,
         status: 'unsubscribed' as PushSubscriptionStatus,
@@ -109,15 +129,30 @@ export function usePushSubscriptionSync({
     });
     if (result.ok) {
       lastSyncedAtRef.current = Date.now();
+      retryAttemptRef.current = 0;
+    } else if (
+      result.status === 'error' &&
+      !isLoggingOutRef?.current &&
+      isNotificationsEnabledLive() &&
+      retryAttemptRef.current < SYNC_ERROR_RETRY_DELAYS_MS.length
+    ) {
+      const delayMs = SYNC_ERROR_RETRY_DELAYS_MS[retryAttemptRef.current];
+      retryAttemptRef.current += 1;
+      retryTimeoutRef.current = setTimeout(() => {
+        retryTimeoutRef.current = null;
+        void performSyncRef.current();
+      }, delayMs);
     }
     return result;
   }, [
+    clearScheduledRetry,
     notificationService,
     vapidPublicKey,
     registerPushSubscription,
     isLoggingOutRef,
     isNotificationsEnabledLive,
   ]);
+  performSyncRef.current = performSync;
 
   const canAutoSync = useCallback((): boolean => {
     return Boolean(
