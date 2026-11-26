@@ -8,6 +8,7 @@ import {
   LAST_DAY_RESET_STORAGE_KEY,
   getLastResetDayKey,
   setLastResetDayKey,
+  resolveEffectiveResetDayKey,
 } from '../src/utils/newDayCheck';
 
 describe('New Day Check Utilities', () => {
@@ -172,6 +173,26 @@ describe('New Day Check Utilities', () => {
         isTimerRunning: false,
       });
       expect(shouldReset).toBe(true);
+    });
+
+    it('does NOT reset on a second device with stale local lastResetDayKey when remote lastResetDayKey is already today', () => {
+      // Device A reset on 2026-11-07 and completed a session at 10:00 AM.
+      // User opens Device B at 12:00 PM (> 1h later), whose localStorage still has yesterday's lastResetDayKey.
+      const now = new Date(2026, 10, 7, 12, 0, 0);
+      const lastSession = new Date(2026, 10, 7, 10, 0, 0).getTime();
+      const effectiveResetDayKey = resolveEffectiveResetDayKey('2026-11-06', '2026-11-07');
+      expect(effectiveResetDayKey).toBe('2026-11-07');
+      expect(resolveEffectiveResetDayKey('2026-11-07', '2026-11-06')).toBe('2026-11-07');
+      expect(resolveEffectiveResetDayKey(null, '2026-11-07')).toBe('2026-11-07');
+      expect(resolveEffectiveResetDayKey('2026-11-06', null)).toBe('2026-11-06');
+
+      const shouldReset = shouldResetForNewDay({
+        now,
+        lastSessionTimeMs: lastSession,
+        lastResetDayKey: effectiveResetDayKey,
+        isTimerRunning: false,
+      });
+      expect(shouldReset).toBe(false);
     });
   });
 

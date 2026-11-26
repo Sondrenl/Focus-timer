@@ -75,6 +75,7 @@ export default defineSchema({
     lastCompletedTimerRunId: v.optional(v.string()),
     scheduleNonce: v.optional(v.string()),
     serverAutoStartStreak: v.optional(v.number()),
+    lastResetDayKey: v.optional(v.string()),
     updatedAtMs: v.number(),
     scheduledCompletionId: v.optional(v.id("_scheduled_functions")),
   })

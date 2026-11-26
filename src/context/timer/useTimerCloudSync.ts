@@ -51,6 +51,7 @@ export interface ResetTimerOptions {
   onlyIfIdle?: boolean;
   expectedTimerRunId?: string;
   expectedUpdatedAtMs?: number;
+  lastResetDayKey?: string;
 }
 
 interface UseTimerCloudSyncParams {
@@ -77,6 +78,7 @@ function toRemoteTimerState(raw: {
   timerRunId?: string | null;
   lastCompletedTimerRunId?: string | null;
   serverAutoStartStreak?: number;
+  lastResetDayKey?: string | null;
   updatedAtMs: number;
   serverNowMs?: number;
 }): RemoteTimerState {
@@ -91,6 +93,7 @@ function toRemoteTimerState(raw: {
     timerRunId: raw.timerRunId ?? null,
     lastCompletedTimerRunId: raw.lastCompletedTimerRunId ?? null,
     serverAutoStartStreak: raw.serverAutoStartStreak,
+    lastResetDayKey: raw.lastResetDayKey ?? null,
     updatedAtMs: raw.updatedAtMs,
     serverNowMs: raw.serverNowMs,
   };
@@ -271,6 +274,7 @@ export const useTimerCloudSync = ({
           expectedTimerRunId: resetOptions?.expectedTimerRunId,
           expectedUpdatedAtMs: resetOptions?.expectedUpdatedAtMs,
           clientActionAtMs: payload.updatedAtMs,
+          lastResetDayKey: resetOptions?.lastResetDayKey,
         });
       }
 

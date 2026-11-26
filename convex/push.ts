@@ -62,7 +62,7 @@ function deriveVapidPublicKeyFromPrivateJwk(rawPrivateJwk: string | undefined): 
   return null;
 }
 
-function validateEndpoint(endpoint: string): void {
+export function validateEndpoint(endpoint: string): void {
   if (!endpoint || endpoint.length > 2048) {
     throw new Error("Invalid push subscription endpoint length.");
   }
@@ -128,13 +128,13 @@ function sanitizeOrigin(rawOrigin: string | undefined): string | undefined {
   return undefined;
 }
 
-function validateDeviceId(deviceId: string): void {
+export function validateDeviceId(deviceId: string): void {
   if (!deviceId || deviceId.length > 128 || !/^[a-zA-Z0-9_.-]+$/.test(deviceId)) {
     throw new Error("Invalid deviceId format.");
   }
 }
 
-function validateRotationTokenHash(hash: string | undefined): string | undefined {
+export function validateRotationTokenHash(hash: string | undefined): string | undefined {
   if (hash === undefined) return undefined;
   const normalized = hash.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(normalized)) {
@@ -143,7 +143,7 @@ function validateRotationTokenHash(hash: string | undefined): string | undefined
   return normalized;
 }
 
-function validatePushKey(key: string, name: "p256dh" | "auth"): void {
+export function validatePushKey(key: string, name: "p256dh" | "auth"): void {
   if (!key || key.length > 256 || !/^[a-zA-Z0-9+_/-]+=*$/.test(key)) {
     throw new Error(`Invalid ${name} format: must be valid base64 key.`);
   }

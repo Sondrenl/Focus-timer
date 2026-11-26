@@ -54,12 +54,28 @@ export class NotificationService {
   private pushSyncInFlight: Promise<{ ok: boolean; status: PushSubscriptionStatus; reason?: string }> | null = null;
   private lastRegisteredEndpoint: string | null = null;
   private syncEpoch = 0;
+  private subscribeEpoch = 0;
+  private resyncRequestedDuringFlight = false;
   private pushStatus: PushSubscriptionStatus = 'unsubscribed';
   private pushStatusListeners = new Set<(status: PushSubscriptionStatus) => void>();
   private pushResyncListeners = new Set<() => void>();
   private controllerChangeHandler: (() => void) | null = null;
   private swMessageHandler: ((event: MessageEvent) => void) | null = null;
   private visibilityChangeHandler: (() => void) | null = null;
+
+  private emitResyncRequested(): void {
+    if (this.pushSyncInFlight) {
+      this.resyncRequestedDuringFlight = true;
+      return;
+    }
+    for (const listener of this.pushResyncListeners) {
+      try {
+        listener();
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  }
 
   constructor() {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -80,22 +96,12 @@ export class NotificationService {
         })
         .catch(() => {});
 
-      const notifyResync = () => {
-        for (const listener of this.pushResyncListeners) {
-          try {
-            listener();
-          } catch {
-            // Ignore listener errors
-          }
-        }
-      };
-
       this.controllerChangeHandler = () => {
         navigator.serviceWorker
           .getRegistration()
           .then((reg) => {
             if (reg) this.cachedRegistration = reg;
-            notifyResync();
+            this.emitResyncRequested();
           })
           .catch(() => {});
       };
@@ -103,7 +109,7 @@ export class NotificationService {
 
       this.swMessageHandler = (event: MessageEvent) => {
         if (event.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') {
-          notifyResync();
+          this.emitResyncRequested();
         }
       };
       navigator.serviceWorker.addEventListener('message', this.swMessageHandler);
@@ -316,6 +322,8 @@ export class NotificationService {
     if (this.pushSyncInFlight) return this.pushSyncInFlight;
 
     const epoch = ++this.syncEpoch;
+    this.subscribeEpoch++;
+    this.resyncRequestedDuringFlight = false;
     const isSuperseded = () => epoch !== this.syncEpoch;
     const supersededResult = () => ({
       ok: false,
@@ -397,14 +405,20 @@ export class NotificationService {
 
         if (rotationToken && rotationTokenHash && convexSiteUrl) {
           const latestMeta = await readPushRotationMeta();
-          // Avoid overwriting a fresher token rotated concurrently by sw.js
-          const tokenToPersist =
+          const swRotatedConcurrently = Boolean(
             latestMeta &&
-            latestMeta.deviceId === deviceId &&
-            latestMeta.rotationToken &&
-            latestMeta.rotationToken !== existingMeta?.rotationToken
-              ? latestMeta.rotationToken
-              : rotationToken;
+              latestMeta.deviceId === deviceId &&
+              latestMeta.rotationToken &&
+              latestMeta.rotationToken !== existingMeta?.rotationToken
+          );
+          if (swRotatedConcurrently) {
+            // sw.js rotated the token while registerFn was in flight; trigger a fresh sync
+            // after this promise settles so Convex and IndexedDB converge on the latest endpoint & token.
+            this.resyncRequestedDuringFlight = true;
+          }
+          const tokenToPersist = swRotatedConcurrently
+            ? latestMeta!.rotationToken
+            : rotationToken;
           await writePushRotationMeta({
             convexSiteUrl,
             deviceId,
@@ -426,6 +440,10 @@ export class NotificationService {
       } finally {
         if (this.pushSyncInFlight === currentPromise) {
           this.pushSyncInFlight = null;
+          if (this.resyncRequestedDuringFlight && !isSuperseded()) {
+            this.resyncRequestedDuringFlight = false;
+            queueMicrotask(() => this.emitResyncRequested());
+          }
         }
       }
     })();
@@ -436,14 +454,14 @@ export class NotificationService {
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
     this.resetPushStatus('unsubscribed');
-    const unsubEpoch = this.syncEpoch;
+    const unsubSubscribeEpoch = this.subscribeEpoch;
     await clearPushRotationMeta();
 
     if (unregisterFn) {
       await unregisterFn().catch(() => {});
     }
 
-    if (this.syncEpoch !== unsubEpoch) return;
+    if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
 
     const managers: PushManager[] = [];
     const reg = await this.getActiveRegistration(2000).catch(() => null);
@@ -453,10 +471,10 @@ export class NotificationService {
     if (winPm && !managers.includes(winPm)) managers.push(winPm);
 
     for (const pm of managers) {
-      if (this.syncEpoch !== unsubEpoch) return;
+      if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
       try {
         const sub = await pm.getSubscription();
-        if (this.syncEpoch !== unsubEpoch) return;
+        if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
         if (sub) await sub.unsubscribe();
       } catch {
         // Ignore browser unsubscribe errors
@@ -493,10 +511,11 @@ export class NotificationService {
     };
 
     try {
-      const reg = this.cachedRegistration?.active
-        ? this.cachedRegistration
-        : await this.getActiveRegistration();
-      if (reg?.active && typeof reg.showNotification === 'function') {
+      const reg =
+        this.cachedRegistration?.active && this.cachedRegistration.active.state !== 'redundant'
+          ? this.cachedRegistration
+          : await this.getActiveRegistration();
+      if (reg?.active && reg.active.state !== 'redundant' && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, options);
         if (sessionRunId) this.lastNotifiedSessionId = sessionRunId;
         return true;

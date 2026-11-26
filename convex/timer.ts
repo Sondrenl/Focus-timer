@@ -282,6 +282,7 @@ export const reset = mutation({
     expectedTimerRunId: v.optional(v.string()),
     expectedUpdatedAtMs: v.optional(v.number()),
     clientActionAtMs: v.optional(v.number()),
+    lastResetDayKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx, true);
@@ -294,6 +295,9 @@ export const reset = mutation({
     }
     if (args.clientActionAtMs !== undefined && !Number.isFinite(args.clientActionAtMs)) {
       throw new Error("Invalid clientActionAtMs.");
+    }
+    if (args.lastResetDayKey !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(args.lastResetDayKey)) {
+      throw new Error("Invalid lastResetDayKey.");
     }
     const now = Date.now();
     const existing = await getUserActiveTimer(ctx, user._id);
@@ -312,8 +316,16 @@ export const reset = mutation({
       return { ...existing, applied: false, serverNowMs: now };
     }
 
+    const nextLastResetDayKey =
+      args.lastResetDayKey &&
+      (!existing?.lastResetDayKey || args.lastResetDayKey > existing.lastResetDayKey)
+        ? args.lastResetDayKey
+        : existing?.lastResetDayKey;
+    const isUpdatingResetDayKey = nextLastResetDayKey !== existing?.lastResetDayKey;
+
     if (
       existing &&
+      !isUpdatingResetDayKey &&
       existing.status === "IDLE" &&
       existing.sessionType === args.sessionType &&
       existing.remainingSeconds === args.durationSeconds &&
@@ -335,6 +347,7 @@ export const reset = mutation({
         updatedAtMs: now,
       }),
       tagId: sanitizedTagId,
+      ...(nextLastResetDayKey !== undefined ? { lastResetDayKey: nextLastResetDayKey } : {}),
     };
 
     if (existing) {

@@ -1,7 +1,13 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { isAllowedAppOrigin } from "./push";
+import {
+  isAllowedAppOrigin,
+  validateDeviceId,
+  validateEndpoint,
+  validatePushKey,
+  validateRotationTokenHash,
+} from "./push";
 
 const http = httpRouter();
 
@@ -127,13 +133,28 @@ http.route({
       });
     }
 
+    let normalizedNextHash: string | undefined;
+    try {
+      validateDeviceId(deviceId);
+      validateEndpoint(endpoint);
+      validatePushKey(p256dh, "p256dh");
+      validatePushKey(auth, "auth");
+      normalizedNextHash = validateRotationTokenHash(nextRotationTokenHash);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid rotation payload.";
+      return new Response(JSON.stringify({ error: msg }), {
+        status: 400,
+        headers: jsonHeaders,
+      });
+    }
+
     const currentTokenHash = await sha256Hex(rotationToken);
 
     try {
       const result = await ctx.runMutation(internal.push.rotateSubscription, {
         deviceId,
         currentTokenHash,
-        nextTokenHash: nextRotationTokenHash,
+        nextTokenHash: normalizedNextHash,
         endpoint,
         p256dh,
         auth,
@@ -150,14 +171,7 @@ http.route({
         status: 200,
         headers: jsonHeaders,
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (msg.startsWith("Invalid ")) {
-        return new Response(JSON.stringify({ error: msg }), {
-          status: 400,
-          headers: jsonHeaders,
-        });
-      }
+    } catch {
       return new Response(JSON.stringify({ error: "Internal server error." }), {
         status: 500,
         headers: jsonHeaders,

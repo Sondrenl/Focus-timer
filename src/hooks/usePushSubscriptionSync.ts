@@ -47,6 +47,8 @@ export function usePushSubscriptionSync({
   const lastSyncedAtRef = useRef<number>(0);
   const lastPruneRecoveryAtRef = useRef<number>(0);
   const prevConnectedRef = useRef<boolean>(isConvexConnected);
+  const isConvexConnectedRef = useRef<boolean>(isConvexConnected);
+  isConvexConnectedRef.current = isConvexConnected;
   const isServerRegisteredRef = useRef<boolean | undefined>(isServerSubscriptionRegistered);
   isServerRegisteredRef.current = isServerSubscriptionRegistered;
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -131,7 +133,7 @@ export function usePushSubscriptionSync({
     } else if (
       result.status === 'error' &&
       isAuthOperational &&
-      isConvexConnected &&
+      isConvexConnectedRef.current &&
       !isLoggingOutRef?.current &&
       isNotificationsEnabledLive() &&
       retryAttemptRef.current < SYNC_ERROR_RETRY_DELAYS_MS.length
@@ -147,7 +149,6 @@ export function usePushSubscriptionSync({
   }, [
     clearScheduledRetry,
     isAuthOperational,
-    isConvexConnected,
     notificationService,
     vapidPublicKey,
     registerPushSubscription,
