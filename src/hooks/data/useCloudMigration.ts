@@ -37,6 +37,74 @@ function areTagsDefault(tags: Tag[] | undefined | null): boolean {
   return tags.every((t) => isUntouchedDefaultTag(t));
 }
 
+export interface GuestTagMergeCandidate {
+  id: string;
+  name: string;
+  color: string;
+  isArchived: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export function computeGuestTagMergePlan(params: {
+  localTags: Tag[];
+  remoteTags: Tag[];
+  referencedTagIds: Set<string>;
+  guestModifiedFlag: boolean;
+}): {
+  tagsToMerge: GuestTagMergeCandidate[];
+  localTagIdRemap: Map<string, string>;
+  remoteTagIds: Set<string>;
+} {
+  const { localTags, remoteTags, referencedTagIds, guestModifiedFlag } = params;
+  const remoteTagByName = new Map(
+    remoteTags.map((t) => [t.name.toLowerCase().trim(), t.id])
+  );
+  const remoteTagIds = new Set(remoteTags.map((t) => t.id));
+  const localTagIdRemap = new Map<string, string>();
+  const tagsToMerge: GuestTagMergeCandidate[] = [];
+
+  for (const t of localTags) {
+    const nameKey = t.name.toLowerCase().trim();
+    const matchedRemoteId = remoteTagByName.get(nameKey);
+    if (matchedRemoteId) {
+      localTagIdRemap.set(t.id, matchedRemoteId);
+      continue;
+    }
+    // Never resurrect an untouched default tag that was deleted or renamed in the cloud account.
+    // If the remote account still has this default tag ID (e.g., renamed), remap to it;
+    // otherwise leave sessions/cups referencing it unassigned.
+    if (isUntouchedDefaultTag(t)) {
+      if (remoteTagIds.has(t.id)) {
+        localTagIdRemap.set(t.id, t.id);
+      }
+      continue;
+    }
+    // Avoid resurrecting stale unowned custom tags when guest data was not modified locally.
+    if (!guestModifiedFlag && !referencedTagIds.has(t.id)) {
+      continue;
+    }
+    const validId =
+      typeof t.id === 'string' &&
+      TAG_ID_REGEX.test(t.id.trim()) &&
+      !remoteTagIds.has(t.id.trim())
+        ? t.id.trim()
+        : `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    localTagIdRemap.set(t.id, validId);
+    remoteTagIds.add(validId);
+    tagsToMerge.push({
+      id: validId,
+      name: t.name,
+      color: t.color,
+      isArchived: t.isArchived,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    });
+  }
+
+  return { tagsToMerge, localTagIdRemap, remoteTagIds };
+}
+
 type SyncableSettingsPatch = Partial<
   Pick<
     UserSettings,
@@ -306,8 +374,8 @@ export function useCloudMigration({
         const hasGenuineGuestData =
           localSessions.length > 0 ||
           localCoffee.length > 0 ||
-          tagsModifiedFromDefaults ||
-          (guestModifiedFlag && (hasCustomSettings || hasCustomProfile));
+          (guestModifiedFlag &&
+            (tagsModifiedFromDefaults || hasCustomSettings || hasCustomProfile));
 
         if (!hasGenuineGuestData) {
           await clearLocalGuestRepositories();
@@ -331,47 +399,12 @@ export function useCloudMigration({
         for (const s of localSessions) if (s.tagId) referencedTagIds.add(s.tagId);
         for (const c of localCoffee) if (c.tagId) referencedTagIds.add(c.tagId);
 
-        const remoteTagByName = new Map(
-          remoteTags.map((t) => [t.name.toLowerCase().trim(), t.id])
-        );
-        const remoteTagIds = new Set(remoteTags.map((t) => t.id));
-        const localTagIdRemap = new Map<string, string>();
-        const tagsToMerge: Array<{
-          id: string;
-          name: string;
-          color: string;
-          isArchived: boolean;
-          createdAt?: string;
-          updatedAt?: string;
-        }> = [];
-
-        for (const t of localTags) {
-          const nameKey = t.name.toLowerCase().trim();
-          const matchedRemoteId = remoteTagByName.get(nameKey);
-          if (matchedRemoteId) {
-            localTagIdRemap.set(t.id, matchedRemoteId);
-            continue;
-          }
-          if (isUntouchedDefaultTag(t) && !referencedTagIds.has(t.id)) {
-            continue;
-          }
-          const validId =
-            typeof t.id === 'string' &&
-            TAG_ID_REGEX.test(t.id.trim()) &&
-            !remoteTagIds.has(t.id.trim())
-              ? t.id.trim()
-              : `tag-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          localTagIdRemap.set(t.id, validId);
-          remoteTagIds.add(validId);
-          tagsToMerge.push({
-            id: validId,
-            name: t.name,
-            color: t.color,
-            isArchived: t.isArchived,
-            createdAt: t.createdAt,
-            updatedAt: t.updatedAt,
-          });
-        }
+        const { tagsToMerge, localTagIdRemap, remoteTagIds } = computeGuestTagMergePlan({
+          localTags,
+          remoteTags,
+          referencedTagIds,
+          guestModifiedFlag,
+        });
 
         const resolveTagRef = (rawTagId?: string | null): string | undefined => {
           if (!rawTagId) return undefined;

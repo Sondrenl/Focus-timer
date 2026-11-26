@@ -13,6 +13,7 @@ import { markGuestDataModified } from '../../services/sync/offlineOutbox';
 interface UseTagsDataParams {
   isEffectiveAuthenticated: boolean;
   isConvexAuthReady?: boolean;
+  isLoggingOut?: boolean;
   isAdoptionPaused?: boolean;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
   setSessions: React.Dispatch<React.SetStateAction<CompletedSession[]>>;
@@ -21,6 +22,7 @@ interface UseTagsDataParams {
 
 export function useTagsData({
   isEffectiveAuthenticated,
+  isLoggingOut = false,
   isAdoptionPaused = false,
   convexSync,
   setSessions,
@@ -28,6 +30,8 @@ export function useTagsData({
 }: UseTagsDataParams) {
   const { isConvexConfigured, convexUser, mutations: convexMutations } = convexSync;
   const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
+  const isCloudModeRef = useRef<boolean>(isCloudMode);
+  isCloudModeRef.current = isCloudMode;
 
   const [guestTags, setGuestTags] = useState<Tag[]>(DEFAULT_TAGS);
   const [activeTagId, setActiveTagIdState] = useState<string | null>(() => {
@@ -75,30 +79,50 @@ export function useTagsData({
     [setActiveTagId]
   );
 
-  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+  const wasAuthenticatedOrLoggingOutRef = useRef<boolean>(
+    isEffectiveAuthenticated || isLoggingOut
+  );
 
   // Initial load of guest tags from localStorage
   useEffect(() => {
+    let cancelled = false;
     tagRepository.getAll().then((loaded) => {
+      if (cancelled) return;
       setGuestTags(loaded);
-      ensureValidActiveTag(loaded);
+      if (!isCloudModeRef.current) {
+        ensureValidActiveTag(loaded);
+      }
     });
+    return () => {
+      cancelled = true;
+    };
   }, [ensureValidActiveTag]);
 
-  // Reset in-memory guest tags & activeTagId on sign-out so pre-sign-in tags never reappear
+  // Reload guest tags from storage once sign-out completes or session drops,
+  // avoiding hardcoded DEFAULT_TAGS that would overwrite local guest deletions.
   useEffect(() => {
-    const wasAuth = wasAuthenticatedRef.current;
-    wasAuthenticatedRef.current = isEffectiveAuthenticated;
-    if (wasAuth && !isEffectiveAuthenticated) {
-      setGuestTags(DEFAULT_TAGS);
-      setActiveTagId(DEFAULT_TAGS[0]?.id ?? null);
+    const isAuthOrLoggingOut = isEffectiveAuthenticated || isLoggingOut;
+    const wasAuthOrLoggingOut = wasAuthenticatedOrLoggingOutRef.current;
+    wasAuthenticatedOrLoggingOutRef.current = isAuthOrLoggingOut;
+
+    if (wasAuthOrLoggingOut && !isAuthOrLoggingOut) {
+      let cancelled = false;
+      tagRepository.getAll().then((loaded) => {
+        if (cancelled) return;
+        setGuestTags(loaded);
+        ensureValidActiveTag(loaded);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [isEffectiveAuthenticated, setActiveTagId]);
+  }, [isEffectiveAuthenticated, isLoggingOut, ensureValidActiveTag]);
 
   // When signed in, Convex user.tags is the direct source of truth.
+  // Return [] while convexUser is still loading so deleted default tags never flash back.
   const tags = useMemo<Tag[]>(() => {
     if (isCloudMode) {
-      return Array.isArray(convexUser?.tags) ? (convexUser.tags as Tag[]) : DEFAULT_TAGS;
+      return Array.isArray(convexUser?.tags) ? (convexUser.tags as Tag[]) : [];
     }
     return guestTags;
   }, [isCloudMode, convexUser?.tags, guestTags]);

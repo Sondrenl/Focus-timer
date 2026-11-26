@@ -41,6 +41,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const {
     isEffectiveAuthenticated,
     isConvexAuthReady,
+    isLoggingOut,
     profile,
     settings,
     resetProfileToDefaults,
@@ -98,6 +99,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   } = useTagsData({
     isEffectiveAuthenticated,
     isConvexAuthReady,
+    isLoggingOut,
     isAdoptionPaused: isSyncGateActive,
     convexSync,
     setSessions,

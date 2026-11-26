@@ -14,6 +14,9 @@ import {
 import { sanitizeHexColor, getAlphaColor } from "../src/utils/colors";
 import { LocalStorageService } from "../src/services/storage/LocalStorageService";
 import { useBackupAndMigration, sanitizeProfileForExport } from "../src/hooks/data/useBackupAndMigration";
+import { computeGuestTagMergePlan } from "../src/hooks/data/useCloudMigration";
+import { useTagsData } from "../src/hooks/data/useTagsData";
+import { DEFAULT_TAGS, Tag } from "../src/types/tag";
 import { BackupData, DEFAULT_PROFILE, UserProfile } from "../src/types/user";
 import { DEFAULT_SETTINGS } from "../src/types/settings";
 import { buildSettingsSnapshot } from "../src/utils/telemetryContext";
@@ -403,6 +406,110 @@ describe("Guest Repositories, Serialization & Backup Export", () => {
       const persisted = JSON.parse(store.get("tele:ml_attempts_v1")!) as SessionAttempt[];
       expect(persisted).toHaveLength(15);
       expect(persisted[0].attemptId).toBe("att-5");
+    });
+  });
+
+  describe("Deleted Tag Resurrection Prevention", () => {
+    it("does not resurrect deleted default tags even when referenced by guest sessions", () => {
+      const deletedDefault = DEFAULT_TAGS[0]; // tag-deep-work
+      const remoteTags = DEFAULT_TAGS.filter((t) => t.id !== deletedDefault.id);
+
+      const plan = computeGuestTagMergePlan({
+        localTags: DEFAULT_TAGS,
+        remoteTags,
+        referencedTagIds: new Set([deletedDefault.id]),
+        guestModifiedFlag: true,
+      });
+
+      expect(plan.tagsToMerge).toEqual([]);
+      expect(plan.remoteTagIds.has(deletedDefault.id)).toBe(false);
+    });
+
+    it("remaps an untouched default tag to a renamed remote tag with the same ID without duplicating", () => {
+      const renamedRemote: Tag = {
+        ...DEFAULT_TAGS[0],
+        name: "Focused Flow",
+      };
+      const remoteTags = [renamedRemote, ...DEFAULT_TAGS.slice(1)];
+
+      const plan = computeGuestTagMergePlan({
+        localTags: DEFAULT_TAGS,
+        remoteTags,
+        referencedTagIds: new Set([DEFAULT_TAGS[0].id]),
+        guestModifiedFlag: true,
+      });
+
+      expect(plan.tagsToMerge).toEqual([]);
+      expect(plan.localTagIdRemap.get(DEFAULT_TAGS[0].id)).toBe(renamedRemote.id);
+    });
+
+    it("does not resurrect stale unowned custom tags when guestModifiedFlag is false", () => {
+      const staleDeletedCustom: Tag = {
+        id: "tag-deleted-custom",
+        name: "Old Project",
+        color: "#EF4444",
+        isArchived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+
+      const plan = computeGuestTagMergePlan({
+        localTags: [...DEFAULT_TAGS, staleDeletedCustom],
+        remoteTags: DEFAULT_TAGS,
+        referencedTagIds: new Set(),
+        guestModifiedFlag: false,
+      });
+
+      expect(plan.tagsToMerge).toEqual([]);
+    });
+
+    it("merges genuinely created guest custom tags and mints a fresh ID on remote ID collision", () => {
+      const collidingCustom: Tag = {
+        id: "tag-study",
+        name: "Quantum Physics",
+        color: "#8B5CF6",
+        isArchived: false,
+        createdAt: "2026-03-01T00:00:00.000Z",
+      };
+
+      const plan = computeGuestTagMergePlan({
+        localTags: [collidingCustom],
+        remoteTags: DEFAULT_TAGS,
+        referencedTagIds: new Set(),
+        guestModifiedFlag: true,
+      });
+
+      expect(plan.tagsToMerge).toHaveLength(1);
+      expect(plan.tagsToMerge[0].name).toBe("Quantum Physics");
+      expect(plan.tagsToMerge[0].id).not.toBe("tag-study");
+      expect(plan.localTagIdRemap.get("tag-study")).toBe(plan.tagsToMerge[0].id);
+    });
+
+    it("returns an empty tag list in cloud mode while convexUser is still loading instead of DEFAULT_TAGS", () => {
+      let capturedTags: Tag[] = [];
+      const Probe = () => {
+        const { tags } = useTagsData({
+          isEffectiveAuthenticated: true,
+          isConvexAuthReady: false,
+          isLoggingOut: false,
+          convexSync: {
+            isConvexConfigured: true,
+            isConvexConnected: false,
+            convexUser: undefined,
+            convexCoffee: undefined,
+            convexSessions: undefined,
+            vapidPublicKey: undefined,
+            devicePushStatus: undefined,
+            mutations: {} as never,
+          },
+          setSessions: vi.fn(),
+          setCoffeeCups: vi.fn(),
+        });
+        capturedTags = tags;
+        return null;
+      };
+
+      renderToStaticMarkup(React.createElement(Probe));
+      expect(capturedTags).toEqual([]);
     });
   });
 });
