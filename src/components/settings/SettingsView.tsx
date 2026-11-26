@@ -136,8 +136,8 @@ export const SettingsView: React.FC = () => {
     }, 2000);
   };
 
-  const safeUpdateSettings = (updates: Parameters<typeof updateSettings>[0]) => {
-    void updateSettings(updates).catch((err) => {
+  const safeUpdateSettings = (updates: Parameters<typeof updateSettings>[0]): Promise<void> => {
+    return updateSettings(updates).catch((err) => {
       console.warn('[SettingsView] Failed to save settings:', err);
     });
   };
@@ -294,7 +294,7 @@ export const SettingsView: React.FC = () => {
 
       <SoundNotificationSection
         settings={settings}
-        updateSettings={updateSettings}
+        updateSettings={safeUpdateSettings}
         sound={sound}
         notifications={notifications}
         onSaved={showSaved}

@@ -38,8 +38,14 @@ function encodeBytesToBase64Url(bytes: Uint8Array): string {
 function deriveVapidPublicKeyFromPrivateJwk(rawPrivateJwk: string | undefined): string | null {
   if (!rawPrivateJwk) return null;
   try {
-    const parsed = JSON.parse(rawPrivateJwk) as { kty?: string; crv?: string; x?: string; y?: string };
-    if (parsed.kty === "EC" && parsed.crv === "P-256" && parsed.x && parsed.y) {
+    const parsed = JSON.parse(rawPrivateJwk) as {
+      kty?: string;
+      crv?: string;
+      x?: string;
+      y?: string;
+      d?: string;
+    };
+    if (parsed.kty === "EC" && parsed.crv === "P-256" && parsed.x && parsed.y && parsed.d) {
       const x = decodeBase64ToBytes(parsed.x);
       const y = decodeBase64ToBytes(parsed.y);
       if (x.length === 32 && y.length === 32) {
@@ -156,12 +162,24 @@ function validatePushKey(key: string, name: "p256dh" | "auth"): void {
   }
 }
 
+function hasUsableVapidConfig(): boolean {
+  const rawPrivate = process.env.VAPID_PRIVATE_KEY?.trim();
+  if (!rawPrivate) return false;
+  if (rawPrivate.startsWith("{")) {
+    return deriveVapidPublicKeyFromPrivateJwk(rawPrivate) !== null;
+  }
+  return Boolean(process.env.VAPID_PUBLIC_KEY?.trim());
+}
+
 export const getVapidPublicKey = query({
   args: {},
   returns: v.union(v.string(), v.null()),
   handler: async () => {
-    const derived = deriveVapidPublicKeyFromPrivateJwk(process.env.VAPID_PRIVATE_KEY);
-    if (derived) return derived;
+    const rawPrivate = process.env.VAPID_PRIVATE_KEY?.trim();
+    if (!rawPrivate) return null;
+    if (rawPrivate.startsWith("{")) {
+      return deriveVapidPublicKeyFromPrivateJwk(rawPrivate);
+    }
     const explicit = process.env.VAPID_PUBLIC_KEY?.trim();
     return explicit || null;
   },
@@ -279,6 +297,10 @@ export const register = mutation({
         isMobile: nextIsMobile,
         origin: nextOrigin,
         rotationTokenHash: nextRotationHash,
+        previousRotationTokenHash:
+          validatedRotationHash && validatedRotationHash !== existing.rotationTokenHash
+            ? undefined
+            : existing.previousRotationTokenHash,
         updatedAt: now,
       });
       return existing._id;
@@ -336,10 +358,21 @@ export const rotateSubscription = internalMutation({
     validatePushKey(args.p256dh, "p256dh");
     validatePushKey(args.auth, "auth");
 
-    const existing = await ctx.db
+    let existing = await ctx.db
       .query("push_subscriptions")
       .withIndex("by_rotation_token_hash", (q) => q.eq("rotationTokenHash", currentHash))
       .first();
+
+    // Grace-slot fallback: if the SW was killed or the HTTP response dropped after a previous
+    // rotation committed, allow one recovery using previousRotationTokenHash.
+    if (!existing) {
+      existing = await ctx.db
+        .query("push_subscriptions")
+        .withIndex("by_previous_rotation_token_hash", (q) =>
+          q.eq("previousRotationTokenHash", currentHash)
+        )
+        .first();
+    }
 
     if (!existing || existing.deviceId !== args.deviceId) {
       return { rotated: false };
@@ -356,11 +389,18 @@ export const rotateSubscription = internalMutation({
       }
     }
 
+    const rolledTokenHash = nextHash ?? existing.rotationTokenHash;
+    const nextPreviousHash =
+      nextHash && nextHash !== existing.rotationTokenHash
+        ? existing.rotationTokenHash
+        : existing.previousRotationTokenHash;
+
     await ctx.db.patch(existing._id, {
       endpoint: args.endpoint,
       p256dh: args.p256dh,
       auth: args.auth,
-      rotationTokenHash: nextHash ?? existing.rotationTokenHash,
+      rotationTokenHash: rolledTokenHash,
+      previousRotationTokenHash: nextPreviousHash,
       updatedAt: new Date(Date.now()).toISOString(),
     });
 
@@ -424,7 +464,9 @@ export const getPushDispatchContext = internalQuery({
       .withIndex("by_user_device", (q) => q.eq("userId", args.userId))
       .take(MAX_PUSH_DEVICES_PER_USER);
 
-    const subscriptions = rawSubscriptions.map(({ rotationTokenHash: _omit, ...rest }) => rest);
+    const subscriptions = rawSubscriptions.map(
+      ({ rotationTokenHash: _omit1, previousRotationTokenHash: _omit2, ...rest }) => rest
+    );
 
     return {
       soundEnabled,
@@ -434,15 +476,26 @@ export const getPushDispatchContext = internalQuery({
 });
 
 export const deleteSubscriptionById = internalMutation({
-  args: { id: v.id("push_subscriptions") },
+  args: {
+    id: v.id("push_subscriptions"),
+    expectedEndpoint: v.optional(v.string()),
+    expectedP256dh: v.optional(v.string()),
+  },
   returns: v.boolean(),
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
-    if (existing) {
-      await ctx.db.delete(args.id);
-      return true;
+    if (!existing) {
+      return false;
     }
-    return false;
+    // TOCTOU guard: do not delete if the row was rotated/re-registered with a new endpoint/key
+    if (args.expectedEndpoint !== undefined && existing.endpoint !== args.expectedEndpoint) {
+      return false;
+    }
+    if (args.expectedP256dh !== undefined && existing.p256dh !== args.expectedP256dh) {
+      return false;
+    }
+    await ctx.db.delete(args.id);
+    return true;
   },
 });
 
@@ -476,7 +529,7 @@ export const scheduleTestPush = mutation({
       return { scheduled: false as const, reason: "rate_limited" as const };
     }
 
-    if (!process.env.VAPID_PRIVATE_KEY?.trim()) {
+    if (!hasUsableVapidConfig()) {
       return { scheduled: false as const, reason: "missing_vapid_key" as const };
     }
 

@@ -16,7 +16,11 @@ export function isProduction(): boolean {
   if (
     hostname === 'localhost' ||
     hostname === '127.0.0.1' ||
-    hostname.endsWith('.local')
+    hostname === '[::1]' ||
+    hostname === '::1' ||
+    hostname === '0.0.0.0' ||
+    hostname.endsWith('.local') ||
+    hostname.endsWith('.localhost')
   ) {
     return false;
   }
@@ -52,6 +56,10 @@ export function isPreviewOrDev(): boolean {
  */
 export function isMobileDevice(): boolean {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const uaData = (navigator as unknown as { userAgentData?: { mobile?: boolean } }).userAgentData;
+  if (uaData && typeof uaData.mobile === 'boolean' && uaData.mobile) {
+    return true;
+  }
   const ua = navigator.userAgent || '';
   if (/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) {
     return true;

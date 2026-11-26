@@ -826,33 +826,84 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(afterFirst.subscriptions).toHaveLength(1);
     expect(afterFirst.subscriptions[0].endpoint).toBe("https://web.push.apple.com/new-endpoint");
     expect(afterFirst.subscriptions[0].p256dh).toBe(rotatedKeys.p256dh);
+    expect("previousRotationTokenHash" in afterFirst.subscriptions[0]).toBe(false);
 
-    // Replaying old token1 now fails (401)
-    const replayRes = await t.fetch("/push/rotate", {
+    // Grace-slot recovery: if SW died before persisting token2, retrying once with token1 recovers
+    const token3 = "rot_" + "c".repeat(40);
+    const hash3 = await sha256Hex(token3);
+    const graceRecoveryRes = await t.fetch("/push/rotate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         deviceId: "iphone-rotate-1",
         rotationToken: token1,
+        nextRotationTokenHash: hash3,
         endpoint: "https://web.push.apple.com/third-endpoint",
         ...thirdKeys,
       }),
     });
-    expect(replayRes.status).toBe(401);
+    expect(graceRecoveryRes.status).toBe(200);
+    const afterGrace = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(afterGrace.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
 
-    // Next rotation with token2 succeeds (200)
-    const secondOkRes = await t.fetch("/push/rotate", {
+    // Once rolled again (hash2 -> hash3), token1 is no longer in either slot (401)
+    const expiredTokenRes = await t.fetch("/push/rotate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         deviceId: "iphone-rotate-1",
-        rotationToken: token2,
-        endpoint: "https://web.push.apple.com/third-endpoint",
+        rotationToken: token1,
+        endpoint: "https://web.push.apple.com/fourth-endpoint",
         ...thirdKeys,
       }),
     });
-    expect(secondOkRes.status).toBe(200);
-    const afterSecond = await t.query(internal.push.getPushDispatchContext, { userId });
-    expect(afterSecond.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
+    expect(expiredTokenRes.status).toBe(401);
+
+    // Oversized body (> 8KB) returns 413
+    const hugeRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(9000) }),
+    });
+    expect(hugeRes.status).toBe(413);
+
+    // TOCTOU guard: stale deleteSubscriptionById with old endpoint does NOT delete rotated row
+    const subId = afterGrace.subscriptions[0]._id;
+    const staleDelete = await t.mutation(internal.push.deleteSubscriptionById, {
+      id: subId,
+      expectedEndpoint: "https://web.push.apple.com/old-endpoint",
+      expectedP256dh: initialKeys.p256dh,
+    });
+    expect(staleDelete).toBe(false);
+    const stillPresent = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(stillPresent.subscriptions).toHaveLength(1);
+    expect(stillPresent.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
+  });
+
+  it("does not prune healthy subscriptions when VAPID_PUBLIC_KEY is misconfigured", async () => {
+    process.env.VAPID_PRIVATE_KEY = "raw-private-key-value";
+    process.env.VAPID_PUBLIC_KEY = "short-bad-vapid-public-key";
+
+    const t = createConvexTest();
+    const { userId, asUser } = await createTestUser(t);
+    const keys = await makeRealSubKeys();
+
+    await asUser.mutation(api.push.register, {
+      deviceId: "healthy-phone-1",
+      endpoint: "https://web.push.apple.com/healthy-tok",
+      ...keys,
+      isMobile: true,
+    });
+
+    const result = await t.action(internal.pushActions.sendTimerCompletionPush, {
+      userId,
+      sessionType: "WORK",
+      timerRunId: "run-bad-vapid",
+      completedAtMs: Date.now(),
+    });
+
+    expect(result).toEqual({ sent: 0, pruned: 0 });
+    const after = await t.query(internal.push.getPushDispatchContext, { userId });
+    expect(after.subscriptions).toHaveLength(1);
   });
 });

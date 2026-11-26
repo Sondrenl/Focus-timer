@@ -112,12 +112,12 @@ export function usePushSubscriptionSync({
 
   const performSync = useCallback(async () => {
     clearScheduledRetry();
-    if (isLoggingOutRef?.current || !isNotificationsEnabledLive()) {
+    if (!isAuthOperational || isLoggingOutRef?.current || !isNotificationsEnabledLive()) {
       retryAttemptRef.current = 0;
       return {
         ok: false,
         status: 'unsubscribed' as PushSubscriptionStatus,
-        reason: 'Notifications disabled or logging out',
+        reason: 'Notifications disabled, unauthenticated, or logging out',
       };
     }
     const result = await notificationService.syncPushSubscription({
@@ -130,6 +130,8 @@ export function usePushSubscriptionSync({
       retryAttemptRef.current = 0;
     } else if (
       result.status === 'error' &&
+      isAuthOperational &&
+      isConvexConnected &&
       !isLoggingOutRef?.current &&
       isNotificationsEnabledLive() &&
       retryAttemptRef.current < SYNC_ERROR_RETRY_DELAYS_MS.length
@@ -144,6 +146,8 @@ export function usePushSubscriptionSync({
     return result;
   }, [
     clearScheduledRetry,
+    isAuthOperational,
+    isConvexConnected,
     notificationService,
     vapidPublicKey,
     registerPushSubscription,
@@ -169,11 +173,14 @@ export function usePushSubscriptionSync({
   ]);
 
   const syncPushSubscription = useCallback(async () => {
+    retryAttemptRef.current = 0;
     if (!isAuthOperational || isLoggingOutRef?.current) {
+      clearScheduledRetry();
       notificationService.resetPushStatus('unsubscribed');
       return { ok: false, status: 'unsubscribed' as PushSubscriptionStatus, reason: 'Unauthenticated' };
     }
     if (!isNotificationsEnabledLive()) {
+      clearScheduledRetry();
       notificationService.resetPushStatus('unsubscribed');
       return {
         ok: false,
@@ -183,6 +190,7 @@ export function usePushSubscriptionSync({
     }
     return performSync();
   }, [
+    clearScheduledRetry,
     notificationService,
     isAuthOperational,
     isLoggingOutRef,
@@ -193,11 +201,15 @@ export function usePushSubscriptionSync({
   // Register/refresh Web Push subscription when authenticated + notifications enabled
   useEffect(() => {
     if (!isAuthOperational || !notificationsEnabled || isLoggingOutRef?.current) {
+      clearScheduledRetry();
+      retryAttemptRef.current = 0;
       lastSyncedAtRef.current = 0;
       notificationService.resetPushStatus('unsubscribed');
       return;
     }
     if (vapidPublicKey === null) {
+      clearScheduledRetry();
+      retryAttemptRef.current = 0;
       lastSyncedAtRef.current = 0;
       notificationService.resetPushStatus('unconfigured');
       return;
@@ -208,8 +220,10 @@ export function usePushSubscriptionSync({
       return;
     }
 
+    retryAttemptRef.current = 0;
     void performSync();
   }, [
+    clearScheduledRetry,
     notificationService,
     isAuthOperational,
     currentUserId,
@@ -232,6 +246,7 @@ export function usePushSubscriptionSync({
       justReconnected &&
       (notificationService.getPushStatus() !== 'active' || isServerRegisteredRef.current === false)
     ) {
+      retryAttemptRef.current = 0;
       lastSyncedAtRef.current = 0;
       void performSync();
       return;
@@ -241,6 +256,7 @@ export function usePushSubscriptionSync({
       const now = Date.now();
       if (now - lastPruneRecoveryAtRef.current >= SERVER_PRUNE_RECOVERY_COOLDOWN_MS) {
         lastPruneRecoveryAtRef.current = now;
+        retryAttemptRef.current = 0;
         lastSyncedAtRef.current = 0;
         void performSync();
       }
@@ -258,6 +274,7 @@ export function usePushSubscriptionSync({
   useEffect(() => {
     return notificationService.subscribePushResyncRequested(() => {
       if (!canAutoSync()) return;
+      retryAttemptRef.current = 0;
       lastSyncedAtRef.current = 0;
       void performSync();
     });
@@ -316,6 +333,7 @@ export function usePushSubscriptionSync({
       ) {
         return;
       }
+      retryAttemptRef.current = 0;
       void performSync();
     };
 

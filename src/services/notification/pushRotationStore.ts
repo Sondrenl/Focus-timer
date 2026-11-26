@@ -11,11 +11,18 @@ export interface StoredPushRotationMeta {
   convexSiteUrl: string;
   deviceId: string;
   rotationToken: string;
+  vapidPublicKey?: string;
 }
 
 function openDb(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (db: IDBDatabase | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(db);
+    };
     try {
       const req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = () => {
@@ -24,10 +31,21 @@ function openDb(): Promise<IDBDatabase | null> {
           db.createObjectStore(STORE_NAME);
         }
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => {
+          try {
+            db.close();
+          } catch {
+            // Ignore
+          }
+        };
+        finish(db);
+      };
+      req.onerror = () => finish(null);
+      req.onblocked = () => finish(null);
     } catch {
-      resolve(null);
+      finish(null);
     }
   });
 }
@@ -36,6 +54,17 @@ export async function readPushRotationMeta(): Promise<StoredPushRotationMeta | n
   const db = await openDb();
   if (!db) return null;
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val: StoredPushRotationMeta | null) => {
+      if (settled) return;
+      settled = true;
+      try {
+        db.close();
+      } catch {
+        // Ignore
+      }
+      resolve(val);
+    };
     try {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const req = tx.objectStore(STORE_NAME).get(RECORD_KEY);
@@ -48,20 +77,16 @@ export async function readPushRotationMeta(): Promise<StoredPushRotationMeta | n
           typeof val.deviceId === 'string' &&
           typeof val.rotationToken === 'string'
         ) {
-          resolve(val as StoredPushRotationMeta);
+          finish(val as StoredPushRotationMeta);
         } else {
-          resolve(null);
+          finish(null);
         }
       };
-      req.onerror = () => resolve(null);
-      tx.oncomplete = () => db.close();
-      tx.onabort = () => {
-        db.close();
-        resolve(null);
-      };
+      req.onerror = () => finish(null);
+      tx.onerror = () => finish(null);
+      tx.onabort = () => finish(null);
     } catch {
-      db.close();
-      resolve(null);
+      finish(null);
     }
   });
 }

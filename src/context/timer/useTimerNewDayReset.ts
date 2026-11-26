@@ -18,6 +18,7 @@ interface UseTimerNewDayResetParams {
   sessions: CompletedSession[];
   convexSessions: unknown;
   isConvexConfigured: boolean;
+  isAuthLoading?: boolean;
   hasResolvedRemoteTimer: boolean;
   hasResolvedRemoteTimerRef: React.MutableRefObject<boolean>;
   remoteTimerRef: React.MutableRefObject<any>;
@@ -36,6 +37,7 @@ export function useTimerNewDayReset({
   sessions,
   convexSessions,
   isConvexConfigured,
+  isAuthLoading = false,
   hasResolvedRemoteTimer,
   hasResolvedRemoteTimerRef,
   remoteTimerRef,
@@ -47,6 +49,10 @@ export function useTimerNewDayReset({
 }: UseTimerNewDayResetParams) {
   const checkAndResetForNewDay = useCallback(() => {
     if (refs.statusRef.current === 'RUNNING') return false;
+
+    if (isConvexConfigured && isAuthLoading) {
+      return false;
+    }
 
     if (
       isConvexConfigured &&
@@ -167,6 +173,7 @@ export function useTimerNewDayReset({
     sessions,
     convexSessions,
     isConvexConfigured,
+    isAuthLoading,
     hasResolvedRemoteTimer,
     hasResolvedRemoteTimerRef,
     remoteTimerRef,

@@ -1,5 +1,5 @@
 // Service Worker for Pomodor Focus Timer
-// Version: 2.3.0
+// Version: 2.4.0
 // Native Web Push fallback (for browsers without Declarative Web Push),
 // focused-client silence coordination, background pushsubscriptionchange rotation, and safe notificationclick focus
 
@@ -157,6 +157,8 @@ self.addEventListener('push', (event) => {
   }
 
   const safeNavigate = resolveSameOriginUrl(navigate);
+  const safeIcon = resolveSameOriginUrl(icon);
+  const safeBadge = resolveSameOriginUrl(badge);
   const isTestAlert = tag.startsWith('pomodor-test-');
 
   event.waitUntil(
@@ -169,8 +171,8 @@ self.addEventListener('push', (event) => {
 
       const options = {
         body,
-        icon,
-        badge,
+        icon: safeIcon,
+        badge: safeBadge,
         tag,
         silent: effectiveSilent,
         data: { navigate: safeNavigate },
@@ -197,13 +199,30 @@ self.addEventListener('push', (event) => {
   );
 });
 
+function urlBase64ToUint8ArraySw(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil(
     (async () => {
       let newSub = event.newSubscription || null;
       if (!newSub) {
         try {
-          const appServerKey = event.oldSubscription?.options?.applicationServerKey;
+          let appServerKey = event.oldSubscription?.options?.applicationServerKey || null;
+          if (!appServerKey) {
+            const meta = await readPushMeta();
+            if (meta && typeof meta.vapidPublicKey === 'string' && meta.vapidPublicKey.trim()) {
+              appServerKey = urlBase64ToUint8ArraySw(meta.vapidPublicKey.trim());
+            }
+          }
           if (appServerKey && self.registration.pushManager) {
             newSub = await self.registration.pushManager.subscribe({
               userVisibleOnly: true,
@@ -245,6 +264,12 @@ const PUSH_META_KEY = 'current';
 function openPushMetaDb() {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (db) => {
+      if (settled) return;
+      settled = true;
+      resolve(db);
+    };
     try {
       const req = indexedDB.open(PUSH_META_DB, 1);
       req.onupgradeneeded = () => {
@@ -253,10 +278,21 @@ function openPushMetaDb() {
           db.createObjectStore(PUSH_META_STORE);
         }
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => {
+          try {
+            db.close();
+          } catch {
+            // Ignore
+          }
+        };
+        finish(db);
+      };
+      req.onerror = () => finish(null);
+      req.onblocked = () => finish(null);
     } catch {
-      resolve(null);
+      finish(null);
     }
   });
 }
@@ -265,19 +301,26 @@ async function readPushMeta() {
   const db = await openPushMetaDb();
   if (!db) return null;
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      try {
+        db.close();
+      } catch {
+        // Ignore
+      }
+      resolve(val);
+    };
     try {
       const tx = db.transaction(PUSH_META_STORE, 'readonly');
       const req = tx.objectStore(PUSH_META_STORE).get(PUSH_META_KEY);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => resolve(null);
-      tx.oncomplete = () => db.close();
-      tx.onabort = () => {
-        db.close();
-        resolve(null);
-      };
+      req.onsuccess = () => finish(req.result || null);
+      req.onerror = () => finish(null);
+      tx.onerror = () => finish(null);
+      tx.onabort = () => finish(null);
     } catch {
-      db.close();
-      resolve(null);
+      finish(null);
     }
   });
 }
@@ -286,24 +329,25 @@ async function writePushMeta(meta) {
   const db = await openPushMetaDb();
   if (!db) return;
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        db.close();
+      } catch {
+        // Ignore
+      }
+      resolve();
+    };
     try {
       const tx = db.transaction(PUSH_META_STORE, 'readwrite');
       tx.objectStore(PUSH_META_STORE).put(meta, PUSH_META_KEY);
-      tx.oncomplete = () => {
-        db.close();
-        resolve();
-      };
-      tx.onerror = () => {
-        db.close();
-        resolve();
-      };
-      tx.onabort = () => {
-        db.close();
-        resolve();
-      };
+      tx.oncomplete = finish;
+      tx.onerror = finish;
+      tx.onabort = finish;
     } catch {
-      db.close();
-      resolve();
+      finish();
     }
   });
 }
@@ -366,6 +410,7 @@ async function syncRotatedSubscriptionToBackend(subscription) {
       convexSiteUrl: meta.convexSiteUrl,
       deviceId: meta.deviceId,
       rotationToken: nextRotationToken,
+      ...(meta.vapidPublicKey ? { vapidPublicKey: meta.vapidPublicKey } : {}),
     });
   }
 }
@@ -379,10 +424,14 @@ self.addEventListener('notificationclick', (event) => {
   );
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
       for (const client of clientList) {
         if (client.url.startsWith(self.location.origin) && 'focus' in client) {
-          return client.focus();
+          try {
+            return await client.focus();
+          } catch {
+            // Fall through to openWindow if focus() rejects on a frozen/discarded mobile client
+          }
         }
       }
       if (self.clients.openWindow) {

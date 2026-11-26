@@ -44,6 +44,8 @@ http.route({
   }),
 });
 
+const MAX_ROTATE_BODY_BYTES = 8 * 1024;
+
 http.route({
   path: "/push/rotate",
   method: "POST",
@@ -54,9 +56,37 @@ http.route({
       "Content-Type": "application/json",
     };
 
+    const contentLengthHeader = req.headers.get("Content-Length");
+    if (contentLengthHeader) {
+      const parsedLen = Number(contentLengthHeader);
+      if (Number.isFinite(parsedLen) && parsedLen > MAX_ROTATE_BODY_BYTES) {
+        return new Response(JSON.stringify({ error: "Payload too large." }), {
+          status: 413,
+          headers: jsonHeaders,
+        });
+      }
+    }
+
+    let rawText: string;
+    try {
+      rawText = await req.text();
+    } catch {
+      return new Response(JSON.stringify({ error: "Failed to read request body." }), {
+        status: 400,
+        headers: jsonHeaders,
+      });
+    }
+
+    if (rawText.length > MAX_ROTATE_BODY_BYTES) {
+      return new Response(JSON.stringify({ error: "Payload too large." }), {
+        status: 413,
+        headers: jsonHeaders,
+      });
+    }
+
     let rawBody: unknown;
     try {
-      rawBody = await req.json();
+      rawBody = JSON.parse(rawText);
     } catch {
       return new Response(JSON.stringify({ error: "Invalid JSON body." }), {
         status: 400,
@@ -121,9 +151,15 @@ http.route({
         headers: jsonHeaders,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Validation failed.";
-      return new Response(JSON.stringify({ error: msg }), {
-        status: 400,
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.startsWith("Invalid ")) {
+        return new Response(JSON.stringify({ error: msg }), {
+          status: 400,
+          headers: jsonHeaders,
+        });
+      }
+      return new Response(JSON.stringify({ error: "Internal server error." }), {
+        status: 500,
         headers: jsonHeaders,
       });
     }

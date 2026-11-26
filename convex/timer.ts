@@ -132,6 +132,16 @@ export const start = mutation({
         : null;
     }
 
+    if (
+      existing &&
+      existing.status === "RUNNING" &&
+      existing.timerRunId === args.timerRunId &&
+      existing.targetEndTime !== undefined &&
+      existing.targetEndTime > now
+    ) {
+      return { ...existing, applied: true, serverNowMs: now };
+    }
+
     const baseTotal = args.totalSeconds ?? args.durationSeconds;
     const remaining = Math.max(1, Math.min(baseTotal, args.remainingSeconds ?? args.durationSeconds));
     const total = Math.max(remaining, baseTotal);
@@ -516,8 +526,9 @@ export const cleanupStaleTimers = internalMutation({
     for (const timer of [...runningTimers, ...stalePausedTimers]) {
       const isAbandonedRunning =
         timer.status === "RUNNING" &&
-        timer.targetEndTime !== undefined &&
-        nowMs > timer.targetEndTime + ONE_HOUR_MS;
+        (timer.targetEndTime !== undefined
+          ? nowMs > timer.targetEndTime + ONE_HOUR_MS
+          : nowMs - timer.updatedAtMs > ONE_HOUR_MS);
       const isAbandonedPaused =
         timer.status === "PAUSED" && nowMs - timer.updatedAtMs > SEVEN_DAYS_MS;
 

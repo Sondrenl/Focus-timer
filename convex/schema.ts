@@ -119,11 +119,13 @@ export default defineSchema({
     isMobile: v.optional(v.boolean()),
     origin: v.optional(v.string()),
     rotationTokenHash: v.optional(v.string()),
+    previousRotationTokenHash: v.optional(v.string()),
     updatedAt: v.string(),
   })
     .index("by_user_device", ["userId", "deviceId"])
     .index("by_endpoint", ["endpoint"])
-    .index("by_rotation_token_hash", ["rotationTokenHash"]),
+    .index("by_rotation_token_hash", ["rotationTokenHash"])
+    .index("by_previous_rotation_token_hash", ["previousRotationTokenHash"]),
 
   // 6. Passive ML Telemetry: Run-level session attempts
   session_attempts: defineTable({

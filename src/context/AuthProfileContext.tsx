@@ -122,6 +122,7 @@ export async function clearAccountLocalCaches(): Promise<{
 export interface AuthProfileContextValue {
   auth: AuthState;
   isAuthenticated: boolean;
+  isAuthLoading: boolean;
   isLoggingOut: boolean;
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
@@ -218,6 +219,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (
         prev.isAuthenticated &&
         !prev.isTokenExpired &&
+        !prev.isSyncing &&
         prev.user?.id === profile.id &&
         prev.user?.email === profile.email &&
         prev.user?.displayName === profile.displayName
@@ -227,6 +229,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return {
         ...prev,
         isAuthenticated: true,
+        isSyncing: false,
         isTokenExpired: false,
         user: profile,
       };
@@ -578,6 +581,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     () => ({
       auth,
       isAuthenticated,
+      isAuthLoading: isConvexAuthLoading,
       isLoggingOut,
       loginWithGoogle,
       logout,
@@ -597,6 +601,7 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [
       auth,
       isAuthenticated,
+      isConvexAuthLoading,
       isLoggingOut,
       loginWithGoogle,
       logout,

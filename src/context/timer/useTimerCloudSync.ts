@@ -55,6 +55,7 @@ export interface ResetTimerOptions {
 
 interface UseTimerCloudSyncParams {
   isAuthenticated: boolean;
+  isAuthLoading?: boolean;
   isConvexConnected?: boolean;
   refs: TimerSharedRefs;
   getServerAlignedNowMs: () => number;
@@ -95,8 +96,20 @@ function toRemoteTimerState(raw: {
   };
 }
 
+interface PendingPublishEntry {
+  seq: number;
+  payload: RemoteTimerState;
+  isUserAction: boolean;
+  resetOptions?: ResetTimerOptions;
+  dispatchActionWallMs: number;
+  inFlight: boolean;
+}
+
+const PUBLISH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
 export const useTimerCloudSync = ({
   isAuthenticated,
+  isAuthLoading = false,
   isConvexConnected = true,
   refs,
   getServerAlignedNowMs,
@@ -126,15 +139,10 @@ export const useTimerCloudSync = ({
   const prevConnectedRef = useRef<boolean>(isConvexConnected);
   const finalizedStaleRunIdsRef = useRef<Set<string>>(new Set());
   const acknowledgedRunIdsRef = useRef<Set<string>>(new Set());
-  const pendingPublishRef = useRef<{
-    payload: RemoteTimerState;
-    isUserAction: boolean;
-    resetOptions?: ResetTimerOptions;
-    dispatchActionWallMs: number;
-  } | null>(null);
+  const publishSeqRef = useRef<number>(0);
+  const pendingPublishRef = useRef<PendingPublishEntry | null>(null);
   const publishRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const publishRetryCountRef = useRef<number>(0);
-  const PUBLISH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
 
   const clearPublishRetry = useCallback(() => {
     if (publishRetryTimeoutRef.current !== null) {
@@ -142,6 +150,12 @@ export const useTimerCloudSync = ({
       publishRetryTimeoutRef.current = null;
     }
   }, []);
+
+  const clearPendingPublish = useCallback(() => {
+    pendingPublishRef.current = null;
+    publishRetryCountRef.current = 0;
+    clearPublishRetry();
+  }, [clearPublishRetry]);
 
   useEffect(() => clearPublishRetry, [clearPublishRetry]);
 
@@ -168,28 +182,29 @@ export const useTimerCloudSync = ({
   );
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated && !isAuthLoading) {
       refs.serverClockOffsetMsRef.current = 0;
       hasReconciledSignInRef.current = false;
       acknowledgedRunIdsRef.current.clear();
-      pendingPublishRef.current = null;
-      publishRetryCountRef.current = 0;
-      clearPublishRetry();
+      clearPendingPublish();
     }
-  }, [isAuthenticated, refs, clearPublishRetry]);
+  }, [isAuthenticated, isAuthLoading, refs, clearPendingPublish]);
 
   const applyRemoteStateRef = useRef<(remote: RemoteTimerState, forceApply?: boolean) => void>(
     () => {}
   );
 
   const reconcileMutationResponse = useCallback(
-    (res: any, dispatchActionWallMs: number) => {
+    (res: any, seq: number, isUserAction: boolean, dispatchActionWallMs: number) => {
       if (!res || typeof res !== 'object') return;
       recordServerClockSample(res.serverNowMs);
+      const isLatestPublish = publishSeqRef.current === seq;
+      const matchesLatestUserAction =
+        isUserAction && refs.lastLocalActionWallMsRef.current === dispatchActionWallMs;
       if (
         res.applied === false &&
         typeof res.updatedAtMs === 'number' &&
-        refs.lastLocalActionWallMsRef.current === dispatchActionWallMs
+        (isLatestPublish || matchesLatestUserAction)
       ) {
         refs.localUpdatedAtRef.current = res.updatedAtMs;
         applyRemoteStateRef.current(toRemoteTimerState(res), true);
@@ -200,36 +215,23 @@ export const useTimerCloudSync = ({
     [recordServerClockSample, refs]
   );
 
-  const dispatchTimerMutationRef = useRef<
-    (entry: {
-      payload: RemoteTimerState;
-      isUserAction: boolean;
-      resetOptions?: ResetTimerOptions;
-      dispatchActionWallMs: number;
-    }) => void
-  >(() => {});
+  const dispatchTimerMutationRef = useRef<(entry: PendingPublishEntry) => boolean>(() => false);
 
   const dispatchTimerMutation = useCallback(
-    (entry: {
-      payload: RemoteTimerState;
-      isUserAction: boolean;
-      resetOptions?: ResetTimerOptions;
-      dispatchActionWallMs: number;
-    }) => {
+    (entry: PendingPublishEntry): boolean => {
       if (!isOnlineAndConnected()) {
-        return;
+        return false;
       }
 
-      const { payload, resetOptions, dispatchActionWallMs } = entry;
+      const { seq, payload, isUserAction, resetOptions, dispatchActionWallMs } = entry;
       let mutationPromise: Promise<any> | null = null;
       if (payload.status === 'RUNNING') {
         const nowAligned = getServerAlignedNowMs();
         if (payload.targetEndTime !== null && payload.targetEndTime <= nowAligned) {
-          if (pendingPublishRef.current?.dispatchActionWallMs === dispatchActionWallMs) {
-            pendingPublishRef.current = null;
-            publishRetryCountRef.current = 0;
+          if (pendingPublishRef.current?.seq === seq) {
+            clearPendingPublish();
           }
-          return;
+          return false;
         }
         const computedRemaining =
           payload.targetEndTime !== null
@@ -272,40 +274,56 @@ export const useTimerCloudSync = ({
         });
       }
 
-      if (mutationPromise) {
-        mutationPromise
-          .then((res) => {
-            if (pendingPublishRef.current?.dispatchActionWallMs === dispatchActionWallMs) {
-              pendingPublishRef.current = null;
-              publishRetryCountRef.current = 0;
-              clearPublishRetry();
-            }
-            reconcileMutationResponse(res, dispatchActionWallMs);
-          })
-          .catch((err) => {
-            console.warn(err);
-            const currentPending = pendingPublishRef.current;
-            if (
-              currentPending &&
-              currentPending.dispatchActionWallMs === dispatchActionWallMs &&
-              isOnlineAndConnected() &&
-              publishRetryCountRef.current < PUBLISH_RETRY_DELAYS_MS.length
-            ) {
-              const delayMs = PUBLISH_RETRY_DELAYS_MS[publishRetryCountRef.current];
-              publishRetryCountRef.current += 1;
-              clearPublishRetry();
-              publishRetryTimeoutRef.current = setTimeout(() => {
-                publishRetryTimeoutRef.current = null;
-                const latestPending = pendingPublishRef.current;
-                if (latestPending && latestPending.dispatchActionWallMs === dispatchActionWallMs) {
-                  dispatchTimerMutationRef.current(latestPending);
-                }
-              }, delayMs);
-            }
-          });
+      if (!mutationPromise) {
+        return false;
       }
+
+      entry.inFlight = true;
+      mutationPromise
+        .then((res) => {
+          entry.inFlight = false;
+          if (pendingPublishRef.current?.seq === seq) {
+            clearPendingPublish();
+          }
+          reconcileMutationResponse(res, seq, isUserAction, dispatchActionWallMs);
+        })
+        .catch((err) => {
+          entry.inFlight = false;
+          console.warn(err);
+          const currentPending = pendingPublishRef.current;
+          if (!currentPending || currentPending.seq !== seq) {
+            return;
+          }
+          if (!isOnlineAndConnected()) {
+            // Keep pendingPublishRef intact so reconnect will flush it
+            return;
+          }
+          if (publishRetryCountRef.current < PUBLISH_RETRY_DELAYS_MS.length) {
+            const delayMs = PUBLISH_RETRY_DELAYS_MS[publishRetryCountRef.current];
+            publishRetryCountRef.current += 1;
+            clearPublishRetry();
+            publishRetryTimeoutRef.current = setTimeout(() => {
+              publishRetryTimeoutRef.current = null;
+              const latestPending = pendingPublishRef.current;
+              if (latestPending && latestPending.seq === seq && !latestPending.inFlight) {
+                dispatchTimerMutationRef.current(latestPending);
+              }
+            }, delayMs);
+          } else {
+            // Exhausted online retries — clear so stale entry cannot replay indefinitely
+            clearPendingPublish();
+          }
+        });
+
+      return true;
     },
-    [isOnlineAndConnected, getServerAlignedNowMs, clearPublishRetry, reconcileMutationResponse]
+    [
+      isOnlineAndConnected,
+      getServerAlignedNowMs,
+      clearPendingPublish,
+      clearPublishRetry,
+      reconcileMutationResponse,
+    ]
   );
   dispatchTimerMutationRef.current = dispatchTimerMutation;
 
@@ -315,13 +333,24 @@ export const useTimerCloudSync = ({
       if (isUserAction) {
         refs.lastLocalActionWallMsRef.current = Date.now();
       }
+      const seq = ++publishSeqRef.current;
       const dispatchActionWallMs = refs.lastLocalActionWallMsRef.current;
-      const entry = { payload, isUserAction, resetOptions, dispatchActionWallMs };
+      const entry: PendingPublishEntry = {
+        seq,
+        payload,
+        isUserAction,
+        resetOptions,
+        dispatchActionWallMs,
+        inFlight: false,
+      };
 
       if (isUserAction || payload.status === 'RUNNING') {
         pendingPublishRef.current = entry;
         publishRetryCountRef.current = 0;
         clearPublishRetry();
+      } else if (payload.status === 'IDLE') {
+        // Non-user IDLE reset supersedes any older queued PAUSED/RUNNING action
+        clearPendingPublish();
       }
 
       if (!isOnlineAndConnected()) {
@@ -330,7 +359,7 @@ export const useTimerCloudSync = ({
 
       dispatchTimerMutation(entry);
     },
-    [isOnlineAndConnected, refs, clearPublishRetry, dispatchTimerMutation]
+    [isOnlineAndConnected, refs, clearPublishRetry, clearPendingPublish, dispatchTimerMutation]
   );
 
   const publishTagUpdate = useCallback(
@@ -423,10 +452,9 @@ export const useTimerCloudSync = ({
         now - refs.targetEndTimeRef.current <= STALE_ALERT_CUTOFF_MS;
       const remoteUpdatedRecently = Math.abs(now - remote.updatedAtMs) <= STALE_ALERT_CUTOFF_MS;
       const remoteCompletedRecently = remote.status === 'COMPLETED' && remoteUpdatedRecently;
-      const runAdvanced =
-        remote.sessionType !== refs.sessionTypeRef.current ||
-        (Boolean(refs.timerRunIdRef.current) &&
-          remote.lastCompletedTimerRunId === refs.timerRunIdRef.current);
+      const runAdvanced = refs.timerRunIdRef.current
+        ? remote.lastCompletedTimerRunId === refs.timerRunIdRef.current
+        : remote.sessionType !== refs.sessionTypeRef.current;
       const remoteCompletedToIdle =
         remote.status === 'IDLE' && runAdvanced && targetNearOrJustPassed && remoteUpdatedRecently;
       const remoteAutoStartedNextInterval =
@@ -702,10 +730,10 @@ export const useTimerCloudSync = ({
   const flushPendingLocalPublish = useCallback((): boolean => {
     const pending = pendingPublishRef.current;
     if (!pending || !isOnlineAndConnected()) return false;
+    if (pending.inFlight) return true;
     publishRetryCountRef.current = 0;
     clearPublishRetry();
-    dispatchTimerMutation(pending);
-    return true;
+    return dispatchTimerMutation(pending);
   }, [isOnlineAndConnected, clearPublishRetry, dispatchTimerMutation]);
 
   const promoteLocalActiveTimerIfNewer = useCallback(
@@ -790,13 +818,12 @@ export const useTimerCloudSync = ({
     );
 
     const pending = pendingPublishRef.current;
-    if (
-      pending &&
-      !isServerCompletionOfCurrentRun &&
-      remoteTimer.updatedAtMs <= pending.payload.updatedAtMs
-    ) {
-      flushPendingLocalPublish();
-      return;
+    if (pending) {
+      if (isServerCompletionOfCurrentRun || remoteTimer.updatedAtMs > pending.payload.updatedAtMs) {
+        clearPendingPublish();
+      } else if (flushPendingLocalPublish()) {
+        return;
+      }
     }
 
     if (!hasRecentLocalAction || isNewer || isServerCompletionOfCurrentRun) {
@@ -809,6 +836,7 @@ export const useTimerCloudSync = ({
     hasResolvedRemoteTimer,
     isConvexConfigured,
     refs,
+    clearPendingPublish,
     flushPendingLocalPublish,
     promoteLocalActiveTimerIfNewer,
     acknowledgeRemoteRunIfActive,
@@ -835,6 +863,7 @@ export const useTimerCloudSync = ({
 
     const handleWakeResync = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (flushPendingLocalPublish()) return;
       const latestRemote = remoteTimerRef.current;
       if (!latestRemote) return;
       if (Date.now() - refs.lastLocalActionWallMsRef.current < 1500) return;
@@ -872,7 +901,13 @@ export const useTimerCloudSync = ({
       window.removeEventListener('focus', handleWakeResync);
       window.removeEventListener('online', handleWakeResync);
     };
-  }, [isConvexConfigured, refs, getServerAlignedNowMs, acknowledgeRemoteRunIfActive]);
+  }, [
+    isConvexConfigured,
+    refs,
+    getServerAlignedNowMs,
+    flushPendingLocalPublish,
+    acknowledgeRemoteRunIfActive,
+  ]);
 
   return {
     isOnlineAndConnected,

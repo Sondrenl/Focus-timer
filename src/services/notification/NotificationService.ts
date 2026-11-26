@@ -210,21 +210,32 @@ export class NotificationService {
   }
 
   private async getActiveRegistration(timeoutMs = 2500): Promise<ServiceWorkerRegistration | null> {
-    if (this.cachedRegistration?.active) return this.cachedRegistration;
+    if (this.cachedRegistration?.active && this.cachedRegistration.active.state !== 'redundant') {
+      return this.cachedRegistration;
+    }
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
 
     try {
       const existing = await navigator.serviceWorker.getRegistration();
-      if (existing?.active) {
+      if (existing?.active && existing.active.state !== 'redundant') {
         this.cachedRegistration = existing;
         return existing;
       }
 
-      const regPromise =
-        this.swRegistrationPromise ??
-        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => null);
-      const reg = await regPromise;
-      if (reg?.active) {
+      if (!this.swRegistrationPromise) {
+        this.swRegistrationPromise = navigator.serviceWorker
+          .register('/sw.js', { updateViaCache: 'none' })
+          .then((reg) => {
+            this.cachedRegistration = reg;
+            return reg;
+          })
+          .catch(() => {
+            this.swRegistrationPromise = null;
+            return null;
+          });
+      }
+      const reg = await this.swRegistrationPromise;
+      if (reg?.active && reg.active.state !== 'redundant') {
         this.cachedRegistration = reg;
         return reg;
       }
@@ -235,7 +246,7 @@ export class NotificationService {
         navigator.serviceWorker.ready,
         new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
       ]);
-      if (readyReg?.active) {
+      if (readyReg?.active && readyReg.active.state !== 'redundant') {
         this.cachedRegistration = readyReg;
         return readyReg;
       }
@@ -292,7 +303,13 @@ export class NotificationService {
     };
 
     if (!this.isPushSupported()) return fail('unsupported', 'PushManager unsupported');
-    if (!this.hasPermission()) return fail('permission_denied', 'Notification permission not granted');
+    const perm = this.getPermissionState();
+    if (perm !== 'granted') {
+      return fail(
+        perm === 'denied' ? 'permission_denied' : 'unsubscribed',
+        'Notification permission not granted'
+      );
+    }
     const trimmedKey = vapidPublicKey?.trim();
     if (!trimmedKey) return fail('unconfigured', 'VAPID public key unavailable');
 
@@ -363,6 +380,8 @@ export class NotificationService {
             : generateRotationToken();
         const rotationTokenHash = rotationToken ? await sha256Hex(rotationToken) : null;
 
+        if (isSuperseded()) return supersededResult();
+
         await registerFn({
           deviceId,
           endpoint: subscription.endpoint,
@@ -377,12 +396,24 @@ export class NotificationService {
         if (isSuperseded()) return supersededResult();
 
         if (rotationToken && rotationTokenHash && convexSiteUrl) {
+          const latestMeta = await readPushRotationMeta();
+          // Avoid overwriting a fresher token rotated concurrently by sw.js
+          const tokenToPersist =
+            latestMeta &&
+            latestMeta.deviceId === deviceId &&
+            latestMeta.rotationToken &&
+            latestMeta.rotationToken !== existingMeta?.rotationToken
+              ? latestMeta.rotationToken
+              : rotationToken;
           await writePushRotationMeta({
             convexSiteUrl,
             deviceId,
-            rotationToken,
+            rotationToken: tokenToPersist,
+            vapidPublicKey: trimmedKey,
           });
         }
+
+        if (isSuperseded()) return supersededResult();
 
         this.lastRegisteredEndpoint = subscription.endpoint;
         this.setPushStatus('active');
@@ -405,11 +436,14 @@ export class NotificationService {
 
   async unsubscribePush(unregisterFn?: () => Promise<unknown>): Promise<void> {
     this.resetPushStatus('unsubscribed');
+    const unsubEpoch = this.syncEpoch;
     await clearPushRotationMeta();
 
     if (unregisterFn) {
       await unregisterFn().catch(() => {});
     }
+
+    if (this.syncEpoch !== unsubEpoch) return;
 
     const managers: PushManager[] = [];
     const reg = await this.getActiveRegistration(2000).catch(() => null);
@@ -419,8 +453,10 @@ export class NotificationService {
     if (winPm && !managers.includes(winPm)) managers.push(winPm);
 
     for (const pm of managers) {
+      if (this.syncEpoch !== unsubEpoch) return;
       try {
         const sub = await pm.getSubscription();
+        if (this.syncEpoch !== unsubEpoch) return;
         if (sub) await sub.unsubscribe();
       } catch {
         // Ignore browser unsubscribe errors
