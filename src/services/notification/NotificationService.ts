@@ -348,6 +348,7 @@ export class NotificationService {
 
         const expectedKeyBytes = urlBase64ToUint8Array(trimmedKey);
         let subscription = await pushManager.getSubscription();
+        if (isSuperseded()) return supersededResult();
 
         const isExpired =
           typeof subscription?.expirationTime === 'number' &&
@@ -363,6 +364,8 @@ export class NotificationService {
           await subscription.unsubscribe().catch(() => {});
           subscription = null;
         }
+
+        if (isSuperseded()) return supersededResult();
 
         if (!subscription) {
           subscription = await pushManager.subscribe({

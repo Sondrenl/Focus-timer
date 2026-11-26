@@ -10,6 +10,7 @@ import { settingsRepository } from '../context/services';
 
 const PUSH_RESYNC_TTL_MS = 15 * 60 * 1000;
 const SERVER_PRUNE_RECOVERY_COOLDOWN_MS = 30 * 1000;
+const UNSUB_RECONCILE_DEBOUNCE_MS = 1_500;
 const SYNC_ERROR_RETRY_DELAYS_MS = [3_000, 8_000, 20_000];
 
 interface UsePushSubscriptionSyncParams {
@@ -246,13 +247,19 @@ export function usePushSubscriptionSync({
     performSync,
   ]);
 
-  // Reconcile server-side unsubscribe after reconnect if notifications were disabled while offline
+  // Reconcile server-side unsubscribe after reconnect if notifications were disabled
+  // or browser permission was revoked while offline
   useEffect(() => {
+    const shouldBeUnsubscribed =
+      !notificationsEnabled || notificationService.getPermissionState() === 'denied';
+    if (!shouldBeUnsubscribed || isServerSubscriptionRegistered === false) {
+      lastUnsubReconcileAtRef.current = 0;
+      return;
+    }
     if (
       !isAuthOperational ||
       !isConvexConnected ||
       isLoggingOutRef?.current ||
-      notificationsEnabled ||
       isServerSubscriptionRegistered !== true
     ) {
       return;
@@ -264,23 +271,46 @@ export function usePushSubscriptionSync({
     ) {
       return;
     }
-    unsubReconcileInFlightRef.current = true;
-    lastUnsubReconcileAtRef.current = now;
-    void notificationService
-      .unsubscribePush(
-        unregisterPushSubscription
-          ? () => unregisterPushSubscription({ deviceId: DEVICE_ID })
-          : undefined
-      )
-      .finally(() => {
-        unsubReconcileInFlightRef.current = false;
-      });
+    const timeoutId = setTimeout(() => {
+      const stillShouldBeUnsubscribed =
+        !isNotificationsEnabledLive() || notificationService.getPermissionState() === 'denied';
+      if (
+        !stillShouldBeUnsubscribed ||
+        !isConvexConnectedRef.current ||
+        isLoggingOutRef?.current ||
+        isServerRegisteredRef.current !== true ||
+        unsubReconcileInFlightRef.current
+      ) {
+        return;
+      }
+      unsubReconcileInFlightRef.current = true;
+      lastUnsubReconcileAtRef.current = Date.now();
+      void notificationService
+        .unsubscribePush(
+          unregisterPushSubscription
+            ? () => unregisterPushSubscription({ deviceId: DEVICE_ID })
+            : undefined
+        )
+        .then(() => {
+          if (notificationService.getPermissionState() === 'denied') {
+            notificationService.resetPushStatus('permission_denied');
+          }
+        })
+        .finally(() => {
+          unsubReconcileInFlightRef.current = false;
+        });
+    }, UNSUB_RECONCILE_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
   }, [
     isAuthOperational,
     isConvexConnected,
     isLoggingOutRef,
     notificationsEnabled,
     isServerSubscriptionRegistered,
+    isNotificationsEnabledLive,
     unregisterPushSubscription,
     notificationService,
   ]);
