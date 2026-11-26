@@ -15,7 +15,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
 }) => {
   const { currentView, setCurrentView } = useNavigation();
-  const { profile, auth, isEffectiveAuthenticated } = useAuthProfile();
+  const { profile, auth, isAuthenticated } = useAuthProfile();
 
   // Navigation items without the duplicate timer item; the top title routes home
   const navItems = [
@@ -141,7 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="w-8 h-8 shrink-0 flex items-center justify-center rounded-full relative">
               {profile?.avatarEmoji ? (
                 <span className="text-xl leading-none select-none">{profile.avatarEmoji}</span>
-              ) : (isEffectiveAuthenticated && profile?.avatarUrl && profile.avatarUrl.startsWith('https://')) ? (
+              ) : (isAuthenticated && profile?.avatarUrl && profile.avatarUrl.startsWith('https://')) ? (
                 <img
                   src={profile.avatarUrl}
                   alt={profile?.displayName || 'Focus Practitioner'}

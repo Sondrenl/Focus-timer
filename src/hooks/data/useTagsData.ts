@@ -11,8 +11,7 @@ import { useAuthProfile } from '../../context/AuthProfileContext';
 import { markGuestDataModified } from '../../services/sync/offlineOutbox';
 
 interface UseTagsDataParams {
-  isEffectiveAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
+  isAuthenticated: boolean;
   isLoggingOut?: boolean;
   isAdoptionPaused?: boolean;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
@@ -21,7 +20,7 @@ interface UseTagsDataParams {
 }
 
 export function useTagsData({
-  isEffectiveAuthenticated,
+  isAuthenticated,
   isLoggingOut = false,
   isAdoptionPaused = false,
   convexSync,
@@ -29,7 +28,7 @@ export function useTagsData({
   setCoffeeCups,
 }: UseTagsDataParams) {
   const { isConvexConfigured, convexUser, mutations: convexMutations } = convexSync;
-  const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
+  const isCloudMode = isConvexConfigured && isAuthenticated;
   const isCloudModeRef = useRef<boolean>(isCloudMode);
   isCloudModeRef.current = isCloudMode;
 
@@ -80,7 +79,7 @@ export function useTagsData({
   );
 
   const wasAuthenticatedOrLoggingOutRef = useRef<boolean>(
-    isEffectiveAuthenticated || isLoggingOut
+    isAuthenticated || isLoggingOut
   );
 
   // Initial load of guest tags from localStorage
@@ -101,7 +100,7 @@ export function useTagsData({
   // Reload guest tags from storage once sign-out completes or session drops,
   // avoiding hardcoded DEFAULT_TAGS that would overwrite local guest deletions.
   useEffect(() => {
-    const isAuthOrLoggingOut = isEffectiveAuthenticated || isLoggingOut;
+    const isAuthOrLoggingOut = isAuthenticated || isLoggingOut;
     const wasAuthOrLoggingOut = wasAuthenticatedOrLoggingOutRef.current;
     wasAuthenticatedOrLoggingOutRef.current = isAuthOrLoggingOut;
 
@@ -116,7 +115,7 @@ export function useTagsData({
         cancelled = true;
       };
     }
-  }, [isEffectiveAuthenticated, isLoggingOut, ensureValidActiveTag]);
+  }, [isAuthenticated, isLoggingOut, ensureValidActiveTag]);
 
   // When signed in, Convex user.tags is the direct source of truth.
   // Return [] while convexUser is still loading so deleted default tags never flash back.

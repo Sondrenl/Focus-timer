@@ -4,8 +4,8 @@ import { api } from '../../../convex/_generated/api';
 import { isConvexConfigured } from './ConvexClient';
 import { DEVICE_ID } from '../../context/timer/timerPersistence';
 
-export function useConvexSync(isAuthenticated: boolean, isAuthReady: boolean = isAuthenticated) {
-  const shouldQuery = isConvexConfigured && isAuthenticated && isAuthReady;
+export function useConvexSync(isAuthenticated: boolean) {
+  const shouldQuery = isConvexConfigured && isAuthenticated;
   const connectionState = useConvexConnectionState();
   const isConvexConnected = isConvexConfigured && connectionState.isWebSocketConnected;
 

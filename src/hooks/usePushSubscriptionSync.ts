@@ -15,8 +15,7 @@ const SYNC_ERROR_RETRY_DELAYS_MS = [3_000, 8_000, 20_000];
 interface UsePushSubscriptionSyncParams {
   notificationService: NotificationService;
   isConvexConfigured: boolean;
-  isEffectiveAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
+  isAuthenticated: boolean;
   isConvexConnected?: boolean;
   currentUserId?: string | null;
   isLoggingOutRef?: MutableRefObject<boolean>;
@@ -31,8 +30,7 @@ interface UsePushSubscriptionSyncParams {
 export function usePushSubscriptionSync({
   notificationService,
   isConvexConfigured,
-  isEffectiveAuthenticated,
-  isConvexAuthReady = isEffectiveAuthenticated,
+  isAuthenticated,
   isConvexConnected = true,
   currentUserId = null,
   isLoggingOutRef,
@@ -54,7 +52,7 @@ export function usePushSubscriptionSync({
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryAttemptRef = useRef<number>(0);
 
-  const isAuthOperational = isConvexConfigured && isEffectiveAuthenticated && isConvexAuthReady;
+  const isAuthOperational = isConvexConfigured && isAuthenticated;
 
   const clearScheduledRetry = useCallback(() => {
     if (retryTimeoutRef.current !== null) {

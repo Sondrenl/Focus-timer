@@ -54,7 +54,7 @@ export interface UseTimerAlertsParams {
   settingsRef: React.MutableRefObject<UserSettings>;
   sound: SoundService;
   notifications: NotificationService;
-  isEffectiveAuthenticatedRef?: React.MutableRefObject<boolean>;
+  isAuthenticatedRef?: React.MutableRefObject<boolean>;
   isConvexConnectedRef?: React.MutableRefObject<boolean>;
   isDevicePushRegisteredRef?: React.MutableRefObject<boolean | undefined>;
 }
@@ -64,7 +64,7 @@ export const useTimerAlerts = ({
   settingsRef,
   sound,
   notifications,
-  isEffectiveAuthenticatedRef,
+  isAuthenticatedRef,
   isConvexConnectedRef,
   isDevicePushRegisteredRef,
 }: UseTimerAlertsParams) => {
@@ -93,7 +93,7 @@ export const useTimerAlerts = ({
       const isVisible =
         typeof document !== 'undefined' && document.visibilityState === 'visible';
       const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
-      const isAuth = isEffectiveAuthenticatedRef ? isEffectiveAuthenticatedRef.current : true;
+      const isAuth = isAuthenticatedRef ? isAuthenticatedRef.current : true;
       const isConnected = isConvexConnectedRef ? isConvexConnectedRef.current : true;
       const isServerRegistered = isDevicePushRegisteredRef
         ? isDevicePushRegisteredRef.current
@@ -188,7 +188,7 @@ export const useTimerAlerts = ({
       sound,
       timerRunIdRef,
       settingsRef,
-      isEffectiveAuthenticatedRef,
+      isAuthenticatedRef,
       isConvexConnectedRef,
       isDevicePushRegisteredRef,
     ]

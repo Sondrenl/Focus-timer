@@ -53,8 +53,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     profile,
     sound,
     notifications,
-    isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     convexSync,
   } = useAuthProfile();
 
@@ -101,8 +100,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   profileRef.current = profile;
   const activeTagIdRef = useRef<string | null>(activeTagId);
   activeTagIdRef.current = activeTagId;
-  const isAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
-  isAuthenticatedRef.current = isEffectiveAuthenticated;
+  const isAuthenticatedRef = useRef<boolean>(isAuthenticated);
+  isAuthenticatedRef.current = isAuthenticated;
   const isConvexConnectedRef = useRef<boolean>(convexSync.isConvexConnected);
   isConvexConnectedRef.current = convexSync.isConvexConnected;
   const isDevicePushRegisteredRef = useRef<boolean | undefined>(
@@ -112,7 +111,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const serverClockOffsetMsRef = useRef<number>(0);
   const wakeDeferredAtMsRef = useRef<number>(0);
-  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+  const wasAuthenticatedRef = useRef<boolean>(isAuthenticated);
   const lastHandledResetIdRef = useRef<number>(0);
   const handleCompleteRef = useRef<(silent?: boolean) => void>(() => {});
 
@@ -183,7 +182,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     settingsRef,
     sound,
     notifications,
-    isEffectiveAuthenticatedRef: isAuthenticatedRef,
+    isAuthenticatedRef,
     isConvexConnectedRef,
     isDevicePushRegisteredRef,
   });
@@ -198,8 +197,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     remoteTimerRef,
     isConvexConfigured,
   } = useTimerCloudSync({
-    isAuthenticated: isEffectiveAuthenticated,
-    isConvexAuthReady,
+    isAuthenticated,
     isConvexConnected: convexSync.isConvexConnected,
     refs,
     getServerAlignedNowMs,
@@ -304,8 +302,8 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Reset timer state cleanly when signing out so cloud timer state never leaks into guest mode
   useEffect(() => {
     const wasAuth = wasAuthenticatedRef.current;
-    wasAuthenticatedRef.current = isEffectiveAuthenticated;
-    if (wasAuth && !isEffectiveAuthenticated) {
+    wasAuthenticatedRef.current = isAuthenticated;
+    if (wasAuth && !isAuthenticated) {
       const defaultDuration = Math.max(1, Math.round(DEFAULT_SETTINGS.workDurationMinutes * 60));
       serverClockOffsetMsRef.current = 0;
       localUpdatedAtRef.current = 0;
@@ -324,7 +322,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       wakeLockService.release();
       telemetryTracker.invalidateDraftCache();
     }
-  }, [isEffectiveAuthenticated, commitTimerSnapshot]);
+  }, [isAuthenticated, commitTimerSnapshot]);
 
   // Reset timer state and cancel any active Convex timer on Danger Zone resetAllData
   useEffect(() => {
@@ -373,13 +371,13 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, [resetEvent, getDurationForType, getServerAlignedNowMs, commitTimerSnapshot, publishLocalTimerState]);
 
-  const shouldPersistLocallyRef = useRef<boolean>(!(isConvexConfigured && isEffectiveAuthenticated));
-  shouldPersistLocallyRef.current = !(isConvexConfigured && isEffectiveAuthenticated);
+  const shouldPersistLocallyRef = useRef<boolean>(!(isConvexConfigured && isAuthenticated));
+  shouldPersistLocallyRef.current = !(isConvexConfigured && isAuthenticated);
 
   // Persist timer state to localStorage strictly in guest mode (Convex is source of truth when signed in)
   const persistedRemainingSeconds = status === 'RUNNING' ? null : remainingSeconds;
   useEffect(() => {
-    if (isConvexConfigured && isEffectiveAuthenticated) return;
+    if (isConvexConfigured && isAuthenticated) return;
     saveTimerState({
       sessionType: sessionTypeRef.current,
       status: statusRef.current,
@@ -396,7 +394,7 @@ export const TimerProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   }, [
     isConvexConfigured,
-    isEffectiveAuthenticated,
+    isAuthenticated,
     sessionType,
     status,
     currentCycle,

@@ -55,7 +55,6 @@ export interface ResetTimerOptions {
 
 interface UseTimerCloudSyncParams {
   isAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
   isConvexConnected?: boolean;
   refs: TimerSharedRefs;
   getServerAlignedNowMs: () => number;
@@ -98,7 +97,6 @@ function toRemoteTimerState(raw: {
 
 export const useTimerCloudSync = ({
   isAuthenticated,
-  isConvexAuthReady = isAuthenticated,
   isConvexConnected = true,
   refs,
   getServerAlignedNowMs,
@@ -107,10 +105,8 @@ export const useTimerCloudSync = ({
   dispatchCompletionAlert,
   triggerCompletionConfetti,
 }: UseTimerCloudSyncParams) => {
-  const isConvexQueryAuthReady = !isAuthenticated || Boolean(isConvexAuthReady);
-
   const { isConvexConfigured, remoteTimer, mutations: convexTimerMutations } =
-    useConvexTimer(isAuthenticated, isConvexQueryAuthReady);
+    useConvexTimer(isAuthenticated);
   const convexTimerMutationsRef = useRef(convexTimerMutations);
   convexTimerMutationsRef.current = convexTimerMutations;
 
@@ -120,7 +116,6 @@ export const useTimerCloudSync = ({
   const hasResolvedRemoteTimer = Boolean(
     isConvexConfigured &&
       isAuthenticated &&
-      isConvexQueryAuthReady &&
       remoteTimer !== undefined
   );
   const hasResolvedRemoteTimerRef = useRef<boolean>(false);

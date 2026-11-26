@@ -1,8 +1,5 @@
 import { ConvexReactClient } from "convex/react";
-import { hasStoredConvexAuthSession } from "../auth/AuthService";
 import { isProduction } from "../../utils/environment";
-
-export { hasStoredConvexAuthSession };
 
 export const PROD_CONVEX_URL = "https://acrobatic-oyster-97.convex.cloud";
 export const DEV_CONVEX_URL = "https://agile-seahorse-756.eu-west-1.convex.cloud";

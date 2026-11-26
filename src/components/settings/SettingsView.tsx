@@ -45,7 +45,7 @@ export const SettingsView: React.FC = () => {
     notifications,
     pushStatus,
     syncPushSubscription,
-    isEffectiveAuthenticated,
+    isAuthenticated,
     convexSync,
   } = useAuthProfile();
   const [savedToast, setSavedToast] = useState(false);
@@ -243,7 +243,7 @@ export const SettingsView: React.FC = () => {
     safeUpdateSettings(DEFAULT_SETTINGS);
     safeUpdateProfile({ dailyGoalMinutes: 120 });
     void notifications.unsubscribePush(
-      convexSync.isConvexConfigured && isEffectiveAuthenticated
+      convexSync.isConvexConfigured && isAuthenticated
         ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
         : undefined
     );
@@ -299,11 +299,11 @@ export const SettingsView: React.FC = () => {
         notifications={notifications}
         onSaved={showSaved}
         pushStatus={pushStatus}
-        isPushAuthenticated={convexSync.isConvexConfigured && isEffectiveAuthenticated}
+        isPushAuthenticated={convexSync.isConvexConfigured && isAuthenticated}
         onSyncPush={syncPushSubscription}
         onUnsubscribePush={() =>
           notifications.unsubscribePush(
-            convexSync.isConvexConfigured && isEffectiveAuthenticated
+            convexSync.isConvexConfigured && isAuthenticated
               ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
               : undefined
           )

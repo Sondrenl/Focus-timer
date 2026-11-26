@@ -5,21 +5,20 @@ import { useAuthProfile } from '../../context/AuthProfileContext';
 import { markGuestDataModified } from '../../services/sync/offlineOutbox';
 
 interface UseSessionsDataParams {
-  isEffectiveAuthenticated: boolean;
-  isConvexAuthReady?: boolean;
+  isAuthenticated: boolean;
   isAdoptionPaused?: boolean;
   convexSync: ReturnType<typeof useAuthProfile>['convexSync'];
 }
 
 export function useSessionsData({
-  isEffectiveAuthenticated,
+  isAuthenticated,
   convexSync,
 }: UseSessionsDataParams) {
   const { isConvexConfigured, convexSessions, mutations: convexMutations } = convexSync;
-  const isCloudMode = isConvexConfigured && isEffectiveAuthenticated;
+  const isCloudMode = isConvexConfigured && isAuthenticated;
 
   const [guestSessions, setGuestSessions] = useState<CompletedSession[]>([]);
-  const wasAuthenticatedRef = useRef<boolean>(isEffectiveAuthenticated);
+  const wasAuthenticatedRef = useRef<boolean>(isAuthenticated);
 
   // Initial load of guest sessions from localStorage
   useEffect(() => {
@@ -29,11 +28,11 @@ export function useSessionsData({
   // Clear in-memory guest sessions on sign-out so pre-sign-in data never reappears
   useEffect(() => {
     const wasAuth = wasAuthenticatedRef.current;
-    wasAuthenticatedRef.current = isEffectiveAuthenticated;
-    if (wasAuth && !isEffectiveAuthenticated) {
+    wasAuthenticatedRef.current = isAuthenticated;
+    if (wasAuth && !isAuthenticated) {
       setGuestSessions([]);
     }
-  }, [isEffectiveAuthenticated]);
+  }, [isAuthenticated]);
 
   // When signed in, Convex query is the direct source of truth.
   const sessions = useMemo<CompletedSession[]>(() => {
