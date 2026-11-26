@@ -804,6 +804,22 @@ describe("Web Push Backend & Declarative Push", () => {
     });
     expect(badEndpointRes.status).toBe(400);
 
+    // Rejects non-string or blank nextRotationTokenHash (400) instead of coercing to undefined
+    for (const invalidNextHash of [123, {}, "", "   "]) {
+      const invalidNextHashRes = await t.fetch("/push/rotate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: "iphone-rotate-1",
+          rotationToken: token1,
+          nextRotationTokenHash: invalidNextHash,
+          endpoint: "https://web.push.apple.com/new-endpoint",
+          ...rotatedKeys,
+        }),
+      });
+      expect(invalidNextHashRes.status).toBe(400);
+    }
+
     // Valid rotation succeeds (200) and rolls rotationTokenHash to hash2
     const okRes = await t.fetch("/push/rotate", {
       method: "POST",
@@ -828,7 +844,8 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(afterFirst.subscriptions[0].p256dh).toBe(rotatedKeys.p256dh);
     expect("previousRotationTokenHash" in afterFirst.subscriptions[0]).toBe(false);
 
-    // Grace-slot recovery: if SW died before persisting token2, retrying once with token1 recovers
+    // Grace-slot recovery: if SW died before persisting token2, retrying with token1 recovers
+    // and retains hash1 (not orphaned hash2) in previousRotationTokenHash
     const token3 = "rot_" + "c".repeat(40);
     const hash3 = await sha256Hex(token3);
     const graceRecoveryRes = await t.fetch("/push/rotate", {
@@ -846,14 +863,62 @@ describe("Web Push Backend & Declarative Push", () => {
     const afterGrace = await t.query(internal.push.getPushDispatchContext, { userId });
     expect(afterGrace.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
 
-    // Once rolled again (hash2 -> hash3), token1 is no longer in either slot (401)
+    const subAfterGrace = await t.run(async (ctx) => ctx.db.get(afterGrace.subscriptions[0]._id));
+    expect(subAfterGrace?.rotationTokenHash).toBe(hash3);
+    expect(subAfterGrace?.previousRotationTokenHash).toBe(hash1);
+
+    // Orphaned token2 is no longer valid (401)
+    const orphanedTokenRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token2,
+        endpoint: "https://web.push.apple.com/orphaned-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(orphanedTokenRes.status).toBe(401);
+
+    // A second grace-slot recovery with token1 succeeds because hash1 was retained in previousRotationTokenHash
+    const token4 = "rot_" + "d".repeat(40);
+    const hash4 = await sha256Hex(token4);
+    const secondGraceRecoveryRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token1,
+        nextRotationTokenHash: hash4,
+        endpoint: "https://web.push.apple.com/fourth-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(secondGraceRecoveryRes.status).toBe(200);
+
+    // Once rolled with the active token (token4 -> token5), token1 is evicted from both slots (401)
+    const token5 = "rot_" + "e".repeat(40);
+    const hash5 = await sha256Hex(token5);
+    const activeRollRes = await t.fetch("/push/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "iphone-rotate-1",
+        rotationToken: token4,
+        nextRotationTokenHash: hash5,
+        endpoint: "https://web.push.apple.com/fifth-endpoint",
+        ...thirdKeys,
+      }),
+    });
+    expect(activeRollRes.status).toBe(200);
+
     const expiredTokenRes = await t.fetch("/push/rotate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         deviceId: "iphone-rotate-1",
         rotationToken: token1,
-        endpoint: "https://web.push.apple.com/fourth-endpoint",
+        endpoint: "https://web.push.apple.com/sixth-endpoint",
         ...thirdKeys,
       }),
     });
@@ -877,7 +942,7 @@ describe("Web Push Backend & Declarative Push", () => {
     expect(staleDelete).toBe(false);
     const stillPresent = await t.query(internal.push.getPushDispatchContext, { userId });
     expect(stillPresent.subscriptions).toHaveLength(1);
-    expect(stillPresent.subscriptions[0].endpoint).toBe("https://web.push.apple.com/third-endpoint");
+    expect(stillPresent.subscriptions[0].endpoint).toBe("https://web.push.apple.com/fifth-endpoint");
   });
 
   it("does not prune healthy subscriptions when VAPID_PUBLIC_KEY is misconfigured", async () => {

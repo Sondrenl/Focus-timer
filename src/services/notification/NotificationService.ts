@@ -419,6 +419,7 @@ export class NotificationService {
           const tokenToPersist = swRotatedConcurrently
             ? latestMeta!.rotationToken
             : rotationToken;
+          if (isSuperseded()) return supersededResult();
           await writePushRotationMeta({
             convexSiteUrl,
             deviceId,
@@ -456,6 +457,7 @@ export class NotificationService {
     this.resetPushStatus('unsubscribed');
     const unsubSubscribeEpoch = this.subscribeEpoch;
     await clearPushRotationMeta();
+    if (this.subscribeEpoch !== unsubSubscribeEpoch) return;
 
     if (unregisterFn) {
       await unregisterFn().catch(() => {});

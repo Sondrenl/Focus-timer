@@ -33,6 +33,14 @@ function openDb(): Promise<IDBDatabase | null> {
       };
       req.onsuccess = () => {
         const db = req.result;
+        if (settled) {
+          try {
+            db.close();
+          } catch {
+            // Ignore
+          }
+          return;
+        }
         db.onversionchange = () => {
           try {
             db.close();

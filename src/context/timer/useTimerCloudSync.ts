@@ -348,7 +348,7 @@ export const useTimerCloudSync = ({
         inFlight: false,
       };
 
-      if (isUserAction || payload.status === 'RUNNING') {
+      if (isUserAction || payload.status === 'RUNNING' || Boolean(resetOptions?.lastResetDayKey)) {
         pendingPublishRef.current = entry;
         publishRetryCountRef.current = 0;
         clearPublishRetry();
@@ -554,8 +554,9 @@ export const useTimerCloudSync = ({
         });
         void wakeLockService.release();
 
-        if (isFromPreviousDay) {
-          setLastResetDayKey(getLogicalDayKey(wallNowMs));
+        const resetDayKey = isFromPreviousDay ? getLogicalDayKey(wallNowMs) : undefined;
+        if (resetDayKey) {
+          setLastResetDayKey(resetDayKey);
         }
 
         if (viaPublishLocal) {
@@ -569,10 +570,15 @@ export const useTimerCloudSync = ({
               currentCycle: resolvedCycle,
               activeTagId: remote.activeTagId ?? null,
               timerRunId: null,
+              lastResetDayKey: resetDayKey,
               updatedAtMs: nowMs,
             },
             false,
-            { onlyIfNotRunning: true, expectedUpdatedAtMs: remote.updatedAtMs }
+            {
+              onlyIfNotRunning: true,
+              expectedUpdatedAtMs: remote.updatedAtMs,
+              lastResetDayKey: resetDayKey,
+            }
           );
         } else if (isOnlineAndConnected()) {
           convexTimerMutationsRef.current
@@ -581,6 +587,7 @@ export const useTimerCloudSync = ({
               durationSeconds: dur,
               currentCycle: resolvedCycle,
               tagId: remote.activeTagId || undefined,
+              lastResetDayKey: resetDayKey,
               ...(remote.timerRunId
                 ? { expectedTimerRunId: remote.timerRunId }
                 : { onlyIfNotRunning: true, expectedUpdatedAtMs: remote.updatedAtMs }),
@@ -691,12 +698,14 @@ export const useTimerCloudSync = ({
         void wakeLockService.release();
 
         if (isFromPreviousDay) {
-          setLastResetDayKey(getLogicalDayKey(wallNowMs));
+          const todayKey = getLogicalDayKey(wallNowMs);
+          setLastResetDayKey(todayKey);
           if (
             remote.sessionType !== 'WORK' ||
             (remote.currentCycle || 1) !== 1 ||
             remote.remainingSeconds !== dur ||
-            remote.totalSeconds !== dur
+            remote.totalSeconds !== dur ||
+            remote.lastResetDayKey !== todayKey
           ) {
             publishLocalTimerState(
               {
@@ -708,10 +717,15 @@ export const useTimerCloudSync = ({
                 currentCycle: 1,
                 activeTagId: remote.activeTagId ?? null,
                 timerRunId: null,
+                lastResetDayKey: todayKey,
                 updatedAtMs: nowMs,
               },
               false,
-              { onlyIfIdle: true, expectedUpdatedAtMs: remote.updatedAtMs }
+              {
+                onlyIfIdle: true,
+                expectedUpdatedAtMs: remote.updatedAtMs,
+                lastResetDayKey: todayKey,
+              }
             );
           }
         }

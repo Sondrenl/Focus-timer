@@ -51,6 +51,7 @@ export const getActive = query({
       timerRunId: timer.timerRunId ?? null,
       lastCompletedTimerRunId: timer.lastCompletedTimerRunId ?? null,
       serverAutoStartStreak: timer.serverAutoStartStreak ?? 0,
+      lastResetDayKey: timer.lastResetDayKey ?? null,
       updatedAtMs: timer.updatedAtMs,
     };
   },

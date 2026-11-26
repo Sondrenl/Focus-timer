@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useConvexConnectionState } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { isConvexConfigured } from './ConvexClient';
@@ -8,6 +8,8 @@ export function useConvexSync(isAuthenticated: boolean) {
   const shouldQuery = isConvexConfigured && isAuthenticated;
   const connectionState = useConvexConnectionState();
   const isConvexConnected = isConvexConfigured && connectionState.isWebSocketConnected;
+  const isConvexConnectedRef = useRef(isConvexConnected);
+  isConvexConnectedRef.current = isConvexConnected;
 
   // Only query Convex once Convex URL is configured AND WebSocket auth is genuinely ready
   const convexUser = useQuery(
@@ -57,9 +59,13 @@ export function useConvexSync(isAuthenticated: boolean) {
   const wrapMutation = useCallback(
     <TArgs extends any[], TReturn>(
       mutationFn: (...args: TArgs) => Promise<TReturn>,
-      name: string
+      name: string,
+      options?: { requireConnected?: boolean }
     ) => {
       return async (...args: TArgs): Promise<TReturn> => {
+        if (options?.requireConnected && !isConvexConnectedRef.current) {
+          throw new Error(`Convex is offline (${name})`);
+        }
         try {
           return await mutationFn(...args);
         } catch (err) {
@@ -87,9 +93,21 @@ export function useConvexSync(isAuthenticated: boolean) {
       importBackup: wrapMutation(importBackupMutation, 'importBackup'),
       upsertAttempt: wrapMutation(upsertAttemptMutation, 'upsertAttempt'),
       clearTelemetry: wrapMutation(clearTelemetryMutation, 'clearTelemetry'),
-      registerPushSubscription: wrapMutation(registerPushSubscriptionMutation, 'registerPushSubscription'),
-      unregisterPushSubscription: wrapMutation(unregisterPushSubscriptionMutation, 'unregisterPushSubscription'),
-      scheduleTestPush: wrapMutation(scheduleTestPushMutation, 'scheduleTestPush'),
+      registerPushSubscription: wrapMutation(
+        registerPushSubscriptionMutation,
+        'registerPushSubscription',
+        { requireConnected: true }
+      ),
+      unregisterPushSubscription: wrapMutation(
+        unregisterPushSubscriptionMutation,
+        'unregisterPushSubscription',
+        { requireConnected: true }
+      ),
+      scheduleTestPush: wrapMutation(
+        scheduleTestPushMutation,
+        'scheduleTestPush',
+        { requireConnected: true }
+      ),
     }),
     [
       updateProfileMutation,

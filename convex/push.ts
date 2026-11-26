@@ -392,7 +392,7 @@ export const rotateSubscription = internalMutation({
     const rolledTokenHash = nextHash ?? existing.rotationTokenHash;
     const nextPreviousHash =
       nextHash && nextHash !== existing.rotationTokenHash
-        ? existing.rotationTokenHash
+        ? currentHash
         : existing.previousRotationTokenHash;
 
     await ctx.db.patch(existing._id, {

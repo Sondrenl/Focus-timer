@@ -542,7 +542,6 @@ export const AuthProfileProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const canCallRemote =
       isConvexConfigured &&
       isAuthenticated &&
-      isConvexConnectedRef.current &&
       !auth.isTokenExpired;
 
     void notificationService.unsubscribePush(

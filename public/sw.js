@@ -25,8 +25,8 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-function resolveSameOriginUrl(rawUrl) {
-  const fallback = new URL('/', self.location.origin).href;
+function resolveSameOriginUrl(rawUrl, fallbackPath = '/') {
+  const fallback = new URL(fallbackPath, self.location.origin).href;
   if (typeof rawUrl !== 'string' || !rawUrl.trim()) return fallback;
   try {
     const parsed = new URL(rawUrl.trim(), self.location.origin);
@@ -157,8 +157,8 @@ self.addEventListener('push', (event) => {
   }
 
   const safeNavigate = resolveSameOriginUrl(navigate);
-  const safeIcon = resolveSameOriginUrl(icon);
-  const safeBadge = resolveSameOriginUrl(badge);
+  const safeIcon = resolveSameOriginUrl(icon, '/icon-192.png');
+  const safeBadge = resolveSameOriginUrl(badge, '/badge-72.png');
   const isTestAlert = tag.startsWith('pomodor-test-');
 
   event.waitUntil(
@@ -280,6 +280,14 @@ function openPushMetaDb() {
       };
       req.onsuccess = () => {
         const db = req.result;
+        if (settled) {
+          try {
+            db.close();
+          } catch {
+            // Ignore
+          }
+          return;
+        }
         db.onversionchange = () => {
           try {
             db.close();

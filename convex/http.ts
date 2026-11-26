@@ -110,10 +110,16 @@ http.route({
     const body = rawBody as Record<string, unknown>;
     const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim() : "";
     const rotationToken = typeof body.rotationToken === "string" ? body.rotationToken.trim() : "";
-    const nextRotationTokenHash =
-      typeof body.nextRotationTokenHash === "string" && body.nextRotationTokenHash.trim()
-        ? body.nextRotationTokenHash.trim()
-        : undefined;
+    let nextRotationTokenHash: string | undefined;
+    if (body.nextRotationTokenHash !== undefined && body.nextRotationTokenHash !== null) {
+      if (typeof body.nextRotationTokenHash !== "string") {
+        return new Response(JSON.stringify({ error: "Invalid nextRotationTokenHash." }), {
+          status: 400,
+          headers: jsonHeaders,
+        });
+      }
+      nextRotationTokenHash = body.nextRotationTokenHash.trim();
+    }
     const endpoint = typeof body.endpoint === "string" ? body.endpoint.trim() : "";
     const p256dh = typeof body.p256dh === "string" ? body.p256dh.trim() : "";
     const auth = typeof body.auth === "string" ? body.auth.trim() : "";

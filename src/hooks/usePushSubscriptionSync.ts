@@ -46,6 +46,8 @@ export function usePushSubscriptionSync({
   );
   const lastSyncedAtRef = useRef<number>(0);
   const lastPruneRecoveryAtRef = useRef<number>(0);
+  const lastUnsubReconcileAtRef = useRef<number>(0);
+  const unsubReconcileInFlightRef = useRef<boolean>(false);
   const prevConnectedRef = useRef<boolean>(isConvexConnected);
   const isConvexConnectedRef = useRef<boolean>(isConvexConnected);
   isConvexConnectedRef.current = isConvexConnected;
@@ -122,6 +124,13 @@ export function usePushSubscriptionSync({
         reason: 'Notifications disabled, unauthenticated, or logging out',
       };
     }
+    if (!isConvexConnectedRef.current) {
+      return {
+        ok: false,
+        status: 'error' as PushSubscriptionStatus,
+        reason: 'Offline',
+      };
+    }
     const result = await notificationService.syncPushSubscription({
       vapidPublicKey,
       deviceId: DEVICE_ID,
@@ -132,6 +141,7 @@ export function usePushSubscriptionSync({
       retryAttemptRef.current = 0;
     } else if (
       result.status === 'error' &&
+      retryTimeoutRef.current === null &&
       isAuthOperational &&
       isConvexConnectedRef.current &&
       !isLoggingOutRef?.current &&
@@ -160,6 +170,7 @@ export function usePushSubscriptionSync({
   const canAutoSync = useCallback((): boolean => {
     return Boolean(
       isAuthOperational &&
+        isConvexConnectedRef.current &&
         !isLoggingOutRef?.current &&
         isNotificationsEnabledLive() &&
         vapidPublicKey &&
@@ -233,6 +244,45 @@ export function usePushSubscriptionSync({
     isLoggingOutRef,
     handleMissingPermission,
     performSync,
+  ]);
+
+  // Reconcile server-side unsubscribe after reconnect if notifications were disabled while offline
+  useEffect(() => {
+    if (
+      !isAuthOperational ||
+      !isConvexConnected ||
+      isLoggingOutRef?.current ||
+      notificationsEnabled ||
+      isServerSubscriptionRegistered !== true
+    ) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      unsubReconcileInFlightRef.current ||
+      now - lastUnsubReconcileAtRef.current < SERVER_PRUNE_RECOVERY_COOLDOWN_MS
+    ) {
+      return;
+    }
+    unsubReconcileInFlightRef.current = true;
+    lastUnsubReconcileAtRef.current = now;
+    void notificationService
+      .unsubscribePush(
+        unregisterPushSubscription
+          ? () => unregisterPushSubscription({ deviceId: DEVICE_ID })
+          : undefined
+      )
+      .finally(() => {
+        unsubReconcileInFlightRef.current = false;
+      });
+  }, [
+    isAuthOperational,
+    isConvexConnected,
+    isLoggingOutRef,
+    notificationsEnabled,
+    isServerSubscriptionRegistered,
+    unregisterPushSubscription,
+    notificationService,
   ]);
 
   // Retry push sync when Convex WebSocket reconnects or if server pruned this device's push subscription
@@ -326,6 +376,7 @@ export function usePushSubscriptionSync({
       }
       const serverMissing = isServerRegisteredRef.current === false;
       const endpointChanged = await notificationService.hasSubscriptionChanged();
+      if (cancelled) return;
       if (
         !serverMissing &&
         !endpointChanged &&

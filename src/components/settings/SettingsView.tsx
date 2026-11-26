@@ -243,7 +243,7 @@ export const SettingsView: React.FC = () => {
     safeUpdateSettings(DEFAULT_SETTINGS);
     safeUpdateProfile({ dailyGoalMinutes: 120 });
     void notifications.unsubscribePush(
-      convexSync.isConvexConfigured && isAuthenticated && convexSync.isConvexConnected
+      convexSync.isConvexConfigured && isAuthenticated
         ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
         : undefined
     );
@@ -303,7 +303,7 @@ export const SettingsView: React.FC = () => {
         onSyncPush={syncPushSubscription}
         onUnsubscribePush={() =>
           notifications.unsubscribePush(
-            convexSync.isConvexConfigured && isAuthenticated && convexSync.isConvexConnected
+            convexSync.isConvexConfigured && isAuthenticated
               ? () => convexSync.mutations.unregisterPushSubscription({ deviceId: DEVICE_ID })
               : undefined
           )
